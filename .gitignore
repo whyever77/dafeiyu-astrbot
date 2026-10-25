@@ -6,3 +6,5 @@ __pycache__/
 .serena/
 .memory-observatory/
 .life-pilot/
+.env
+payload/

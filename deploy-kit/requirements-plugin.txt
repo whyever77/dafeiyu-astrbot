@@ -1,0 +1,5 @@
+# 大肥鱼插件依赖（装进 AstrBot 运行环境，或 bootstrap 建的 venv）
+# AstrBot 本体自带的依赖不用在这里重复
+dashscope>=1.20          # 百炼：qwen3-vl 看图、qwen3-asr 听写、qwen-audio TTS
+imageio-ffmpeg>=0.5      # 自带 ffmpeg 二进制，视频抽帧/抽音轨用
+aiohttp>=3.9             # 媒体下载与视频分段处理
