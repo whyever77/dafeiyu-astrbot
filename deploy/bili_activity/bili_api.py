@@ -165,7 +165,7 @@ class BiliAPI:
                 await asyncio.sleep(wait)
             self._last_request = time.monotonic()
 
-    async def request(self, path, params=None, method="GET", data=None, allow_guest=False):
+    async def request(self, path, params=None, method="GET", data=None, allow_guest=False, authenticated=True):
         if not path.startswith("/x/") or ".." in path or "?" in path:
             raise ValueError("invalid API path")
         if method not in {"GET", "POST"}:
@@ -173,7 +173,7 @@ class BiliAPI:
         await self._throttle()
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=25), trust_env=True,
-            headers=self.headers(), raise_for_status=False,
+            headers=self.headers(authenticated), raise_for_status=False,
         ) as session:
             async with session.request(method, API + path, params=params, data=data, allow_redirects=False) as response:
                 if response.status != 200:
@@ -307,7 +307,7 @@ class BiliAPI:
                 {"cid": p["cid"], "page": p["page"], "part": p.get("part", "")} for p in pages],
         }
 
-    async def read(self, operation, args):
+    async def read(self, operation, args, *, anonymous=False):
         page, size = bounded_page(args)
         if operation == "status":
             if not self.credentials_present():
@@ -347,14 +347,14 @@ class BiliAPI:
             if operation == "comments":
                 data = await self.request("/x/v2/reply/main", {
                     "type": 1, "oid": identity["aid"], "mode": 3,
-                    "next": max(0, int(args.get("cursor", args.get("next", 0)))), "ps": size})
+                    "next": max(0, int(args.get("cursor", args.get("next", 0)))), "ps": size}, authenticated=not anonymous)
                 cursor = data.get("cursor", {})
                 return {**result, "comments": [self.comment(x) for x in data.get("replies") or []],
                         "next_cursor": None if cursor.get("is_end") else cursor.get("next"),
                         "is_end": bool(cursor.get("is_end"))}
             data = await self.request("/x/v2/reply/reply", {
                 "type": 1, "oid": identity["aid"], "root": positive(args.get("root_rpid"), "root_rpid"),
-                "pn": page, "ps": size})
+                "pn": page, "ps": size}, authenticated=not anonymous)
             count = (data.get("page") or {}).get("count", 0)
             return {**result, "root": self.comment(data["root"]) if data.get("root") else None,
                     "replies": [self.comment(x) for x in data.get("replies") or []],
@@ -495,6 +495,44 @@ class BiliAPI:
         result = await self.read("folders", {"aid": aid})
         return {int(x["id"]) for x in result.get("list") or [] if x.get("fav_state") == 1}
 
+    async def comment_visibility(self, identity, rpid, root_rpid=None):
+        """Anonymous public-list evidence, separate from authenticated detail.
+
+        A bounded scan that did not reach the end cannot establish absence.
+        For a reply, expand its publicly listed root instead of trusting the
+        small nested preview supplied with the top-level comments.
+        """
+        args = {"bvid": identity["bvid"], "cid": identity["cid"], "page_size": 50}
+        cursor, seen = 0, set()
+        try:
+            for _ in range(10):
+                page = await self.read("comments", args | {"cursor": cursor}, anonymous=True)
+                for item in page.get("comments", []):
+                    if str(item.get("rpid")) == rpid or any(str(x.get("rpid")) == rpid for x in item.get("replies", [])):
+                        return "public", None
+                    if root_rpid and str(item.get("rpid")) == str(root_rpid):
+                        number, pages = 1, set()
+                        for _ in range(10):
+                            replies = await self.read("replies", args | {"root_rpid": root_rpid, "page": number}, anonymous=True)
+                            if any(str(x.get("rpid")) == rpid for x in replies.get("replies", [])):
+                                return "public", None
+                            if replies.get("next_page") is None:
+                                return "not_public_or_folded", None
+                            pages.add(number)
+                            number = replies["next_page"]
+                            if number in pages:
+                                return "unknown", None
+                        return "unknown", None
+                if page.get("is_end") is True:
+                    return "not_public_or_folded", None
+                seen.add(cursor)
+                cursor = page.get("next_cursor")
+                if cursor is None or cursor in seen:
+                    return "unknown", None
+        except Exception as exc:
+            return "unknown", getattr(exc, "code", None)
+        return "unknown", None
+
     async def verify(self, action, args, response, identity):
         if action == "like":
             liked = await self.request("/x/web-interface/archive/has/like", {"aid": identity["aid"]})
@@ -551,7 +589,9 @@ class BiliAPI:
                     int(reply.get("oid", identity["aid"])) == identity["aid"])
         if action == "reply":
             verified = verified and (str(reply.get("root")) == str(args["root_rpid"])) and (str(reply.get("parent")) == str(args["parent_rpid"]))
-        return {"verified": verified, "rpid": rpid, "identity": identity, "visibility": "unknown"}
+        visibility, risk_code = await self.comment_visibility(identity, rpid, args.get("root_rpid"))
+        return {"verified": verified, "rpid": rpid, "identity": identity,
+                "visibility": visibility, "risk_code": risk_code}
 
 
 class Executor:

@@ -208,6 +208,9 @@ class Interactions:
         with self.store.transaction():
             self.db.execute("UPDATE interactions SET result=?,verified=?,visibility=?,risk_code=?,rpid=? WHERE proposal_id=? AND scope=?",
                 (value["result"], value["verified"], value["visibility"], value["risk_code"], value["rpid"], pid, scope))
+            if action == "comment" and value["rpid"]:
+                self.db.execute("UPDATE interactions SET root_rpid=?,parent_rpid='0' WHERE proposal_id=? AND scope=?",
+                                (value["rpid"], pid, scope))
             self.risk(scope, run_id, value["risk_code"], cfg, now)
             self.store.setting("interaction_next:" + scope, now + random.uniform(*cfg["action_interval_ms"]) / 1000)
             self.store.event(scope, "interaction_result", {"proposal_id": pid, "action": action,

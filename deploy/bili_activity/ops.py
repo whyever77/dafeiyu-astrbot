@@ -20,6 +20,11 @@ DEFAULTS = {
     "max_comments_per_day": 3, "max_replies_per_day": 5, "max_danmaku_per_day": 1,
     "max_likes_per_day": 10, "max_coins_per_day": 1,
     "action_interval_ms": [1500, 4000], "risk_cooldown_minutes": 60,
+    "reply_watch_enabled": False, "reply_poll_minutes": 3,
+    "reply_max_threads_per_tick": 15, "reply_min_len": 8, "reply_lookback_hours": 24,
+    "reply_max_per_thread_per_day": 2,
+    "comment_learning_enabled": False, "learn_min_score": 7, "learn_recent_notes": 5,
+    "learn_prompt": "挑选有信息量、补充视频内容的评论；跳过纯情绪、复读和广告。",
     "enabled": False,
     "periodic_enabled": False,
     "public_interactions": False,
@@ -55,6 +60,9 @@ NUMERIC_LIMITS = {
     "max_comments_per_day": (0, 10000), "max_replies_per_day": (0, 10000),
     "max_danmaku_per_day": (0, 10000), "max_likes_per_day": (0, 10000),
     "max_coins_per_day": (0, 10000), "risk_cooldown_minutes": (1, 10000),
+    "reply_poll_minutes": (1, 1440), "reply_max_threads_per_tick": (1, 15),
+    "reply_min_len": (1, 1000), "reply_lookback_hours": (1, 720),
+    "reply_max_per_thread_per_day": (0, 100), "learn_min_score": (0, 10), "learn_recent_notes": (1, 20),
     "check_minutes": (1, 1440), "check_jitter_minutes": (0, 1440),
     "max_videos": (1, 10), "max_minutes": (1, 30),
     "daily_minutes": (1, 240), "max_model_calls_per_run": (1, 64),
@@ -308,7 +316,7 @@ def main(argv=None):
     once = sub.add_parser("once")
     once.add_argument("--delay-seconds", type=int, default=180)
     switches = sub.add_parser("switch")
-    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "workshop_enabled", "methods_enabled"])
+    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled"])
     switches.add_argument("value", choices=["on", "off"])
     accepted = sub.add_parser("accept-one-shot")
     accepted.add_argument("--evidence", type=Path, required=True,
