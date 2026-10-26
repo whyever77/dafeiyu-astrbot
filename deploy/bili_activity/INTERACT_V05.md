@@ -195,3 +195,12 @@ Windows 命令前将 `C:\Program Files\Git\bin` 前置 PATH，解释器为 `C:\U
 | `README.md`、`CHANGELOG.md`、`deploy/bili_activity/README.md`、本文 | 使用、审计、测试、限制、回滚与主人 smoke |
 
 本地阶段提交：`d4caedb` 审计 → `36cb626` P0 → `fd2cb2d` P1 → P2 文档/命令/模式提交（见分支 HEAD）。主人手动 smoke 清单全部为**未验证**，不把离线 fixture 结果冒充真实发送或公开证据。
+
+## 审查后修复：恢复与执行状态机（2026-10-27）
+
+- 新增主人私聊命令 `/bili互动 清理不确定` 列出记录，追加提议 ID 查看 proposals 与伴随服务 operations 的只读摘要。再按展示的五分钟一次性凭据，发送 `/bili互动 清理不确定 <id> abandoned|verified 确认 <凭据>`。群聊、非主人、自主轮次不能确认；账本变化、超时、重复确认均拒绝。
+- 恢复只将 proposal 置为 `resolved_abandoned` / `resolved_verified` 并记主人确认事件。保留原 result、Executor 账本、次数及目标判重，不重发 POST；人工 verified 不改写机器 `verified`。现有 one_pending 索引自然排除这些终态，无需删除未解决 uncertain 的保护。
+- `execute_interaction` 覆盖等待锁、权限检查、发送前等待的取消/拒绝；未交给执行端时结束为 blocked，已交给执行端且结果未知才为 uncertain。
+- 匿名可见性错误不应影响账号状态；旧伴随服务的 verified + 未注明来源 risk_code 也会被隔离。真实认证请求的风险可保留 authenticated 来源，QQ 提示仅在风险实际应用时出现。状态查询可刷新登录，保留原轮次停止和冷却；普通后台 B站读取/轮询仍检查风控。
+- 新增 `bili_operation` 仅供控制器读账本，加入原始工具屏蔽清单，不暴露给模型；Executor、transport、原审批决策方法未修改。
+- Windows 离线基线 328 项（11 skip），恢复阶段 341 项（11 skip），均通过。命令均为既有 venv 的 `python -m unittest discover -s tests -p 'test_bili_*.py' -v`；日志 `bili-fixes-baseline.log` / `bili-recovery-suite.log`。新增 13 项恢复/取消/监听恢复/状态回归。阶段中修正了新增工具清单断言及测试缩进；以上为最终重跑结果。

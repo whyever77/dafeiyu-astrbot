@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import hashlib
 import json
 import os
 import random
@@ -65,7 +66,7 @@ PHONE_NAMES = {
     "listen_audio", "wait",
 }
 BILI_RAW_NAMES = {
-    "bili_read", "bili_execute", "bili_preview", "bili_prepare_video", "bili_phone",
+    "bili_read", "bili_execute", "bili_preview", "bili_operation", "bili_prepare_video", "bili_phone",
 }
 PHONE_SERVERS = {"phonemcp"}
 BILI_SERVERS = {"dafeiyubiliactivity", "dafeiyubililocal"}
@@ -452,7 +453,7 @@ class BiliActivity(Star):
         started, status = False, "failed"
         try:
             event = await self.make_event(run_id)
-            self.check_owner(event)
+            self.check_owner(event, interaction_guard=True)
             duration = self.activity_budget().start_run(scope, run_id, min(120, cfg["max_minutes"] * 60), cfg)
             started = True
             self.store.db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?)", (run_id, scope, time.time(), None, "running", None))
@@ -469,14 +470,14 @@ class BiliActivity(Star):
                 self.store.setting("interaction_login:" + scope, "valid")
                 self.store.setting("reply_login_notified:" + scope, False)
                 for thread in watcher.threads(scope, cfg):
-                    cfg = self.check_owner(event)
+                    cfg = self.check_owner(event, interaction_guard=True)
                     page = await self.bili().json_call("bili_read", {"operation": "replies", "args": {
                         "bvid": thread["bvid"], "cid": thread["cid"], "root_rpid": thread["root_rpid"], "page": thread["page"]}})
                     state.risk(scope, run_id, page.get("risk_code"), cfg)
                     if page.get("risk_code") == -101 and not self.store.get_setting("reply_login_notified:" + scope, False):
                         self.store.setting("reply_login_notified:" + scope, True)
                         await self.sender().send(scope, "B站登录失效，回复监听已停止；请主人重新扫码，再查询互动状态确认。")
-                    self.check_owner(event)
+                    self.check_owner(event, interaction_guard=True)
                     if page.get("ok") is False:
                         continue
                     # The companion verifies video identity; reject mismatched fixtures/servers too.
@@ -524,11 +525,13 @@ class BiliActivity(Star):
         state = self.interactions()
         scope, pid, action, args = proposal["scope"], proposal["id"], proposal["action"], proposal["args"]
         run_id = self.store.get_setting("interaction_run:" + pid, "proposal:" + pid)
-        async with self._interaction_lock:
-            cfg = self.check_owner(event)
-            result = {"verified": False, "executed": False, "reason": "switch_disabled"}
-            attempted = False
-            try:
+        cfg, attempted = None, False
+        result = {"verified": False, "executed": False, "reason": "switch_disabled"}
+        blocked_message = "执行前检查未通过，这次没有发送。"
+        try:
+            # Cancellation while acquiring the lock must settle the proposal too.
+            async with self._interaction_lock:
+                cfg = self.check_owner(event)
                 if interaction_enabled(action, cfg):
                     if automatic and not auto_allowed(action, self.store.get_setting("interaction_target:" + pid, {}), cfg):
                         raise InteractionBlocked("自动模式或允许范围已改变，这次没有执行。")
@@ -546,27 +549,35 @@ class BiliActivity(Star):
                         attempted = True
                         result = await self.bili(90).json_call("bili_execute", {
                             "operation_id": pid, "action": action, "args": args})
-            except InteractionBlocked as exc:
+        except (InteractionBlocked, PermissionError) as exc:
+            if not attempted:
                 result = {"verified": False, "executed": False, "reason": "interaction_blocked"}
-                # This message is locally authored, not a remote exception string.
-                blocked_message = str(exc)
-            except asyncio.CancelledError:
-                if attempted:
-                    state.finish(scope, run_id, pid, action, args, {}, cfg)
-                self.store.finish_proposal(pid, {"verified": False, "visibility": "unknown"})
-                raise
-            except Exception:
-                result = {"verified": False, "visibility": "unknown"}
-            if attempted:
-                result = state.finish(scope, run_id, pid, action, args, result, cfg)
+                if isinstance(exc, InteractionBlocked):
+                    blocked_message = str(exc)
             else:
-                result = safe_result(result)
+                result = {"verified": False, "visibility": "unknown"}
+        except asyncio.CancelledError:
+            if attempted:
+                result = state.finish(scope, run_id, pid, action, args, {}, cfg)
+            else:
+                result = safe_result({"executed": False, "reason": "interaction_blocked"})
                 self.store.event(scope, "interaction_result", {"proposal_id": pid, "action": action,
                     "bvid": args.get("bvid", ""), "cid": args.get("cid", ""), **result})
-            if 'blocked_message' in locals():
-                result["message"] = blocked_message
             self.store.finish_proposal(pid, result)
-            return result
+            raise
+        except Exception:
+            result = ({"verified": False, "visibility": "unknown"} if attempted else
+                      {"executed": False, "reason": "interaction_blocked"})
+        if attempted:
+            result = state.finish(scope, run_id, pid, action, args, result, cfg)
+        else:
+            result = safe_result(result)
+            self.store.event(scope, "interaction_result", {"proposal_id": pid, "action": action,
+                "bvid": args.get("bvid", ""), "cid": args.get("cid", ""), **result})
+        if result.get("reason") == "interaction_blocked":
+            result["message"] = blocked_message
+        self.store.finish_proposal(pid, result)
+        return result
 
     async def automatic_proposal(self, event, proposal, target):
         """Local policy authorization is recorded separately from owner consent."""
@@ -587,7 +598,7 @@ class BiliActivity(Star):
         value = await self.execute_interaction(event, {**proposal, "args": json.loads(proposal["args"])}, automatic=True)
         self.store.queue_memory(scope, "[按主人配置自动执行；不是主人逐条同意，也不代表主人喜好] "
             + canonical({"proposal_id": pid, "action": proposal["action"], **value}), "proposal:" + pid)
-        if value.get("risk_code") in {12014, -412, -352, -101}:
+        if value.get("risk_applied"):
             text = ("B站登录失效，请主人重新扫码，再查询互动状态确认。" if value["risk_code"] == -101 else
                     "B站返回风控码，本轮互动已停止并进入冷却。")
             await self.sender().send(scope, text)
@@ -621,6 +632,13 @@ class BiliActivity(Star):
         self.check_owner(event)
         parts = text.split()
         event.stop_event()
+        if parts[:2] == ["/bili互动", "清理不确定"]:
+            try:
+                answer = await self.resolve_uncertain_command(event, parts)
+            except (ValueError, PermissionError):
+                answer = "无法清理：提议、确认凭据或账本状态已改变，请重新查看后确认。"
+            await event.send(event.plain_result(answer))
+            return
         if parts in (["/bili互动"], ["/bili互动", "状态"], ["/bili互动", "额度"]):
             await event.send(event.plain_result(await self.interaction_status(event)))
             return
@@ -629,7 +647,7 @@ class BiliActivity(Star):
             self.save_interaction_config({"public_interactions": False, "engagement_actions": False,
                 "collection_management": False, "auto_public": False, "reply_watch_enabled": False,
                 "interaction_mode": "approval"})
-            answer = "互动写入与回复监听已关闭，历史记录保留。"
+            answer = "评论/回复/弹幕、点赞/投币、关注/收藏管理（collection_management）及回复监听已关闭，历史记录保留。"
         elif parts == ["/bili互动", "开"]:
             self.save_interaction_config({"public_interactions": True, "engagement_actions": True,
                                           "interaction_mode": "approval", "auto_public": False})
@@ -643,8 +661,60 @@ class BiliActivity(Star):
                 self.save_interaction_config({"interaction_mode": mode, "auto_public": mode == "auto_public"})
                 answer = "互动模式已设置为 " + mode + "；动作开关、允许范围和额度仍生效。"
         else:
-            answer = "/bili互动 开|关|状态|额度|模式 approval|auto_low_risk|auto_public"
+            answer = "/bili互动 开|关|状态|额度|清理不确定|模式 approval|auto_low_risk|auto_public"
         await event.send(event.plain_result(answer))
+
+    async def resolve_uncertain_command(self, event, parts):
+        """Two-step, foreground owner command. Never calls bili_execute."""
+        cfg = self.check_owner(event)
+        if event.get_extra("df_run_id") or str(event.get_sender_id()) != str(cfg["owner_id"]):
+            raise PermissionError("only the owner can resolve an uncertain operation")
+        scope, actor = event.unified_msg_origin, str(cfg["owner_id"])
+        if len(parts) == 2:
+            rows = [dict(row) for row in self.store.db.execute(
+                "SELECT id,action,status FROM proposals WHERE scope=? AND actor=? AND status='uncertain' ORDER BY created LIMIT 20",
+                (scope, actor))]
+            return canonical(rows) + "\n查看账本：/bili互动 清理不确定 <提议ID>"
+        if len(parts) not in {3, 6}:
+            raise ValueError("invalid resolution command")
+        pid = parts[2]
+        row = self.store.db.execute("SELECT * FROM proposals WHERE id=? AND scope=? AND actor=? AND status='uncertain'",
+                                    (pid, scope, actor)).fetchone()
+        if not row:
+            raise ValueError("no uncertain proposal in this scope")
+        try:
+            operation = await self.bili().json_call("bili_operation", {"operation_id": pid})
+        except Exception:
+            return "执行账本暂时不可读，未改变状态；请恢复伴随服务连接后再查看。"
+        if operation.get("ok") is not True or operation.get("status") == "executing":
+            return "执行账本不可用或仍在执行，未改变状态，请稍后重新查看。"
+        args = json.loads(row["args"])
+        expected = hashlib.sha256(json.dumps([row["action"], args], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        if operation.get("found") and operation.get("fingerprint") != expected:
+            raise ValueError("operation fingerprint mismatch")
+        # The companion returns only typed metadata; filter once more before QQ.
+        summary = {"found": operation.get("found") is True,
+                   "status": operation.get("status") if operation.get("status") in {"verified", "uncertain", "missing"} else "unknown",
+                   "result": safe_result(operation.get("result"))}
+        proposal = {"id": pid, "action": row["action"], "status": row["status"],
+                    "target": {k: args[k] for k in ("bvid", "cid", "uid", "root_rpid", "parent_rpid") if k in args},
+                    "result": safe_result(json.loads(row["result"]) if row["result"] else {})}
+        review = digest([proposal, summary, row["fingerprint"], row["result"], operation.get("fingerprint")])
+        key = "interaction_review:" + pid
+        event_id = str(event.message_obj.message_id)
+        if len(parts) == 3:
+            token = uuid.uuid4().hex[:12]
+            self.store.setting(key, {"review": review, "token": token, "expires": time.time() + 300, "event_id": event_id})
+            return (canonical({"proposal": proposal, "operation": summary})
+                    + "\n原 POST 不会重发；原回读证据、次数和判重保留。verified 决定只代表主人手动确认。"
+                    + f"\n5分钟内明确确认：/bili互动 清理不确定 {pid} abandoned 确认 {token}"
+                    + "\n或将 abandoned 改为 verified（主人已自行核实）。")
+        pending = self.store.get_setting(key, {})
+        if parts[3] not in {"abandoned", "verified"} or parts[4] != "确认" or parts[5] != pending.get("token"):
+            raise ValueError("explicit confirmation required")
+        self.store.resolve_uncertain(scope, actor, pid, parts[3], review, event_id)
+        self.settle_goal_proposal(scope, pid, "paused")
+        return "已记录主人处理决定并释放提议槽位；未重发原操作，原回读证据、次数和判重保留。"
 
     @filter.llm_tool(name="df_bili_status")
     async def interaction_status(self, event: AstrMessageEvent):
@@ -693,7 +763,7 @@ class BiliActivity(Star):
     def bili(self, timeout=60):
         return MCPClient(self.cfg()["bili_url"], "streamable-http", timeout=timeout)
 
-    def check_owner(self, event, *, method_cleanup=False):
+    def check_owner(self, event, *, method_cleanup=False, interaction_guard=False):
         cfg = self.cfg()
         if not cfg["owner_scope"] or event.unified_msg_origin != cfg["owner_scope"]:
             raise PermissionError("此工具仅用于已配置的主人私聊")
@@ -703,7 +773,7 @@ class BiliActivity(Star):
             raise PermissionError("发起者不是配置的主人")
         if event.get_extra("df_run_id") and (not cfg["enabled"] or cfg["dnd_ranges"] is None or quiet_now(cfg["dnd_ranges"])):
             raise PermissionError("自主活动已停止或进入免打扰时段")
-        if event.get_extra("df_run_id"):
+        if interaction_guard and event.get_extra("df_run_id"):
             self.interactions().guard(event.unified_msg_origin, event.get_extra("df_run_id"))
         if self.is_reply_run(event) and (not cfg["reply_watch_enabled"] or not cfg["public_interactions"]
                 or self.store.get_setting("life_paused:" + event.unified_msg_origin, False)):
@@ -1316,9 +1386,9 @@ class BiliActivity(Star):
                       "这次没能核实完成，已保留记录，先不重试，免得重复操作。")
             if result.get("reason") == "interaction_blocked":
                 answer = result["message"]
-            if result.get("risk_code") == -101:
+            if result.get("risk_applied") and result.get("risk_code") == -101:
                 answer += " B站登录失效，请主人重新扫码，再查询互动状态确认。"
-            elif result.get("risk_code") in {12014, -412, -352}:
+            elif result.get("risk_applied") and result.get("risk_code") in {12014, -412, -352}:
                 answer += " 检测到B站风控，本轮已停止并进入冷却。"
             answer += f"\nverified={str(result['verified']).lower()}；visibility={result['visibility']}（公开可见性独立于接口回读）。"
             await event.send(event.plain_result(answer))
@@ -1332,7 +1402,7 @@ class BiliActivity(Star):
             operation(string): info/search/home/following_feed/subtitles/danmaku/comments/replies/folders/favorites/followings/user。
             arguments(string): JSON对象；视频传bvid及cid，评论翻页传next，回复传root_rpid和page。
         """
-        self.check_owner(event)
+        self.check_owner(event, interaction_guard=operation != "status")
         self.require_goal(event)
         args = parse_json_argument(arguments, "arguments", dict)
         value = await self.bili().json_call("bili_read", {"operation": operation, "args": args})

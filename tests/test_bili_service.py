@@ -291,7 +291,7 @@ class MCPIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     async with ClientSession(streams[0], streams[1]) as session:
                         await session.initialize()
                         names = {tool.name for tool in (await session.list_tools()).tools}
-                        self.assertEqual(names, {'bili_read', 'bili_preview', 'bili_execute', 'bili_prepare_video', 'bili_phone'})
+                        self.assertEqual(names, {'bili_read', 'bili_preview', 'bili_execute', 'bili_operation', 'bili_prepare_video', 'bili_phone'})
                         info = result_json(await session.call_tool('bili_read', {'operation': 'info', 'args': {'bvid': BVID, 'page': 2}}))
                         self.assertEqual(info['identity']['cid'], 22)
                         preview = result_json(await session.call_tool('bili_preview', {'action': 'comment', 'args': {'bvid': BVID, 'cid': 11, 'message': 'public text'}}))

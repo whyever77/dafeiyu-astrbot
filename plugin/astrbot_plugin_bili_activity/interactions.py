@@ -104,6 +104,10 @@ def safe_result(value):
     result = {"verified": value.get("verified") is True,
               "visibility": visibility if isinstance(visibility, str) and visibility in VISIBILITY else "unknown",
               "risk_code": value.get("risk_code") if type(value.get("risk_code")) is int else None}
+    result["risk_source"] = value.get("risk_source") if value.get("risk_source") in {"authenticated", "visibility"} else None
+    # Older companions attached anonymous visibility failures to verified writes.
+    if result["risk_source"] == "visibility" or (result["verified"] and result["risk_source"] != "authenticated"):
+        result["risk_code"] = None
     for key in ("rpid", "dmid"):
         text = str(value.get(key) or "")
         result[key] = text if text.isascii() and text.isdigit() else ""
@@ -255,6 +259,7 @@ class Interactions:
                 self.db.execute("UPDATE interactions SET root_rpid=?,parent_rpid='0' WHERE proposal_id=? AND scope=?",
                                 (value["rpid"], pid, scope))
             self.risk(scope, run_id, value["risk_code"], cfg, now)
+            value["risk_applied"] = value["risk_code"] in RISK_CODES | {-101}
             self.store.setting("interaction_next:" + scope, now + random.uniform(*cfg["action_interval_ms"]) / 1000)
             self.store.event(scope, "interaction_result", {"proposal_id": pid, "action": action,
                 "bvid": args.get("bvid", ""), "cid": args.get("cid", ""), **value})

@@ -189,6 +189,28 @@ class Store:
         self.db.execute("UPDATE proposals SET status=?,result=? WHERE id=? AND status='executing'",
                         (status, canonical(result), pid))
 
+    def resolve_uncertain(self, scope, actor, pid, decision, review, event_id):
+        """Owner adjudication releases the slot, never edits execution evidence."""
+        if decision not in {"abandoned", "verified"} or not event_id:
+            raise ValueError("invalid resolution")
+        with self.transaction():
+            row = self.db.execute("SELECT * FROM proposals WHERE id=? AND scope=? AND actor=?",
+                                  (pid, scope, actor)).fetchone()
+            if not row or row["status"] != "uncertain":
+                raise ValueError("proposal is no longer uncertain")
+            key = "interaction_review:" + pid
+            pending = self.get_setting(key)
+            if (not pending or pending["expires"] < time.time() or pending["review"] != review
+                    or pending["event_id"] == event_id):
+                raise ValueError("review expired or changed; inspect the ledgers again")
+            # resolved_* is outside one_pending. Keep the original result and
+            # interaction dedupe/counts: abandoning is not proof of non-delivery.
+            self.db.execute("UPDATE proposals SET status=? WHERE id=?", ("resolved_" + decision, pid))
+            self.db.execute("DELETE FROM settings WHERE key=?", (key,))
+            self.event(scope, "uncertain_resolved", {"proposal_id": pid, "actor": actor,
+                "decision": decision, "source": "owner_confirmation", "event_id": event_id,
+                "review": review, "original_verified": False, "resubmitted": False})
+
     def delivery(self, scope, key, kind, fingerprint, meta, suppress_repeat=False):
         """Reserve before network I/O. An unknown send outcome is not retried."""
         with self.transaction():
