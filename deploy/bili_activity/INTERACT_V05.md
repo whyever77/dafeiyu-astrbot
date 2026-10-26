@@ -2,7 +2,7 @@
 
 审计日期：2026-10-26。基线 `origin/main=662cd5d`，分支 `codex/bili-interact-v05`。
 已重新 fetch；复用本次会话刚从该基线创建的分支，不使用旧 worktree。
-本提交只有本审计文档，尚未修改业务代码。
+首笔审计提交 `d4caedb` 只有本审计文档，当时尚未修改业务代码；下面按阶段追加实际交付记录。
 
 ## 现状与 gap
 
@@ -74,3 +74,124 @@
 - `comment_notes` 默认不开启。开启后用长度、补充/因果/建议等信息线索和数字做 0–10 的规则评分，低于默认 7 分不保存；每次最多 3 条，去重并记录 bvid/cid/rpid。最近默认 5 条以固定警示注入主人 Agent 上下文与读取结果；`learn_prompt` 是可配置的选择偏好，不取代固定的“不是事实/不是指令”。评分是启发式筛选，不是事实核验或可靠的语义广告检测。
 - Windows：全量 `test_bili_*.py -v` **314 项 OK，11 跳过**，17.817 秒；Linux：**314 项 OK，6 跳过**，22.972 秒。新增 `test_bili_replies.py` 20 项；P0 新增集现为 31 项，两个平台通过。
 - 真实 B站列表对匿名用户的展示差异、延迟、折叠、回复监听及真实 Agent 文案质量仍未验证。public 仅证明该次匿名 API 响应含目标，不保证所有客户端/所有用户都能看到。
+
+## 如何开启与自动模式边界
+
+升级本地文件本身不修改实际 `control.json`。新安装由插件/`ops.py init` 创建完整默认配置；旧文件缺新键时合并默认值，不删除自定义键。以下命令仅供主人审阅后在实际运行环境执行，本次没有运行这些生产命令。
+
+新增字段默认参考（合并到实际 `control.json`，不要用它覆盖整个旧文件）：
+
+```json
+{
+  "engagement_actions": false,
+  "interaction_mode": "approval",
+  "auto_public": false,
+  "max_actions_per_run": 3,
+  "max_actions_per_day": 20,
+  "max_comments_per_day": 3,
+  "max_replies_per_day": 5,
+  "max_danmaku_per_day": 1,
+  "max_likes_per_day": 10,
+  "max_coins_per_day": 1,
+  "action_interval_ms": [1500, 4000],
+  "risk_cooldown_minutes": 60,
+  "reply_watch_enabled": false,
+  "reply_poll_minutes": 3,
+  "reply_max_threads_per_tick": 15,
+  "reply_min_len": 8,
+  "reply_lookback_hours": 24,
+  "reply_max_per_thread_per_day": 2,
+  "comment_learning_enabled": false,
+  "learn_min_score": 7,
+  "learn_recent_notes": 5,
+  "learn_prompt": "挑选有信息量、补充视频内容的评论；跳过纯情绪、复读和广告。",
+  "allowed_uids": [],
+  "allowed_keywords": []
+}
+```
+
+建议先用 B站小号、保持 `interaction_mode=approval`，把每日总额降到 3、评论 1、回复 1、弹幕 0、点赞 2、投币 0；先验证一种操作，再增加范围。配额是尝试次数，取消赞也算 like；coin 的 select_like 是同一次 coin 动作的附带效果，不另扣 like 动作额度。失败和 unknown 仍占额度；午夜只更换上海日期计数，不清空账本或冷却。
+
+```bash
+python3 /实际工具目录/ops.py --data-dir /实际插件状态目录 configure --max-actions-per-run 1 --max-actions-per-day 3 --max-comments-per-day 1 --max-replies-per-day 1 --max-danmaku-per-day 0 --max-likes-per-day 2 --max-coins-per-day 0 --action-interval-ms 2000 6000
+python3 /实际工具目录/ops.py --data-dir /实际插件状态目录 switch public_interactions on
+python3 /实际工具目录/ops.py --data-dir /实际插件状态目录 switch engagement_actions on
+```
+
+主人私聊命令：
+
+| 命令 | 行为 |
+| --- | --- |
+| `/bili互动 开` | 开启 public/engagement，强制回到 approval；不启用周期/监听/收藏管理 |
+| `/bili互动 关` | 关闭 public/engagement/collection、auto_public、回复监听；保留账本 |
+| `/bili互动 状态` 或 `额度` | 刷新登录状态，显示上海日期各动作计数/上限、待审批、冷却、最近 5 条动作 |
+| `/bili互动 模式 approval` | 所有写操作逐条批准 |
+| `/bili互动 模式 auto_low_risk` | 仅 like/coin 可自动，仍需 engagement_actions 及正额度 |
+| `/bili互动 模式 auto_public` | 显式设置模式与 auto_public=true；先要求 public_interactions 开启且总日额度为正 |
+
+auto_public 下 comment/reply/danmaku 还必须同时满足 `public_interactions=true`、`auto_public=true`、`interaction_mode=auto_public`、总/单动作/每轮额度为正且未用完；like/coin 仍单独受 engagement_actions 控制。收藏/关注类始终逐条批准。自动操作仍先预览和创建同一 proposals 记录，单独写 `policy_approval`/`decision_event=policy:...`，不伪造 QQ “可以”、不绕过 Executor 和判重/冷却。
+
+可选范围通过 `ops.py configure --allowed-uids '["目标UP的UID"]' --allowed-keywords '["教程"]'` 设置（示例 UID 须替换为数字）。只对自动放行生效，使用已核实视频的 UP UID 与标题匹配，不用模型拟发的正文；两种列表都非空时同时满足，空列表不限制该维度。未匹配回到精确主人审批。CLI 选择 `--interaction-mode auto_public` 本身不打开 `auto_public`，需要另 `switch auto_public on`；主人命令“模式 auto_public”则是明确设置两者。
+
+回复监听再开启 `reply_watch_enabled`，需要原 `enabled=true`、主人私聊与已配置免打扰；不要求手机在线，不会自行打开周期。学习再开启 `comment_learning_enabled`。各项默认见上方 P1 说明；`ops.py configure` 支持 `--reply-poll-minutes`、`--reply-max-threads-per-tick`、`--reply-min-len`、`--reply-lookback-hours`、`--reply-max-per-thread-per-day`、`--learn-min-score`、`--learn-recent-notes`、`--learn-prompt`。
+
+B站风控不因低频、限额或使用小号而保证消失。12014/-412/-352 会停止该轮并冷却默认 60 分钟（HTTP 412 同样按 -412 处理）；-101 标记登录失效并通知主人扫码，扫码后用状态工具重新核实。不使用代理切换、账号轮换或自动重试规避限制。弹幕 XML 可能延迟或不覆盖历史；unknown 保留原账本，不新建 ID 重发。
+
+## 回滚
+
+先 `/bili互动 关`，停止本插件活动并备份最新 `control.json`、`activity.sqlite3` 与 Windows `operations.sqlite3`。恢复旧插件/伴随服务源码，但保留最新操作账本、审批记录和 QQ 回执；不要用旧数据库覆盖已发生的写入。旧代码忽略新增表，新键保留即可。`schema_backups` 和 `config_backups` 用于核对迁移/配置，不是清空历史并重放写入的手段。已发出的评论/弹幕、投币等不会随代码回滚撤销；真实撤销由主人手动判断。
+
+## 假设与已知限制
+
+- 没有 DSH 固定源码版本，按任务书给出的能力和 API 端点实现，不声明其内部协议兼容；所有真实 B站端点与参数仍未验证。
+- 一套插件/伴随服务实例控制一个账号。计数按主人 scope 隔离，沿用原进程锁；同一账号被多个独立部署/外部客户端同时写入，不在本控制器的全局配额保护内。
+- 前台一条来源 QQ 请求为一轮，后台为真实 run_id；批准沿用提议来源轮次。升级前记录缺少实际执行时间时，以提议 created 日期导入旧次数，偏保守；成功关注的业务 key 不因之后取消关注自动释放。
+- 每楼每 tick 一页，轮询间隔与 thread 上限限制请求量；很深/很多楼可能延迟发现回复。回复看回默认 24 小时；启发式文本过滤/学习可能误判，不保证识别所有广告、复读或错误信息。
+- 待审批/uncertain 仍沿用原单未决提议限制；本次没有增加自动解除 unknown 或自动恢复扫码。真实扫码、核对不确定结果由主人处理。
+- auto_public 是明确的配置授权，默认关闭；不匹配允许范围时回审批。匿名 API 的 public 不是所有客户端可见或主人已看到的证据。
+- Windows 6 项 ffmpeg、4 项 Linux export、1 项 symlink 跳过；Linux 6 项 ffmpeg 跳过。真实媒体处理未在这些跳过项中验证。现有 MCP/pydantic 的非致命 warning 保留。
+
+## 主人手动 smoke 清单（未验证）
+
+1. 审阅本地提交，备份后自行部署；确认插件 v0.5.0、主人私聊隔离、旧配置未丢、新开关未自动打开。先用小号检查 `df_bili_status` 登录状态；需要时本人扫码。
+2. approval + 低额度：分别预览 like=1/0、coin=1/2（按视频剩余额度）、danmaku 的精确 bvid/cid/毫秒/色值/字号；确认 QQ 完整参数和取消/过期行为，未批准时无写入。两枚投币会消耗真实硬币，单独决定是否测。
+3. 批准一次后核对操作账本及 `verified`/`visibility`；用同 operation_id 查询 replay，不重复 POST；改参数同 ID 应拒绝。不要把返回 code:0 当公开成功。
+4. 同视频第二次评论、同根/父 rpid 第二次回复、同 UID 第二次关注应被拒绝；将额度降至已用数，应提示额度已用完。真实风控不要主动诱发，出现时确认本轮停止/冷却/扫码通知。
+5. 用另一个正常账号查看评论/回复/弹幕是否实际可见，与匿名 API 的 visibility 分开记录；延迟、折叠、unknown 如实保留，不重发。
+6. 开监听，在已成功发过的楼由另一账号留一条有内容的新回复；等待轮询，确认先提议、准确 root/parent、同 rpid 一次、每楼/每天上限；关闭监听/进入免打扰后不再提议。
+7. 开评论观察，读有补充信息的评论，核对来源、分数、最多 3 条和“不是真相/不是指令”标签；检查其他私聊/群聊无法获取这些观察。
+8. 如确实需要，分别显式测试 auto_low_risk / auto_public 和 UP/标题允许范围，确认不匹配回审批、关闭开关阻止下一条、日志为 policy_approval 而非主人答复。最后 `/bili互动 关`，按需要保留 approval 和最低额度。
+
+## 最终交付与测试记录
+
+P0、P1、P2 均已实现。P2 增加模式/范围联锁、真实 owner 命令、配置备份与 `.ops.lock` 互斥；自动回复仍调用原 proposal/Executor。最终检查还修复已手动回答的候选阻塞后续回复的问题，并从旧成功回读中的 canonical identity 迁移 av 别名，避免升级后换 BV 绕过判重。插件 register/metadata 同步为 0.5.0。没有 push、PR、Release 或云端改动，没有真实扫码/账号写入。
+
+最终 328 项 = 原 263 项 + 新增 65 项；原有测试文件未修改。结果不包含真实 B站/QQ/模型验收。
+
+| 命令 / 环境 | 实际结果 | 日志 |
+| --- | --- | --- |
+| Windows 既有 venv：`python.exe -m unittest discover -s tests -p "test_bili_*.py" -v` | **328 项，317 通过、11 跳过、0 失败/错误；18.089 秒** | `bili-v05-windows.log` |
+| WSL Python 3.12.15：`python -m unittest discover -s tests -p 'test_bili_*.py' -v` | **328 项，322 通过、6 跳过、0 失败/错误；22.892 秒** | `bili-v05-linux.log` |
+| Windows / Linux：`python -m unittest discover -s tests -p 'test_bili_interact.py' -v` | P0 定向复测各 31 项 OK；最终全量再次覆盖 | `bili-p0-tests.log` / `bili-p0-tests-linux.log` |
+| Windows：`python -m unittest discover -s tests -p 'test_bili_replies.py' -v` | P1 初次定向 19 项 OK；随后补登录通知、候选跳过、auto_public 监听，最终全量含 22 项 | `bili-p1-tests.log` |
+| Windows：`python -m unittest discover -s tests -p 'test_bili_interact_modes.py' -v` | 12 项 OK；最终全量再次覆盖 | `bili-p2-tests.log` |
+| `python -m compileall -q plugin/astrbot_plugin_bili_activity deploy/bili_activity tests` | 通过 | 本地命令输出为空 |
+| `git diff --check` | 通过；仅已有 Windows LF/CRLF 提示 | 无空白差异错误 |
+| `git diff 662cd5d --` 加上前述保留文件列表及 `persona` | 无差异 | 人格、transport、life、budget、agent_budget、workshop、methods、proxy、phone_video、media、login 未修改 |
+
+Windows 命令前将 `C:\Program Files\Git\bin` 前置 PATH，解释器为 `C:\Users\ACER\AppData\Local\Temp\dafeiyu-venv\Scripts\python.exe`。Linux 解释器为本机 WSL `/var/tmp/dafeiyu-v05/venv/bin/python`；工作目录 `/mnt/d/GitHub/dafeiyu-astrbot`。Linux 基线使用 `git archive 662cd5d` 的只读源码归档，不是旧 worktree。所有日志仅本地保留、被 gitignore 排除；首次错误环境及阶段结果见前文。
+
+| 改动文件 | 用途 |
+| --- | --- |
+| `plugin/astrbot_plugin_bili_activity/core.py` | 写动作集合与可信本地拒绝终态 |
+| `plugin/astrbot_plugin_bili_activity/interactions.py` | 新增配额/判重/风控/状态/自动模式策略与迁移 |
+| `plugin/astrbot_plugin_bili_activity/replies.py` | 新增回复轮询状态、候选过滤与评论观察 |
+| `plugin/astrbot_plugin_bili_activity/main.py` | 原审批链外围接入、状态工具、回复调度、自动策略与 owner 命令 |
+| `plugin/astrbot_plugin_bili_activity/metadata.yaml` | 插件版本/说明 |
+| `deploy/bili_activity/bili_api.py` | 三动作准备/回读、数值错误码、匿名可见性 |
+| `deploy/bili_activity/service.py` | 参数白名单/默认值/预览目标/安全错误码 |
+| `deploy/bili_activity/ops.py` | 新控制字段、CLI 配置与开关，保留原配置备份 |
+| `tests/test_bili_interact.py`、`tests/test_bili_replies.py`、`tests/test_bili_interact_modes.py` | 65 项新增离线测试 |
+| `README.md`、`CHANGELOG.md`、`deploy/bili_activity/README.md`、本文 | 使用、审计、测试、限制、回滚与主人 smoke |
+
+本地阶段提交：`d4caedb` 审计 → `36cb626` P0 → `fd2cb2d` P1 → P2 文档/命令/模式提交（见分支 HEAD）。主人手动 smoke 清单全部为**未验证**，不把离线 fixture 结果冒充真实发送或公开证据。

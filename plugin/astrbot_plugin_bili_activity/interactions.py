@@ -14,6 +14,7 @@ from .core import ENGAGEMENT, PUBLIC, WRITES, canonical, digest
 
 DEFAULTS = {
     "engagement_actions": False, "interaction_mode": "approval", "auto_public": False,
+    "allowed_uids": [], "allowed_keywords": [],
     "max_actions_per_run": 3, "max_actions_per_day": 20,
     "max_comments_per_day": 3, "max_replies_per_day": 5, "max_danmaku_per_day": 1,
     "max_likes_per_day": 10, "max_coins_per_day": 1,
@@ -29,8 +30,18 @@ def validate_config(cfg):
     for key in ("engagement_actions", "auto_public"):
         if type(cfg[key]) is not bool:
             raise ValueError(f"{key} 必须是布尔开关")
-    if cfg["interaction_mode"] not in {"approval", "auto_low_risk", "auto_public"}:
+    if not isinstance(cfg["interaction_mode"], str) or cfg["interaction_mode"] not in {"approval", "auto_low_risk", "auto_public"}:
         raise ValueError("无效 interaction_mode")
+    for key in ("allowed_uids", "allowed_keywords"):
+        values = cfg[key]
+        if not isinstance(values, list) or len(values) > 100:
+            raise ValueError(f"invalid {key}")
+        for value in values:
+            if key == "allowed_uids":
+                if type(value) not in (str, int) or not str(value).isascii() or not str(value).isdigit() or int(value) <= 0:
+                    raise ValueError("allowed_uids 必须为 UID 数组")
+            elif not isinstance(value, str) or not value.strip() or len(value) > 100:
+                raise ValueError("allowed_keywords 必须为非空关键词数组")
     for key in (*ACTION_LIMITS.values(), "max_actions_per_run", "max_actions_per_day", "risk_cooldown_minutes"):
         if type(cfg[key]) is not int or not 0 <= cfg[key] <= 10000:
             raise ValueError(f"{key} 必须为 0..10000 的整数")
@@ -46,6 +57,30 @@ def validate_config(cfg):
 def enabled(action, cfg):
     return bool(cfg.get("public_interactions") if action in PUBLIC else
                 cfg.get("engagement_actions") if action in ENGAGEMENT else cfg.get("collection_management"))
+
+
+def auto_allowed(action, target, cfg):
+    """Explicit opt-in policy; unmatched actions retain the owner approval path."""
+    if not enabled(action, cfg) or cfg["max_actions_per_day"] <= 0 or cfg["max_actions_per_run"] <= 0:
+        return False
+    mode = cfg["interaction_mode"]
+    if action in PUBLIC:
+        if mode != "auto_public" or cfg["auto_public"] is not True:
+            return False
+    elif action in ENGAGEMENT:
+        if mode not in {"auto_low_risk", "auto_public"}:
+            return False
+    else:
+        return False
+    if cfg[ACTION_LIMITS[action]] <= 0:
+        return False
+    owner = (target.get("owner") or {}).get("mid")
+    if cfg["allowed_uids"] and str(owner) not in {str(x) for x in cfg["allowed_uids"]}:
+        return False
+    title = target.get("title", "")
+    if cfg["allowed_keywords"] and not any(word.casefold() in str(title).casefold() for word in cfg["allowed_keywords"]):
+        return False
+    return True
 
 
 def day_at(now):
@@ -65,14 +100,15 @@ def dedupe_key(action, args):
 def safe_result(value):
     """Only typed ledger metadata can enter events/status, never remote bodies."""
     value = value if isinstance(value, dict) else {}
+    visibility = value.get("visibility")
     result = {"verified": value.get("verified") is True,
-              "visibility": value.get("visibility") if value.get("visibility") in VISIBILITY else "unknown",
+              "visibility": visibility if isinstance(visibility, str) and visibility in VISIBILITY else "unknown",
               "risk_code": value.get("risk_code") if type(value.get("risk_code")) is int else None}
     for key in ("rpid", "dmid"):
         text = str(value.get(key) or "")
         result[key] = text if text.isascii() and text.isdigit() else ""
     result["result"] = "verified" if result["verified"] else "uncertain"
-    if value.get("executed") is False and value.get("reason") in {"switch_disabled", "interaction_blocked"}:
+    if value.get("executed") is False and isinstance(value.get("reason"), str) and value["reason"] in {"switch_disabled", "interaction_blocked"}:
         result.update(executed=False, reason=value["reason"], result="blocked")
     # reason/error strings from a transport are deliberately discarded.
     return result
@@ -122,8 +158,15 @@ class Interactions:
             # Preserve pre-v0.5 successes/ambiguous attempts as business dedup evidence.
             for row in self.db.execute("SELECT * FROM proposals WHERE status IN ('verified','executing','uncertain') ORDER BY created").fetchall():
                 args = json.loads(row["args"])
+                previous = json.loads(row["result"]) if row["result"] else {}
+                identity = previous.get("identity") or {}
+                # Old previews accepted av aliases. Their verified readback
+                # already contains the canonical identity; no network migration.
+                if (isinstance(identity, dict) and isinstance(identity.get("bvid"), str)
+                        and identity["bvid"].startswith("BV") and str(identity.get("cid", "")).isdigit()):
+                    args.update(bvid=identity["bvid"], cid=identity["cid"])
                 self._insert(row["scope"], "legacy:" + row["id"], row["id"], row["action"], args, row["created"], ignore=True)
-                value = safe_result(json.loads(row["result"]) if row["result"] else {})
+                value = safe_result(previous)
                 self.db.execute("UPDATE interactions SET result=?,verified=?,rpid=?,visibility=? WHERE proposal_id=?",
                     ("verified" if row["status"] == "verified" else "uncertain", row["status"] == "verified",
                      value["rpid"], value["visibility"], row["id"]))

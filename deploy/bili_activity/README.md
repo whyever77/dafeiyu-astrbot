@@ -121,11 +121,13 @@ Bili 服务使用真正的 MCP Streamable HTTP；PhoneMCP 继续使用 SSE。云
 | 功能 | `control.json` 字段 / 默认 | 修改命令 |
 | --- | --- | --- |
 | 自主浏览 | `enabled=false`、`periodic_enabled=false` | `start` / `stop` / `enable-periodic` |
-| 发表评论、回复评论 | `public_interactions=false` | `ops.py switch public_interactions on` 或 `off` |
+| 发表评论、回复评论、发弹幕 | `public_interactions=false` | `ops.py switch public_interactions on` 或 `off` |
+| 点赞/取消赞、投币 | `engagement_actions=false` | `ops.py switch engagement_actions on` 或 `off` |
+| 回复监听、评论观察 | `reply_watch_enabled=false`、`comment_learning_enabled=false` | `ops.py switch <字段> on` 或 `off` |
 | 收藏、收藏夹、关注与取消关注 | `collection_management=false` | `ops.py switch collection_management on` 或 `off` |
 | 主动与被动截图分享 | `screenshot_enabled=true` | `ops.py switch screenshot_enabled on` 或 `off` |
 
-开关开启不代表同意某次具体写入。所有评论、收藏和关注变更仍需先展示对象和完整内容，收到同一主人私聊随后发来的“可以”才执行；“算了”撤销。提议默认一小时过期，同时最多一个未决提议。写入超时或结果不明会标为 `uncertain`，不得用新操作 ID 自动重试；先按账本中的对象和内容现场核对。
+默认 `interaction_mode=approval`：开关开启后仍需展示精确对象和完整内容，收到同一主人私聊随后发来的“可以”才执行；“算了”撤销。提议默认一小时过期，同时最多一个未决提议。v0.5 另有显式选择的自动模式，规则、推荐低配额、主人命令和回滚见 [INTERACT_V05.md](INTERACT_V05.md)。收藏/关注管理始终逐条审批。写入超时或结果不明会标为 `uncertain`，不得用新操作 ID 自动重试；先按账本中的对象和内容现场核对。
 
 `stop` 关闭后台浏览；主人主动请求截图仍由截图开关控制。完全停用图片分享需要另关 `screenshot_enabled`。参数修改示例：
 

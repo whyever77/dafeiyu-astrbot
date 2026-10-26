@@ -140,6 +140,14 @@ class ReplyStateTests(unittest.TestCase):
             self.watcher.check_target(SCOPE, args, self.cfg, self.now)
         self.watcher.check_target(SCOPE, args, self.cfg, self.now + 86400)
 
+    def test_manually_answered_candidate_does_not_starve_new_replies(self):
+        thread = self.watcher.threads(SCOPE, self.cfg)[0]
+        self.watcher.ingest(SCOPE, thread, {"replies": [self.item(), self.item("1001", message=TEXT + "还有新问题")]}, "42", self.cfg, self.now)
+        self.state.reserve(SCOPE, "manual", "manual-reply", "reply", {
+            "bvid": thread["bvid"], "cid": 11, "root_rpid": "900", "parent_rpid": "1000"}, self.cfg, self.now)
+        self.assertEqual(self.watcher.candidate(SCOPE, self.cfg, self.now)["rpid"], "1001")
+        self.assertEqual(self.store.db.execute("SELECT status FROM reply_inbox WHERE rpid='1000'").fetchone()[0], "already_attempted")
+
     def test_pending_approval_reserves_thread_and_expired_candidate_is_not_returned(self):
         thread = self.watcher.threads(SCOPE, self.cfg)[0]
         self.watcher.ingest(SCOPE, thread, {"replies": [self.item()]}, "42", self.cfg, self.now)
@@ -238,6 +246,21 @@ class WatchControllerTests(unittest.IsolatedAsyncioTestCase):
         self.plugin.agent.assert_awaited_once()
         self.assertEqual(refused, ["like", "target"])
         self.assertEqual(len(self.api.posts), 1)
+
+    async def test_explicit_auto_public_watch_uses_same_proposal_and_executor(self):
+        self.config.update(interaction_mode="auto_public", auto_public=True)
+        self.save()
+        results = []
+        async def agent(event, *args, **kwargs):
+            self.api.reply.update(rpid=1000, root=901, parent=901, mid=99)
+            results.append(await self.propose("reply", VIDEO | {
+                "root_rpid": 901, "parent_rpid": 1000, "message": "谢谢补充，版本需要进一步核实。"}, event))
+        self.plugin.agent.side_effect = agent
+        await self.plugin.poll_replies()
+        self.assertEqual(len(self.api.posts), 2)
+        self.assertEqual(results[0]["authorization"], "owner_configuration")
+        self.assertTrue(results[0]["verified"])
+        self.assertEqual(self.plugin.interactions().status(SCOPE, self.config)["pending"], [])
 
     async def test_no_new_reply_no_model_and_default_watch_disabled(self):
         self.config["reply_watch_enabled"] = False

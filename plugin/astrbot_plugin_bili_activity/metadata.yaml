@@ -1,7 +1,7 @@
 name: astrbot_plugin_bili_activity
 display_name: 大肥鱼B站自主活动
-desc: 有界浏览、持续目标、来源笔记、研究方法复用、提议后执行与真实QQ截图
-version: v0.4.1
+desc: 有界浏览、持续目标、评论区互动、审批与配额风控、来源笔记和真实QQ截图
+version: v0.5.0
 author: dafeiyu-tools
 support_platforms:
   - aiocqhttp

@@ -158,7 +158,11 @@ class ReplyWatch:
         now = time.time() if now is None else now
         self.db.execute("UPDATE reply_inbox SET status='expired' WHERE scope=? AND status='pending' AND ctime<?",
                         (scope, now - cfg["reply_lookback_hours"] * 3600))
-        for row in self.db.execute("SELECT * FROM reply_inbox WHERE scope=? AND status='pending' ORDER BY ctime,rpid LIMIT 100", (scope,)):
+        for row in self.db.execute("SELECT * FROM reply_inbox WHERE scope=? AND status='pending' ORDER BY ctime,rpid LIMIT 100", (scope,)).fetchall():
+            if self.db.execute("SELECT 1 FROM interactions WHERE scope=? AND action='reply' AND bvid=? AND root_rpid=? AND parent_rpid=?",
+                               (scope, row["bvid"], row["root_rpid"], row["rpid"])).fetchone():
+                self.mark(scope, row["rpid"], "already_attempted")
+                continue
             if self.thread_count(scope, row["bvid"], row["root_rpid"], now) < cfg["reply_max_per_thread_per_day"]:
                 return dict(row)
         return None

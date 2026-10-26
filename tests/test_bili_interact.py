@@ -315,10 +315,10 @@ class PolicyTests(unittest.TestCase):
         legacy_temp = tempfile.TemporaryDirectory()
         old = core.Store(legacy_temp.name)
         try:
-            row, _ = old.propose(SCOPE, "12345", "comment", VIDEO | {"message": "old"})
+            row, _ = old.propose(SCOPE, "12345", "comment", VIDEO | {"bvid": "av123", "message": "old"})
             old.offered(row["id"], {"message_id": 1})
             old.decide(SCOPE, "12345", "可以", "ok")
-            old.finish_proposal(row["id"], {"verified": True, "rpid": "123"})
+            old.finish_proposal(row["id"], {"verified": True, "rpid": "123", "identity": VIDEO})
             state = Interactions(old)
             with closing(sqlite3.connect(state.schema_backup)) as backup:
                 self.assertIsNone(backup.execute("SELECT 1 FROM sqlite_master WHERE name='interactions'").fetchone())
