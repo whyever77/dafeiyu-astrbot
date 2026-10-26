@@ -15,6 +15,11 @@ from urllib.parse import urlsplit
 
 
 DEFAULTS = {
+    "engagement_actions": False, "interaction_mode": "approval", "auto_public": False,
+    "max_actions_per_run": 3, "max_actions_per_day": 20,
+    "max_comments_per_day": 3, "max_replies_per_day": 5, "max_danmaku_per_day": 1,
+    "max_likes_per_day": 10, "max_coins_per_day": 1,
+    "action_interval_ms": [1500, 4000], "risk_cooldown_minutes": 60,
     "enabled": False,
     "periodic_enabled": False,
     "public_interactions": False,
@@ -46,6 +51,10 @@ DEFAULTS = {
 }
 DEFAULT_DATA_DIR = "/opt/dafeiyu/astrbot/data/plugin_data/astrbot_plugin_bili_activity"
 NUMERIC_LIMITS = {
+    "max_actions_per_run": (0, 10000), "max_actions_per_day": (0, 10000),
+    "max_comments_per_day": (0, 10000), "max_replies_per_day": (0, 10000),
+    "max_danmaku_per_day": (0, 10000), "max_likes_per_day": (0, 10000),
+    "max_coins_per_day": (0, 10000), "risk_cooldown_minutes": (1, 10000),
     "check_minutes": (1, 1440), "check_jitter_minutes": (0, 1440),
     "max_videos": (1, 10), "max_minutes": (1, 30),
     "daily_minutes": (1, 240), "max_model_calls_per_run": (1, 64),
@@ -299,7 +308,7 @@ def main(argv=None):
     once = sub.add_parser("once")
     once.add_argument("--delay-seconds", type=int, default=180)
     switches = sub.add_parser("switch")
-    switches.add_argument("name", choices=["public_interactions", "collection_management", "screenshot_enabled", "life_enabled", "workshop_enabled", "methods_enabled"])
+    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "workshop_enabled", "methods_enabled"])
     switches.add_argument("value", choices=["on", "off"])
     accepted = sub.add_parser("accept-one-shot")
     accepted.add_argument("--evidence", type=Path, required=True,

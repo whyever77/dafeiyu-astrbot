@@ -16,9 +16,10 @@ from .life import LifeState, prepare_database
 
 WRITES = {
     "comment", "reply", "follow", "unfollow", "favorite_add", "favorite_remove",
-    "folder_create", "folder_rename", "favorite_move",
+    "folder_create", "folder_rename", "favorite_move", "like", "coin", "danmaku",
 }
-PUBLIC = {"comment", "reply"}
+PUBLIC = {"comment", "reply", "danmaku"}
+ENGAGEMENT = {"like", "coin"}
 
 
 def canonical(value):
@@ -178,7 +179,9 @@ class Store:
     def finish_proposal(self, pid, result):
         if result.get("verified") is True:
             status = "verified"
-        elif result.get("executed") is False and result.get("reason") == "switch_disabled":
+        elif result.get("executed") is False and result.get("reason") in {
+            "switch_disabled", "interaction_blocked",
+        }:
             # Only the trusted local pre-execution check proves no write happened.
             status = "blocked"
         else:

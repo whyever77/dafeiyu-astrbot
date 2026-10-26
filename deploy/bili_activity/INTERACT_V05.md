@@ -54,3 +54,14 @@
 3. P1 回复监听/可见性/学习与测试，完整实现后 commit。
 4. P2 自动模式/owner 命令/文档与测试，完整实现后 commit。
 5. 最终补上实际命令、结果/skip、改动文件、限制及主人 smoke 清单；未实测项明确“未验证”。
+
+## P0 实施结果
+
+已扩展原动作链、添加互动策略表与 `df_bili_status`，原 proposal 的提出/送达/决定函数、transport、life、预算和手机代码保持不变。CLI 初始化的新 control 包含所有互动默认值，旧 control 原样读取并合并默认值。升级导入旧 verified/uncertain 操作作为判重证据，不重置历史配额。评论/回复在 P0 明确报告 `visibility=unknown`，弹幕只有匹配公开 XML 中的 dmid/正文/时间才报告 public。
+
+- Windows 全量：`python.exe -m unittest discover -s tests -p "test_bili_*.py" -v`，293 项 OK、11 跳过（16.182 秒）。
+- Linux 基线归档（662cd5d）：相同 unittest 命令，263 项 OK、6 跳过（11.949 秒）。
+- Linux P0 全量：293 项 OK、6 跳过（23.742 秒）。Linux 用本机 WSL 的 `/var/tmp/dafeiyu-v05/venv/bin/python`（3.12.15，mcp 1.26）；没有访问云端。
+- 随后补充 request 数值 0/数值错误码测试；新增测试集 `-p "test_bili_interact.py" -v`：Windows 31 项 OK（1.253 秒）。
+- 曾有一个新增测试未关闭备份 SQLite 连接，Windows 清理失败；改用 `closing` 后通过，没有修改既有 skip 或断言。
+- P0 阶段三种 interaction_mode 均保留原真实 QQ 审批；自动执行仍未实现。真实接口、公开展示、账号写入、QQ 实收均未验证。

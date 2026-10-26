@@ -29,12 +29,51 @@ MIXIN = (46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
          22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52)
 WRITE_ACTIONS = frozenset({
     "comment", "reply", "follow", "unfollow", "favorite_add", "favorite_remove",
-    "folder_create", "folder_rename", "favorite_move",
+    "folder_create", "folder_rename", "favorite_move", "like", "coin", "danmaku",
 })
 
 
 class BiliError(RuntimeError):
     """Messages deliberately omit URLs, cookies and remote response bodies."""
+
+    def __init__(self, message, *, code=None):
+        super().__init__(message)
+        self.code = code if type(code) is int else None
+
+
+def integer_range(value, name, low, high):
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(f"invalid {name}")
+    try:
+        number = int(value)
+    except ValueError:
+        raise ValueError(f"invalid {name}") from None
+    if str(number) != str(value) or not low <= number <= high:
+        raise ValueError(f"invalid {name}")
+    return number
+
+
+def interaction_args(action, args):
+    """Validate identically for preview and direct Executor calls; no credentials."""
+    args = dict(args)
+    if action == "like":
+        args["like"] = integer_range(args.get("like"), "like", 0, 1)
+    elif action == "coin":
+        args["multiply"] = integer_range(args.get("multiply"), "multiply", 1, 2)
+        args["select_like"] = integer_range(args.get("select_like", 0), "select_like", 0, 1)
+    elif action == "danmaku":
+        message = args.get("message")
+        if not isinstance(message, str) or not 1 <= len(message.strip()) <= 100:
+            raise ValueError("danmaku must contain 1..100 characters")
+        args["message"] = message.strip()
+        for name, default, low, high in (
+            ("progress", None, 0, 86400000), ("color", 16777215, 0, 16777215),
+            ("fontsize", 25, 18, 36), ("pool", 0, 0, 0), ("mode", 1, 1, 5),
+        ):
+            args[name] = integer_range(args.get(name, default), name, low, high)
+        if args["fontsize"] not in {18, 25, 36} or args["mode"] not in {1, 4, 5}:
+            raise ValueError("unsupported danmaku fontsize or mode")
+    return args
 
 
 def positive(value, name):
@@ -138,7 +177,7 @@ class BiliAPI:
         ) as session:
             async with session.request(method, API + path, params=params, data=data, allow_redirects=False) as response:
                 if response.status != 200:
-                    raise BiliError(f"Bilibili HTTP {response.status}")
+                    raise BiliError(f"Bilibili HTTP {response.status}", code=-412 if response.status == 412 else None)
                 body = bytearray()
                 async for chunk in response.content.iter_chunked(65536):
                     body.extend(chunk)
@@ -150,8 +189,10 @@ class BiliAPI:
                     raise BiliError("API returned invalid JSON") from None
                 guest_nav = allow_guest and path == "/x/web-interface/nav" and result.get("code") == -101
                 if result.get("code") != 0 and not guest_nav:
-                    raise BiliError(f"Bilibili API code {result.get('code')}")
-                return result.get("data") or {}
+                    code = result.get("code")
+                    raise BiliError("Bilibili API rejected request", code=code)
+                # has/like returns the integer 0 when not liked.
+                return result["data"] if result.get("data") is not None else {}
 
     async def signed(self, path, params):
         if not self._wbi or self._wbi[0] < time.time():
@@ -361,15 +402,33 @@ class BiliAPI:
         """Validate and freeze API payload before the non-idempotent operation."""
         if action not in WRITE_ACTIONS:
             raise ValueError("unsupported account operation")
+        args = interaction_args(action, args)
         if not self.credentials_present():
-            raise BiliError("QR login is required")
+            raise BiliError("QR login is required", code=-101)
         if args.get("account_uid") and str(args["account_uid"]) != str(self.cookies().get("DedeUserID")):
             raise BiliError("login account changed since the proposal")
         csrf = self.cookies()["bili_jct"]
         payload = {"csrf": csrf, "csrf_token": csrf}
         identity = None
-        if action in {"comment", "reply", "favorite_add", "favorite_remove", "favorite_move"}:
+        if action in {"comment", "reply", "favorite_add", "favorite_remove", "favorite_move", "like", "coin", "danmaku"}:
             identity = await self.identity(args.get("bvid"), args.get("cid"))
+        if action == "like":
+            payload.update(aid=identity["aid"], like=args["like"])
+            return "/x/v2/view/like", payload, identity
+        if action == "coin":
+            before = await self.request("/x/web-interface/archive/coins", {"aid": identity["aid"]})
+            count = integer_range(before.get("multiply"), "current coins", 0, 2)
+            if count + args["multiply"] > 2:
+                raise ValueError("video coin limit would be exceeded")
+            identity = {**identity, "coins_before": count}
+            payload.update(aid=identity["aid"], multiply=args["multiply"], select_like=args["select_like"])
+            return "/x/web-interface/coin/add", payload, identity
+        if action == "danmaku":
+            if args["progress"] > float(identity["duration"]) * 1000:
+                raise ValueError("danmaku progress exceeds selected part duration")
+            payload.update(type=1, oid=identity["cid"], msg=args["message"],
+                           **{k: args[k] for k in ("progress", "color", "fontsize", "pool", "mode")})
+            return "/x/v2/dm/post", payload, identity
         if action in {"comment", "reply"}:
             message = str(args.get("message", "")).strip()
             if not message or len(message) > 1000:
@@ -437,6 +496,34 @@ class BiliAPI:
         return {int(x["id"]) for x in result.get("list") or [] if x.get("fav_state") == 1}
 
     async def verify(self, action, args, response, identity):
+        if action == "like":
+            liked = await self.request("/x/web-interface/archive/has/like", {"aid": identity["aid"]})
+            return {"verified": type(liked) is int and liked == int(args["like"]),
+                    "identity": identity, "visibility": "unknown"}
+        if action == "coin":
+            result = await self.request("/x/web-interface/archive/coins", {"aid": identity["aid"]})
+            count = result.get("multiply")
+            verified = type(count) is int and count == identity["coins_before"] + int(args["multiply"])
+            if int(args.get("select_like", 0)):
+                liked = await self.request("/x/web-interface/archive/has/like", {"aid": identity["aid"]})
+                verified = verified and type(liked) is int and liked == 1
+            return {"verified": verified, "identity": identity, "visibility": "unknown"}
+        if action == "danmaku":
+            dmid = str(response.get("dmid_str") or response.get("dmid") or "")
+            offset = 0
+            # The XML pool is bounded and may lag behind the POST response.
+            for _ in range(10):
+                result = await self.read("danmaku", {"bvid": identity["bvid"], "cid": identity["cid"],
+                    "start": max(0, int(args["progress"]) / 1000 - 1),
+                    "end": int(args["progress"]) / 1000 + 1, "offset": offset, "limit": 200})
+                if dmid and any(str(x.get("id")) == dmid and x.get("text") == args["message"].strip()
+                                and abs(float(x["at"]) * 1000 - int(args["progress"])) <= 1
+                                for x in result["items"]):
+                    return {"verified": True, "visibility": "public", "dmid": dmid, "identity": identity}
+                offset = result.get("next_offset")
+                if offset is None:
+                    break
+            return {"verified": False, "visibility": "unknown", "dmid": dmid, "identity": identity}
         if action in {"follow", "unfollow"}:
             result = await self.request("/x/relation", {"fid": positive(args["uid"], "uid")})
             followed = int(result.get("attribute", 0)) in {2, 6}
@@ -464,7 +551,7 @@ class BiliAPI:
                     int(reply.get("oid", identity["aid"])) == identity["aid"])
         if action == "reply":
             verified = verified and (str(reply.get("root")) == str(args["root_rpid"])) and (str(reply.get("parent")) == str(args["parent_rpid"]))
-        return {"verified": verified, "rpid": rpid, "identity": identity}
+        return {"verified": verified, "rpid": rpid, "identity": identity, "visibility": "unknown"}
 
 
 class Executor:
@@ -505,7 +592,8 @@ class Executor:
                 # Validation may fail safely before the durable execution reservation.
                 path, data, identity = await self.api.prepare_write(action, args)
                 db.execute("INSERT INTO operations VALUES(?,?,?,NULL)", (operation_id, fingerprint, "executing"))
-                result = {"verified": False, "reason": "operation outcome unknown; no retry"}
+                result = {"verified": False, "visibility": "unknown", "reason": "operation outcome unknown; no retry"}
+                response = None
                 try:
                     response = await self.api.request(path, method="POST", data=data)
                     result = await self.api.verify(action, args, response, identity)
@@ -514,7 +602,11 @@ class Executor:
                                (json.dumps(result), operation_id))
                     raise
                 except Exception as exc:
-                    result = {"verified": False, "reason": type(exc).__name__, "retry_allowed": False}
+                    result = {"verified": False, "reason": type(exc).__name__, "retry_allowed": False,
+                              "visibility": "unknown", "risk_code": getattr(exc, "code", None)}
+                    if action in {"comment", "reply"} and isinstance(response, dict):
+                        result["rpid"] = str(response.get("rpid") or (response.get("reply") or {}).get("rpid") or "")
+                result.setdefault("visibility", "unknown")
                 status = "verified" if result.get("verified") is True else "uncertain"
                 db.execute("UPDATE operations SET status=?,result=? WHERE id=?",
                            (status, json.dumps(result, ensure_ascii=False), operation_id))

@@ -16,7 +16,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from bili_api import BiliAPI, Executor
+from bili_api import BiliAPI, Executor, interaction_args
 from media import prepare_video
 from phone_video import PhoneVideo
 
@@ -28,6 +28,9 @@ FIELDS = {
     "favorite_remove": {"bvid", "cid", "folder_id"},
     "favorite_move": {"bvid", "cid", "source_folder_id", "target_folder_id"},
     "folder_create": {"title"}, "folder_rename": {"folder_id", "title"},
+    "like": {"bvid", "cid", "like"},
+    "coin": {"bvid", "cid", "multiply", "select_like"},
+    "danmaku": {"bvid", "cid", "message", "progress", "color", "fontsize", "pool", "mode"},
 }
 
 
@@ -38,6 +41,7 @@ def validated_args(action, args, account_uid, require_account=False):
         raise ValueError("unsupported action or argument fields")
     if require_account and str(args.get("account_uid")) != str(account_uid):
         raise ValueError("approved account missing or changed")
+    args = interaction_args(action, args)
     missing = fields - set(args)
     if missing:
         raise ValueError("required arguments missing")
@@ -47,6 +51,8 @@ def validated_args(action, args, account_uid, require_account=False):
             if not isinstance(args[name], str):
                 raise ValueError("text argument must be a string")
             value[name] = args[name].strip()
+        elif name in {"like", "multiply", "select_like", "progress", "color", "fontsize", "pool", "mode"}:
+            value[name] = args[name]
         else:
             value[name] = positive(args[name], name)
     value["account_uid"] = str(positive(account_uid, "account_uid"))
@@ -80,7 +86,8 @@ def create_server(state_dir, *, host="127.0.0.1", port=8011, adb_path=None,
             raise
         except Exception as exc:
             # Never let framework tracebacks include cookies/URLs or API bodies.
-            return {"ok": False, "error": type(exc).__name__, "verified": False}
+            return {"ok": False, "error": type(exc).__name__, "verified": False,
+                    "visibility": "unknown", "risk_code": getattr(exc, "code", None)}
 
     @mcp.tool()
     async def bili_read(operation: str, args: dict | None = None) -> dict:
@@ -109,6 +116,8 @@ def create_server(state_dir, *, host="127.0.0.1", port=8011, adb_path=None,
         async def preview():
             value = validated_args(action, args, api.cookies().get("DedeUserID"))
             _path, _payload, identity = await api.prepare_write(action, value)
+            if identity:
+                value.update(bvid=identity["bvid"], cid=identity["cid"])
             target = {**identity, "identity": identity} if identity else {}
             if action in {"follow", "unfollow"}:
                 user = await api.read("user", {"uid": value["uid"]})
