@@ -129,6 +129,10 @@ Bili 服务使用真正的 MCP Streamable HTTP；PhoneMCP 继续使用 SSE。云
 
 默认 `interaction_mode=approval`：开关开启后仍需展示精确对象和完整内容，收到同一主人私聊随后发来的“可以”才执行；“算了”撤销。提议默认一小时过期，同时最多一个未决提议。v0.5 另有显式选择的自动模式，规则、推荐低配额、主人命令和回滚见 [INTERACT_V05.md](INTERACT_V05.md)。收藏/关注管理始终逐条审批。写入超时或结果不明会标为 `uncertain`，不得用新操作 ID 自动重试；先按账本中的对象和内容现场核对。
 
+主人可发 `/bili互动 清理不确定`，再追加提议 ID 查看两份账本摘要，按返回的五分钟凭据明确确认 `abandoned` 或 `verified`。这是人工处理决定，保留机器回读结果、operations 账本和已占额度/判重，不重新执行。该功能需要插件和伴随服务同时更新；账本不可读时拒绝清理。`bili_operation` 为控制器只读工具，不应向模型开放。
+
+审查后已按社区维护的 B站 Web API 文档校正点赞/弹幕、buvid3 和 WBI 参数，真实端点可用性仍待小号 smoke。`df_bili_status` 同时显示 `buvid3_present`；缺失时点赞/投币预览会尝试 SPI 获取，仍缺则零 POST。弹幕正向回执单独记 `accepted`，不等于 `verified` 或公开可见；匿名评论查询失败/未找到均为 `visibility=unknown`。投币的附带点赞单独显示 `like_ok`，`null` 表示尚未核实。
+
 `stop` 关闭后台浏览；主人主动请求截图仍由截图开关控制。完全停用图片分享需要另关 `screenshot_enabled`。参数修改示例：
 
 ```bash

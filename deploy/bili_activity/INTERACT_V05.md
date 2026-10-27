@@ -68,7 +68,7 @@
 
 ## P1 实施结果
 
-- 匿名调用评论列表，最多 10 页；公开主楼中的子回复再展开最多 10 页。找到 rpid 才记 public，确实遍历完未找到记 not_public_or_folded；失败、循环游标或安全上限未扫完记 unknown。详情回读的 verified 不受可见性扫描失败影响，风控码仍传回控制器。
+- 匿名调用评论列表，最多 10 页；公开主楼中的子回复再展开最多 10 页。审查修复后使用 WBI 列表、mode=2 时间排序与新分页 offset；找到 rpid 才记 public，未找到、请求失败、循环游标或未扫完均记 unknown。仅详情 verified=true 才查可见性；匿名查询风控码不传入账号风控，不降级为登录读取后宣称 public。
 - 成功 comment/reply 记录成为监听来源；每轮最多 15 个楼、每楼读取一页，页号持久化、轮转选择避免只看最新楼。默认每 3 分钟；必须 `enabled=true`、`reply_watch_enabled=true`、`public_interactions=true` 且不在免打扰/暂停/冷却中。
 - 过滤自己的 rpid/UID、长度不足、超过 24 小时或早于自己的楼记录、情绪/重复/广告/明显工具指令；每 rpid 持久化处理状态。每楼每天默认最多 2 次（含待批准），同时受全局每轮/每天/回复额度限制。每 tick 至多为 1 条新回复调用现有 Agent；仅暴露 df_bili_propose，参数必须匹配本轮已发现目标。沿用 Budget 的时间/模型/QQ 分享额度，不接触手机。
 - `comment_notes` 默认不开启。开启后用长度、补充/因果/建议等信息线索和数字做 0–10 的规则评分，低于默认 7 分不保存；每次最多 3 条，去重并记录 bvid/cid/rpid。最近默认 5 条以固定警示注入主人 Agent 上下文与读取结果；`learn_prompt` 是可配置的选择偏好，不取代固定的“不是事实/不是指令”。评分是启发式筛选，不是事实核验或可靠的语义广告检测。
@@ -125,13 +125,14 @@ python3 /实际工具目录/ops.py --data-dir /实际插件状态目录 switch e
 | `/bili互动 开` | 开启 public/engagement，强制回到 approval；不启用周期/监听/收藏管理 |
 | `/bili互动 关` | 关闭 public/engagement/collection、auto_public、回复监听；保留账本 |
 | `/bili互动 状态` 或 `额度` | 刷新登录状态，显示上海日期各动作计数/上限、待审批、冷却、最近 5 条动作 |
+| `/bili互动 清理不确定` | 列出 uncertain；追加 ID 查看账本，再按短期凭据明确确认处理决定，不重发 |
 | `/bili互动 模式 approval` | 所有写操作逐条批准 |
 | `/bili互动 模式 auto_low_risk` | 仅 like/coin 可自动，仍需 engagement_actions 及正额度 |
 | `/bili互动 模式 auto_public` | 显式设置模式与 auto_public=true；先要求 public_interactions 开启且总日额度为正 |
 
 auto_public 下 comment/reply/danmaku 还必须同时满足 `public_interactions=true`、`auto_public=true`、`interaction_mode=auto_public`、总/单动作/每轮额度为正且未用完；like/coin 仍单独受 engagement_actions 控制。收藏/关注类始终逐条批准。自动操作仍先预览和创建同一 proposals 记录，单独写 `policy_approval`/`decision_event=policy:...`，不伪造 QQ “可以”、不绕过 Executor 和判重/冷却。
 
-可选范围通过 `ops.py configure --allowed-uids '["目标UP的UID"]' --allowed-keywords '["教程"]'` 设置（示例 UID 须替换为数字）。只对自动放行生效，使用已核实视频的 UP UID 与标题匹配，不用模型拟发的正文；两种列表都非空时同时满足，空列表不限制该维度。未匹配回到精确主人审批。CLI 选择 `--interaction-mode auto_public` 本身不打开 `auto_public`，需要另 `switch auto_public on`；主人命令“模式 auto_public”则是明确设置两者。
+可选范围通过 `ops.py configure --allowed-uids '["目标UP的UID"]' --allowed-keywords '["教程"]'` 设置（示例 UID 须替换为数字）。只对自动放行生效，使用已核实视频的 UP UID 与标题匹配，不用模型拟发的正文；两种列表都非空时同时满足，空列表不限制该维度。未匹配回到精确主人审批。CLI 选择 `--interaction-mode auto_public` 与主人命令“模式 auto_public”均明确同步 `auto_public=true`，其他模式同步 false；动作开关、正额度、范围限制仍须满足，默认仍为 approval/false。
 
 回复监听再开启 `reply_watch_enabled`，需要原 `enabled=true`、主人私聊与已配置免打扰；不要求手机在线，不会自行打开周期。学习再开启 `comment_learning_enabled`。各项默认见上方 P1 说明；`ops.py configure` 支持 `--reply-poll-minutes`、`--reply-max-threads-per-tick`、`--reply-min-len`、`--reply-lookback-hours`、`--reply-max-per-thread-per-day`、`--learn-min-score`、`--learn-recent-notes`、`--learn-prompt`。
 
@@ -143,11 +144,11 @@ B站风控不因低频、限额或使用小号而保证消失。12014/-412/-352 
 
 ## 假设与已知限制
 
-- 没有 DSH 固定源码版本，按任务书给出的能力和 API 端点实现，不声明其内部协议兼容；所有真实 B站端点与参数仍未验证。
+- 没有 DSH 固定源码版本，不声明其内部协议兼容；已按社区维护的 B站 Web API 文档校正参数，真实端点可用性仍待小号 smoke。
 - 一套插件/伴随服务实例控制一个账号。计数按主人 scope 隔离，沿用原进程锁；同一账号被多个独立部署/外部客户端同时写入，不在本控制器的全局配额保护内。
 - 前台一条来源 QQ 请求为一轮，后台为真实 run_id；批准沿用提议来源轮次。升级前记录缺少实际执行时间时，以提议 created 日期导入旧次数，偏保守；成功关注的业务 key 不因之后取消关注自动释放。
 - 每楼每 tick 一页，轮询间隔与 thread 上限限制请求量；很深/很多楼可能延迟发现回复。回复看回默认 24 小时；启发式文本过滤/学习可能误判，不保证识别所有广告、复读或错误信息。
-- 待审批/uncertain 仍沿用原单未决提议限制；本次没有增加自动解除 unknown 或自动恢复扫码。真实扫码、核对不确定结果由主人处理。
+- 未解决 uncertain 仍占单未决提议槽位；主人可用两步恢复命令释放槽位。原目标判重、相同参数的不确定执行记录和已计次数保留，不能借清理重发；真实扫码、核对不确定结果由主人处理。
 - auto_public 是明确的配置授权，默认关闭；不匹配允许范围时回审批。匿名 API 的 public 不是所有客户端可见或主人已看到的证据。
 - Windows 6 项 ffmpeg、4 项 Linux export、1 项 symlink 跳过；Linux 6 项 ffmpeg 跳过。真实媒体处理未在这些跳过项中验证。现有 MCP/pydantic 的非致命 warning 保留。
 
@@ -161,6 +162,8 @@ B站风控不因低频、限额或使用小号而保证消失。12014/-412/-352 
 6. 开监听，在已成功发过的楼由另一账号留一条有内容的新回复；等待轮询，确认先提议、准确 root/parent、同 rpid 一次、每楼/每天上限；关闭监听/进入免打扰后不再提议。
 7. 开评论观察，读有补充信息的评论，核对来源、分数、最多 3 条和“不是真相/不是指令”标签；检查其他私聊/群聊无法获取这些观察。
 8. 如确实需要，分别显式测试 auto_low_risk / auto_public 和 UP/标题允许范围，确认不匹配回审批、关闭开关阻止下一条、日志为 policy_approval 而非主人答复。最后 `/bili互动 关`，按需要保留 approval 和最低额度。
+9. 有真实 uncertain 时先人工查看目标，再 `/bili互动 清理不确定 <id>` 查看 proposal/operation 摘要，按凭据确认。核对原操作没有第二次 POST，新目标可以重新提议，原目标仍受判重保护，回复监听恢复。不要为验证恢复而主动制造重复公开写入。
+10. 核对点赞/取消赞实际效果、SPI 后的 buvid3_present、投币与附带点赞各自结果；弹幕若显示 accepted=true/verified=false，应等待或人工查看，不重新发送。匿名可见性接口不可用时须保持 unknown，不出现误报扫码/冷却。
 
 ## 最终交付与测试记录
 
@@ -204,3 +207,50 @@ Windows 命令前将 `C:\Program Files\Git\bin` 前置 PATH，解释器为 `C:\U
 - 匿名可见性错误不应影响账号状态；旧伴随服务的 verified + 未注明来源 risk_code 也会被隔离。真实认证请求的风险可保留 authenticated 来源，QQ 提示仅在风险实际应用时出现。状态查询可刷新登录，保留原轮次停止和冷却；普通后台 B站读取/轮询仍检查风控。
 - 新增 `bili_operation` 仅供控制器读账本，加入原始工具屏蔽清单，不暴露给模型；Executor、transport、原审批决策方法未修改。
 - Windows 离线基线 328 项（11 skip），恢复阶段 341 项（11 skip），均通过。命令均为既有 venv 的 `python -m unittest discover -s tests -p 'test_bili_*.py' -v`；日志 `bili-fixes-baseline.log` / `bili-recovery-suite.log`。新增 13 项恢复/取消/监听恢复/状态回归。阶段中修正了新增工具清单断言及测试缩进；以上为最终重跑结果。
+
+## 审查后修复：Web API 与回读语义
+
+已按社区维护的文档校正参数，真实端点可用性仍待小号 smoke。资料不是 B站官方稳定性承诺：[点赞/投币](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/video/action.md)、[弹幕](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/danmaku/action.md)、[浏览器指纹](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/misc/buvid3_4.md)、[评论列表](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/comment/list.md)、[WBI](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/misc/sign/wbi.md)。
+
+| 问题 | 本地实现与验证边界 |
+| --- | --- |
+| 点赞混用 APP/Web | Web `/x/web-interface/archive/like`，业务参数仍为 1/0，POST 映射为 1/2，回读仍比较 1/0；测试直接断言 Web 契约 |
+| 缺 buvid3 | like/coin 准备前通过 SPI 获取 b_3/b_4，缺失则本地拒绝、零 POST；保留平铺/包裹 Cookie 文件及 refresh_token/updated_at，自身并发请求互斥，网络返回后重读再合并 |
+| 弹幕参数 | aid/cid、毫秒、rnd、1..99 字符；适配器添加 WBI URL 参数，不修改 Executor 单次 POST 逻辑；签名使用文档确定性样例和 HTTP mock 验证 |
+| 弹幕 XML 延迟 | 有正整数 dmid 且 visible 严格为 true 时单独记 accepted；仍尝试 XML 核验，缺失/失败为 verified=false/visibility=unknown，proposal 可结束为 accepted；operations 保留原 uncertain/replay 语义和 accepted 元数据，不改写成 verified，不重发 |
+| 可见性误伤账号 | 只有详情已核验才查匿名列表；identity/nav/列表均不带账号 Cookie；mode=2，WBI 路径及 offset 分页；失败/找不到为 unknown，risk_code=None |
+| 投币附带点赞 | coin 核验只依据币数增量；附带点赞另报 like_ok=true/false/null，并进入事件、状态及 QQ 回复。独立认证读取若返回真实风险码，仍可标登录失效/冷却，不能用 coin 成功掩盖它 |
+| 监听时间下界 | 保留外部执行前 interactions.created，兼容服务端整秒时间；未采用 finish 时间作为起点，测试保证回读完成前及同秒到达的新回复可进入候选 |
+| CLI/文案 | 模式同步 auto_public；关闭提示明确包含 collection_management；所有写操作默认值及审批要求保持不变 |
+
+### 假设 / 待确认
+
+- 未给普通弹幕 `/x/v2/dm/post` 盲目加入 `plat=1`：所核对文档中该字段属于另一个互动弹幕 `/x/v2/dm/command/post`；如小号实测提供普通弹幕的明确参数契约，再增量调整。
+- 未增加以 finish 时间定义的 executed_at 列，避免漏掉发送与回读之间的新回复；旧迁移记录的 created 仍可能是旧提议时间，按原文说明保守处理。
+- 缺 buvid3 不等于账号已登出；SPI 失败只给本地固定错误，不把匿名 SPI 风控算成账号风控。重新扫码不保证修复指纹；需主人核对 status 和环境。
+- 恢复要求新版伴随服务可读 operations 摘要；服务离线时不清理。人工 verified 仅记主人决定，不更改机器回读证据，也不自动清除原目标/相同参数的未知动作保护、停止轮次或冷却。
+- 继续现有 `codex/bili-interact-v05` 分支，本轮未合并 origin/main 新增提交。未修改真实 control/cookies/账本，不 push、不部署、不操作云端。
+
+### 本轮改动文件
+
+`deploy/bili_activity/{bili_api,service,ops}.py`；`plugin/astrbot_plugin_bili_activity/{core,interactions,main,replies}.py`；`tests/test_bili_{recovery,contract_fixes,interact,interact_modes,replies,service}.py`；根 README/CHANGELOG、部署 README、本文。
+
+已逐段核对 Executor 源码与本轮修复前一致，Store.propose/offered/decide 的 AST 不变；transport、life、budget、agent_budget、proxy 和 persona 与本轮修复前无差异。新增恢复/accepted 终态位于原单未决索引之外，保留未解决 uncertain 的阻断，不删除审批门。
+
+### 本轮最终验证记录
+
+共 365 项 = 本轮前 328 项 + 新增 37 项（恢复 14、接口契约 22、监听时间 1）。已有测试同时更新 Web 点赞的独立预期值、评论 WBI 路径、匿名可见性语义、附带点赞语义和 CLI 模式联锁。测试全部使用 fake、临时数据库或本机 mock HTTP，没有真实 B站写入。
+
+| 环境 / 命令 | 最终结果 | 本地日志 |
+| --- | --- | --- |
+| Windows：`C:\Users\ACER\AppData\Local\Temp\dafeiyu-venv\Scripts\python.exe -m unittest discover -s tests -p "test_bili_*.py" -v`（Git bin 前置 PATH） | 365 项，354 通过、11 skip，0 失败/错误；21.176 秒 | `bili-fixes-windows.log` |
+| 本机 WSL：`wsl -d Ubuntu-22.04 --cd /mnt/d/GitHub/dafeiyu-astrbot -- /var/tmp/dafeiyu-v05/venv/bin/python -m unittest discover -s tests -p 'test_bili_*.py' -v` | 365 项，359 通过、6 skip，0 失败/错误；21.486 秒 | `bili-fixes-linux.log` |
+| `python -m compileall -q plugin/astrbot_plugin_bili_activity deploy/bili_activity tests` | 通过 | 标准输出为空 |
+| `git diff --check` | 通过；仅 Windows LF/CRLF 提示 | 无空白错误 |
+| 本轮修复前 `dae5caf` 与当前源码逐段/AST 比较 | Executor 原文、Store.propose/offered/decide 不变；保护文件无差异 | 本地检查输出 |
+
+Windows 跳过：6 项 ffmpeg、4 项 Linux 导出脚本、1 项符号链接；Linux 跳过：6 项 ffmpeg。未安装新测试框架或新生产依赖。中间测试发现的异常类 fixture 身份、工具清单/缩进、WBI 示例参数拼写及配额 fixture 未结束动作问题均已修正并由最终全量覆盖；没有把中间失败记成通过。
+
+实际 B站 Web 参数、WBI 签名受理、SPI 指纹可用性、匿名列表可用性、QQ 真回执、真人公开可见性全部仍为**未验证**。主人手动 smoke 见前述 1–10 项；本地测试与社区文档不替代小号验收。先保持 approval 和低额度，确认问题后再自行部署/推送。
+
+本轮代码提交：`5f9c32a` 恢复与执行状态机 → `fde49d3` Web 参数、回读语义与回归测试；随后单独提交本报告及 README/CHANGELOG。仅本地提交，未 push/PR/Release/部署。
