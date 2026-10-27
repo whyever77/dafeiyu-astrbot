@@ -59,6 +59,9 @@ assets/voice-demo/                     ← 音色样本与复刻链路说明
 
 ## 🚀 快速开始
 
+> 想少踩坑：先 `python deploy-kit/preflight.py` 体检，再 `bash deploy-kit/bootstrap.sh`
+> 一键装依赖 + 组装 + 自检（Windows 用 `bootstrap.ps1`）。十步全流程见 **[QUICKSTART.md](QUICKSTART.md)**。
+
 1. 按 `docs/部署指南.md` 搭好 AstrBot + NapCat + QQ 小号
 2. 把 `plugin/astrbot_plugin_face_convert/` 放进 AstrBot 的 `data/plugins/`
    （插件会自动读取你 AstrBot 配置里的 DashScope key，用于语音/视频理解）

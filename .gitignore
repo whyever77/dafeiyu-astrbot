@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 *.bak
 .serena/
+.env
+payload/
