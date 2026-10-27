@@ -27,25 +27,31 @@ class InteractAPI(service_fixtures.FixtureAPI):
         super().__init__(folder)
         self.liked, self.coins, self.dm_visible = 0, 0, True
         self.dm, self.risk_code, self.fail_verify = None, None, False
+        self.spi = {"b_3": "fixture-buvid3", "b_4": "fixture-buvid4"}
+        self.dm_accepted = False
 
     async def request(self, path, params=None, method="GET", data=None, **kwargs):
+        if path == "/x/frontend/finger/spi":
+            return self.spi
         if method == "POST" and self.risk_code is not None:
             self.posts.append((path, data.copy()))
             raise BiliError("SESSDATA=do-not-leak https://secret.invalid", code=self.risk_code)
-        if path in {"/x/v2/view/like", "/x/web-interface/coin/add", "/x/v2/dm/post"}:
+        if path in {"/x/web-interface/archive/like", "/x/web-interface/coin/add", "/x/v2/dm/post"}:
             self.calls.append((path, params, method, data))
             self.posts.append((path, data.copy()))
             if self.timeout_post:
                 raise TimeoutError("bili_jct=do-not-leak")
-            if path.endswith("view/like"):
-                self.liked = data["like"]
+            if path.endswith("archive/like"):
+                if type(data["like"]) is not int or data["like"] not in {1, 2}:
+                    raise AssertionError("Web like expects 1=like, 2=unlike")
+                self.liked = 1 if data["like"] == 1 else 0
             elif path.endswith("coin/add"):
                 self.coins += data["multiply"]
                 if data["select_like"]:
                     self.liked = 1
             else:
                 self.dm = data.copy()
-                return {"dmid_str": "1234567890123456789"}
+                return {"dmid_str": "1234567890123456789", "visible": self.dm_accepted}
             return {}
         if path.endswith("archive/has/like"):
             if self.fail_verify:
@@ -76,7 +82,9 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
             value = await self.executor.execute(f"like-action-{index}", "like", args)
             self.assertTrue(value["verified"])
             self.assertEqual(self.api.posts[-1][1]["aid"], 123)
-            self.assertEqual(self.api.posts[-1][1]["like"], liked)
+            self.assertEqual(self.api.posts[-1][0], "/x/web-interface/archive/like")
+            self.assertEqual(self.api.posts[-1][1]["like"], 1 if liked else 2)
+            self.assertEqual(self.api.liked, liked)
             again = await self.executor.execute(f"like-action-{index}", "like", args)
             self.assertTrue(again["replayed"])
             self.assertEqual(len(self.api.posts), index + 1)
@@ -116,13 +124,15 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.api.prepare_write("coin", VIDEO | {"multiply": 1})
 
-    async def test_coin_does_not_verify_preexisting_total_or_missing_like(self):
+    async def test_coin_requires_increment_but_reports_missing_like_separately(self):
         identity = await self.api.identity(BVID, 11)
         identity["coins_before"] = 1
         self.api.coins = 1
         self.assertFalse((await self.api.verify("coin", {"multiply": 1}, {}, identity))["verified"])
         self.api.coins = 2
-        self.assertFalse((await self.api.verify("coin", {"multiply": 1, "select_like": 1}, {}, identity))["verified"])
+        value = await self.api.verify("coin", {"multiply": 1, "select_like": 1}, {}, identity)
+        self.assertTrue(value["verified"])
+        self.assertFalse(value["like_ok"])
 
     async def test_danmaku_payload_milliseconds_and_readback_id(self):
         args = validated_args("danmaku", VIDEO | {"message": "补充说明", "progress": 1250, "color": 0, "fontsize": 18}, "42")
@@ -131,6 +141,8 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["visibility"], "public")
         path, data = self.api.posts[0]
         self.assertEqual(path, "/x/v2/dm/post")
+        self.assertEqual(data["aid"], 123)
+        self.assertIsInstance(data["rnd"], int)
         self.assertEqual((data["oid"], data["progress"], data["color"], data["fontsize"]), (11, 1250, 0, 18))
         self.assertTrue((await self.executor.execute("danmaku-action", "danmaku", args))["replayed"])
         with self.assertRaises(ValueError):
@@ -219,6 +231,7 @@ class PolicyTests(unittest.TestCase):
     def test_per_run_cap_cannot_be_reset_by_new_day(self):
         for n in range(3):
             self.reserve(pid=str(n))
+            self.state.finish(SCOPE, "run", str(n), "like", VIDEO | {"like": 1}, {"verified": True}, self.cfg, self.now)
         with self.assertRaisesRegex(InteractionBlocked, "max_actions_per_run"):
             self.reserve(pid="4", now=self.now + 2)
         self.reserve(pid="5", run="another", now=self.now + 2)
@@ -226,6 +239,7 @@ class PolicyTests(unittest.TestCase):
     def test_total_day_cap_resets_at_shanghai_midnight(self):
         self.cfg["max_actions_per_day"] = 1
         self.reserve()
+        self.state.finish(SCOPE, "run", "p1", "like", VIDEO | {"like": 1}, {"verified": True}, self.cfg, self.now)
         with self.assertRaisesRegex(InteractionBlocked, "max_actions_per_day"):
             self.reserve(pid="p2", run="new")
         self.reserve(pid="p3", run="new", now=self.now + 1)

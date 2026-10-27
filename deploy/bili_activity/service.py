@@ -118,6 +118,11 @@ def create_server(state_dir, *, host="127.0.0.1", port=8011, adb_path=None,
         for field in ("rpid", "dmid"):
             ident = str(value.get(field) or "")
             result[field] = ident if ident.isascii() and ident.isdigit() else ""
+        result["accepted"] = value.get("accepted") is True and bool(result["dmid"]) and int(result["dmid"]) > 0
+        if "like_ok" in value:
+            result["like_ok"] = value["like_ok"] if type(value["like_ok"]) is bool else None
+        if value.get("risk_source") in {"authenticated", "visibility"}:
+            result["risk_source"] = value["risk_source"]
         return {"ok": True, "found": True, "fingerprint": row[0], "status": row[1], "result": result}
 
     @mcp.tool()

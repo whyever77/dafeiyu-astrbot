@@ -424,6 +424,8 @@ def main(argv=None):
                     if field == "allowed_keywords" and any(not isinstance(v, str) or not v.strip() or len(v) > 100 for v in value):
                         raise ValueError("allowed_keywords 必须为关键词数组")
                 control[field] = value
+                if field == "interaction_mode":
+                    control["auto_public"] = value == "auto_public"
             for field in ("owner_scope", "owner_id", "phone_url", "bili_url", "device_id", *NUMERIC_LIMITS):
                 value = getattr(args, field)
                 if value is not None:

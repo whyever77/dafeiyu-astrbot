@@ -733,6 +733,7 @@ class BiliActivity(Star):
             login = {}
         result = state.status(scope, cfg)
         result["login_checked"] = type(login.get("logged_in")) is bool
+        result["buvid3_present"] = login.get("buvid3_present") if type(login.get("buvid3_present")) is bool else None
         return canonical(result)
 
     async def initialize(self):
@@ -1382,6 +1383,7 @@ class BiliActivity(Star):
             self.store.event(event.unified_msg_origin, "execution_result", {"proposal_id": proposal["id"], "result": result})
             self.store.queue_memory(event.unified_msg_origin, "[主人明确同意本次操作，不代表一般喜好] " + canonical({"action": proposal["action"], "args": proposal["args"], "result": result}), "proposal:" + proposal["id"])
             answer = ("办好了，重新读回也核对上了。" if result.get("verified") else
+                      "接口已受理弹幕，尚未回读确认；不会重发，也不代表已公开。" if result.get("accepted") else
                       "对应操作开关已关闭，这次没有执行。" if result.get("reason") == "switch_disabled" else
                       "这次没能核实完成，已保留记录，先不重试，免得重复操作。")
             if result.get("reason") == "interaction_blocked":
@@ -1391,6 +1393,8 @@ class BiliActivity(Star):
             elif result.get("risk_applied") and result.get("risk_code") in {12014, -412, -352}:
                 answer += " 检测到B站风控，本轮已停止并进入冷却。"
             answer += f"\nverified={str(result['verified']).lower()}；visibility={result['visibility']}（公开可见性独立于接口回读）。"
+            if "like_ok" in result:
+                answer += "\n附带点赞 like_ok=" + canonical(result["like_ok"]) + "（null 表示未核实）。"
             await event.send(event.plain_result(answer))
             await self.flush_memory(event)
 
@@ -1400,7 +1404,7 @@ class BiliActivity(Star):
 
         Args:
             operation(string): info/search/home/following_feed/subtitles/danmaku/comments/replies/folders/favorites/followings/user。
-            arguments(string): JSON对象；视频传bvid及cid，评论翻页传next，回复传root_rpid和page。
+            arguments(string): JSON对象；视频传bvid及cid，评论mode默认3，翻页优先传pagination_offset=上次next_offset，也兼容next；回复传root_rpid和page。
         """
         self.check_owner(event, interaction_guard=operation != "status")
         self.require_goal(event)
@@ -1543,7 +1547,7 @@ class BiliActivity(Star):
 
         Args:
             action(string): comment/reply/danmaku/like/coin/follow/unfollow/favorite_add/favorite_remove/folder_create/folder_rename/favorite_move。
-            arguments(string): 视频含bvid,cid；like含like=1/0；coin含multiply=1/2、可选select_like=0/1；danmaku含message、progress毫秒，可选color、fontsize=18/25/36、mode=1/4/5；评论含完整message，回复另含root_rpid,parent_rpid；收藏含收藏夹ID，改名含title。
+            arguments(string): 视频含bvid,cid；like含like=1/0；coin含multiply=1/2、可选select_like=0/1；danmaku含1至99字符message、progress毫秒，可选color、fontsize=18/25/36、mode=1/4/5；评论含完整message，回复另含root_rpid,parent_rpid；收藏含收藏夹ID，改名含title。
             reason(string): 用当前人格简短说明具体想法，不声称已执行。
         """
         cfg = self.check_owner(event)

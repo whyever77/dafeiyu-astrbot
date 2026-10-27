@@ -117,6 +117,17 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         await self.command(f"/bili互动 清理不确定 {pid} abandoned 确认 {review['token']}", "changed")
         self.assertEqual(self.row(pid)["status"], "uncertain")
 
+    async def test_resolved_unknown_like_does_not_authorize_same_payload_retry(self):
+        self.api.timeout_post = True
+        value = await self.propose("like", VIDEO | {"like": 1})
+        await self.approve()
+        self.api.timeout_post = False
+        await self.resolve(value["proposal_id"])
+        result = await self.propose("like", VIDEO | {"like": 1}, fixtures.FakeEvent(event_id="retry"))
+        self.assertFalse(result["proposal_created"])
+        self.assertIn("禁止重复", result["reason"])
+        self.assertEqual(len(self.api.posts), 1)
+
     async def test_ledger_inspection_is_read_only_and_redacted(self):
         pid = await self.unknown()
         event = await self.command("/bili互动 清理不确定 " + pid)

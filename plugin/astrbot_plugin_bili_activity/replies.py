@@ -124,7 +124,7 @@ class ReplyWatch:
                 if not isinstance(text, str):
                     continue
                 valid_time = (type(created) in (int, float) and math.isfinite(created)
-                              and max(now - cfg["reply_lookback_hours"] * 3600, thread["created"]) <= created <= now + 60)
+                              and max(now - cfg["reply_lookback_hours"] * 3600, int(thread["created"])) <= created <= now + 60)
                 duplicate = self.db.execute("SELECT 1 FROM reply_inbox WHERE scope=? AND bvid=? AND root_rpid=? AND body_hash=?",
                                            (scope, thread["bvid"], root, digest(text.strip()))).fetchone()
                 eligible = (rpid not in own and str(item.get("uid")) != str(own_uid)

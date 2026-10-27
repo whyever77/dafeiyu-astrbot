@@ -77,8 +77,11 @@ class FixtureAPI(BiliAPI):
         if path == '/x/web-interface/view':
             return copy.deepcopy(self.info)
         if path == '/x/web-interface/nav':
-            return {'isLogin': True, 'mid': 42, 'uname': 'fixture'}
-        if path == '/x/v2/reply/main':
+            return {'isLogin': True, 'mid': 42, 'uname': 'fixture', 'wbi_img': {
+                'img_url': 'https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png',
+                'sub_url': 'https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png'}}
+        if path == '/x/v2/reply/wbi/main':
+            params = dict(params, next=int(params.get('next', 0)))
             return {'replies': [self.reply], 'cursor': {'next': params['next'] + 1, 'is_end': params['next'] >= 2}}
         if path == '/x/v2/reply/reply':
             return {'root': self.reply, 'replies': [self.reply], 'page': {'count': 41}}
@@ -96,11 +99,13 @@ class FixtureAPI(BiliAPI):
             return {'medias': [dict(bvid=BVID, id=123)], 'has_more': False}
         raise AssertionError(path)
 
-    async def signed(self, path, params):
+    async def signed(self, path, params, **kwargs):
         if path == '/x/player/wbi/v2':
             return {'subtitle': {'subtitles': [{'lan': 'zh-CN', 'subtitle_url': 'https://aisubtitle.hdslb.com/a.json'}]}}
         if path == '/x/space/wbi/acc/info':
             return {'mid': params['mid'], 'name': 'fixture UP'}
+        if path == '/x/v2/reply/wbi/main':
+            return await super().signed(path, params, **kwargs)
         raise AssertionError(path)
 
     async def get_bytes(self, url, limit):

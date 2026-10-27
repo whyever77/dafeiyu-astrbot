@@ -30,7 +30,7 @@ class VisibilityTests(unittest.IsolatedAsyncioTestCase):
         self.api.read = AsyncMock(return_value={"comments": [], "is_end": True})
         value = await self.api.verify("comment", {"message": "text"}, {"rpid": 900}, self.identity)
         self.assertTrue(value["verified"])
-        self.assertEqual(value["visibility"], "not_public_or_folded")
+        self.assertEqual(value["visibility"], "unknown")
         self.assertTrue(self.api.read.await_args.kwargs["anonymous"])
 
     async def test_public_only_after_matching_rpid_on_later_page(self):
@@ -46,7 +46,7 @@ class VisibilityTests(unittest.IsolatedAsyncioTestCase):
         value = await self.api.verify("comment", {"message": "text"}, {"rpid": 900}, self.identity)
         self.assertTrue(value["verified"])
         self.assertEqual(value["visibility"], "unknown")
-        self.assertEqual(value["risk_code"], -412)
+        self.assertIsNone(value["risk_code"])
         self.assertNotIn("private", json.dumps(value))
 
     async def test_capped_or_looping_scan_cannot_claim_absence(self):
@@ -76,7 +76,7 @@ class VisibilityTests(unittest.IsolatedAsyncioTestCase):
         self.api.request = request
         await self.api.read("comments", VIDEO, anonymous=True)
         await self.api.read("replies", VIDEO | {"root_rpid": 900}, anonymous=True)
-        calls = [kwargs for path, kwargs in recorded if path in {"/x/v2/reply/main", "/x/v2/reply/reply"}]
+        calls = [kwargs for path, kwargs in recorded if path in {"/x/v2/reply/wbi/main", "/x/v2/reply/reply"}]
         self.assertEqual([x["authenticated"] for x in calls], [False, False])
         self.assertNotIn("Cookie", self.api.headers(False))
 
@@ -104,6 +104,18 @@ class ReplyStateTests(unittest.TestCase):
 
     def item(self, rpid="1000", **kwargs):
         return {"rpid": rpid, "root_rpid": "900", "uid": "99", "ctime": self.now - 10, "message": TEXT, **kwargs}
+
+    def test_reply_before_slow_finish_and_same_second_is_not_lost(self):
+        start = int(self.now) - 100 + 0.9
+        args = {"bvid": BVID + "late", "cid": 11}
+        self.state.reserve(SCOPE, "late", "late-seed", "comment", args, self.cfg, start)
+        self.state.finish(SCOPE, "late", "late-seed", "comment", args, {"verified": True, "rpid": "998"}, self.cfg, self.now)
+        thread = next(t for t in self.watcher.threads(SCOPE, self.cfg) if t["root_rpid"] == "998")
+        self.assertEqual(thread["created"], start)
+        items = [self.item("2000", root_rpid="998", ctime=int(start)),
+                 self.item("2001", root_rpid="998", ctime=int(start) - 1, message=TEXT + "更早")]
+        self.assertEqual(self.watcher.ingest(SCOPE, thread, {"replies": items}, "42", self.cfg, self.now), 1)
+        self.assertEqual(self.watcher.candidate(SCOPE, self.cfg, self.now)["rpid"], "2000")
 
     def test_new_reply_self_short_emotion_ad_old_and_repeat_filters(self):
         thread = self.watcher.threads(SCOPE, self.cfg)[0]

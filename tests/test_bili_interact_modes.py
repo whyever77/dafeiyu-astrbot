@@ -175,7 +175,7 @@ class ConfigOpsTests(unittest.TestCase):
             ops_fixtures.ops.main(args + ["configure", "--interaction-mode", "auto_public", "--allowed-uids", '["5"]',
                 "--allowed-keywords", '["教程"]', "--action-interval-ms", "2000", "6000", "--learn-prompt", "优先版本差异"])
             cfg = ops_fixtures.ops.load_control(Path(folder))
-            self.assertFalse(cfg["auto_public"])
+            self.assertTrue(cfg["auto_public"])
             self.assertEqual(cfg["allowed_uids"], ["5"])
             self.assertEqual(cfg["action_interval_ms"], [2000, 6000])
             original = (Path(folder) / "control.json").read_bytes()

@@ -104,14 +104,18 @@ def safe_result(value):
     result = {"verified": value.get("verified") is True,
               "visibility": visibility if isinstance(visibility, str) and visibility in VISIBILITY else "unknown",
               "risk_code": value.get("risk_code") if type(value.get("risk_code")) is int else None}
-    result["risk_source"] = value.get("risk_source") if value.get("risk_source") in {"authenticated", "visibility"} else None
+    source = value.get("risk_source")
+    result["risk_source"] = source if isinstance(source, str) and source in {"authenticated", "visibility"} else None
     # Older companions attached anonymous visibility failures to verified writes.
     if result["risk_source"] == "visibility" or (result["verified"] and result["risk_source"] != "authenticated"):
         result["risk_code"] = None
     for key in ("rpid", "dmid"):
         text = str(value.get(key) or "")
         result[key] = text if text.isascii() and text.isdigit() else ""
-    result["result"] = "verified" if result["verified"] else "uncertain"
+    result["accepted"] = value.get("accepted") is True and bool(result["dmid"]) and int(result["dmid"]) > 0
+    if "like_ok" in value:
+        result["like_ok"] = value["like_ok"] if type(value["like_ok"]) is bool else None
+    result["result"] = "verified" if result["verified"] else "accepted" if result["accepted"] else "uncertain"
     if value.get("executed") is False and isinstance(value.get("reason"), str) and value["reason"] in {"switch_disabled", "interaction_blocked"}:
         result.update(executed=False, reason=value["reason"], result="blocked")
     # reason/error strings from a transport are deliberately discarded.
@@ -210,6 +214,9 @@ class Interactions:
         if action not in WRITES:
             raise ValueError("unsupported interaction")
         self.guard(scope, run_id, now)
+        if self.db.execute("SELECT 1 FROM interactions WHERE scope=? AND fingerprint=? AND result='uncertain'",
+                           (scope, digest([action, args]))).fetchone():
+            raise InteractionBlocked("相同参数存在未核实的执行记录；禁止重复，清理提议不授权重试原操作。")
         key = dedupe_key(action, args)
         if key and self.db.execute("SELECT 1 FROM interactions WHERE scope=? AND dedupe_key=?", (scope, key)).fetchone():
             raise InteractionBlocked("相同视频/回复目标/关注对象已有动作记录；禁止重复评论、回复或自动重试。")
@@ -269,6 +276,12 @@ class Interactions:
         now = time.time() if now is None else now
         day = day_at(now)
         counts = {row["action"]: row["count"] for row in self.db.execute("SELECT * FROM daily_actions WHERE scope=? AND day=?", (scope, day))}
+        recent = []
+        for row in self.db.execute("SELECT i.proposal_id,i.action,i.bvid,i.cid,i.rpid,i.result,i.verified,i.visibility,i.risk_code,i.created,p.result AS evidence FROM interactions i LEFT JOIN proposals p ON p.id=i.proposal_id WHERE i.scope=? ORDER BY i.created DESC,i.rowid DESC LIMIT 5", (scope,)):
+            entry = dict(row)
+            evidence = safe_result(json.loads(entry.pop("evidence") or "{}"))
+            entry.update({key: evidence[key] for key in ("dmid", "accepted", "like_ok") if key in evidence})
+            recent.append(entry)
         return {"day": day, "mode": cfg["interaction_mode"], "counting": "attempts_including_unknown",
             "today": {action: {"count": counts.get(action, 0), "limit": cfg.get(ACTION_LIMITS.get(action), cfg["max_actions_per_day"])} for action in sorted(WRITES)},
             "total": {"count": sum(counts.values()), "limit": cfg["max_actions_per_day"]},
@@ -276,4 +289,4 @@ class Interactions:
             "pending": [dict(row) for row in self.db.execute("SELECT id,action,status FROM proposals WHERE scope=? AND ((status IN ('draft','offered') AND expires>?) OR status IN ('executing','uncertain')) ORDER BY created", (scope, now))],
             "cooldown_remaining_seconds": max(0, self.store.get_setting("interaction_cooldown:" + scope, 0) - now),
             "login": self.store.get_setting("interaction_login:" + scope, "unknown"),
-            "recent": [dict(row) for row in self.db.execute("SELECT proposal_id,action,bvid,cid,rpid,result,verified,visibility,risk_code,created FROM interactions WHERE scope=? ORDER BY created DESC,rowid DESC LIMIT 5", (scope,))]}
+            "recent": recent}

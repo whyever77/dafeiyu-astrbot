@@ -2,6 +2,8 @@
 
 API shapes were reviewed against Iseenope/bilibili-mcp-server at
 20eedd09862aea2c160163007f45221c544651b2 (MIT). No POST is automatically retried.
+Engagement and WBI contracts were corrected against the community-maintained
+bilibili-plugins/bilibili-api-collect docs; live account smoke is still required.
 The caller must obtain approval before invoking Executor.execute().
 """
 from __future__ import annotations
@@ -63,8 +65,8 @@ def interaction_args(action, args):
         args["select_like"] = integer_range(args.get("select_like", 0), "select_like", 0, 1)
     elif action == "danmaku":
         message = args.get("message")
-        if not isinstance(message, str) or not 1 <= len(message.strip()) <= 100:
-            raise ValueError("danmaku must contain 1..100 characters")
+        if not isinstance(message, str) or not 1 <= len(message.strip()) < 100:
+            raise ValueError("danmaku must contain 1..99 characters")
         args["message"] = message.strip()
         for name, default, low, high in (
             ("progress", None, 0, 86400000), ("color", 16777215, 0, 16777215),
@@ -135,6 +137,7 @@ class BiliAPI:
         self.cookie_file = Path(cookie_file)
         self._wbi = None
         self._lock = asyncio.Lock()
+        self._fingerprint_lock = asyncio.Lock()
         self._last_request = 0.0
 
     def cookies(self):
@@ -147,6 +150,29 @@ class BiliAPI:
     def credentials_present(self):
         value = self.cookies()
         return all(value.get(k) for k in ("SESSDATA", "bili_jct", "DedeUserID"))
+
+    async def ensure_buvid3(self):
+        """Provision missing browser fingerprint, without replacing login metadata."""
+        async with self._fingerprint_lock:
+            if self.cookies().get("buvid3"):
+                return
+            try:
+                data = await self.request("/x/frontend/finger/spi", authenticated=False)
+                values = {cookie: data.get(field) for cookie, field in (("buvid3", "b_3"), ("buvid4", "b_4"))}
+                values = {k: v for k, v in values.items() if isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,256}", v)}
+                if not values.get("buvid3"):
+                    raise ValueError("fingerprint unavailable")
+                # Re-read after network I/O: a concurrent login may have refreshed
+                # cookies. Preserve both legacy flat and wrapped credential files.
+                document = json.loads(self.cookie_file.read_text(encoding="utf-8"))
+                cookies = document.get("cookies", document)
+                if not cookies.get("buvid3"):
+                    cookies.update(values)
+                    private_json(self.cookie_file, document)
+            except Exception:
+                raise BiliError("buvid3 missing; re-login") from None
+            if not self.cookies().get("buvid3"):
+                raise BiliError("buvid3 missing; re-login")
 
     def headers(self, authenticated=True):
         headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
@@ -170,6 +196,10 @@ class BiliAPI:
             raise ValueError("invalid API path")
         if method not in {"GET", "POST"}:
             raise ValueError("invalid method")
+        if method == "POST" and path == "/x/v2/dm/post":
+            # Keep the Executor's single POST unchanged. Only this adapter adds
+            # the documented WBI URL parameters; message/body stay untouched.
+            params = await self.wbi_params({"csrf": data["csrf"], "web_location": 1315873})
         await self._throttle()
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=25), trust_env=True,
@@ -194,9 +224,9 @@ class BiliAPI:
                 # has/like returns the integer 0 when not liked.
                 return result["data"] if result.get("data") is not None else {}
 
-    async def signed(self, path, params):
+    async def wbi_params(self, params, *, authenticated=True):
         if not self._wbi or self._wbi[0] < time.time():
-            nav = await self.request("/x/web-interface/nav", allow_guest=True)
+            nav = await self.request("/x/web-interface/nav", allow_guest=True, authenticated=authenticated)
             images = nav.get("wbi_img", {})
             raw = "".join(Path(urlparse(images[k]).path).stem for k in ("img_url", "sub_url"))
             if len(raw) < 64:
@@ -206,7 +236,11 @@ class BiliAPI:
         values["wts"] = str(int(time.time()))
         query = urlencode(sorted(values.items())).replace("+", "%20")
         values["w_rid"] = hashlib.md5((query + self._wbi[1]).encode()).hexdigest()
-        return await self.request(path, params=values)
+        return values
+
+    async def signed(self, path, params, *, authenticated=True):
+        values = await self.wbi_params(params, authenticated=authenticated)
+        return await self.request(path, params=values, authenticated=authenticated)
 
     @staticmethod
     def media_url(url):
@@ -260,7 +294,7 @@ class BiliAPI:
             if not complete:
                 path.unlink(missing_ok=True)
 
-    async def identity(self, video_id, cid=None, allow_parts=False, page_number=None):
+    async def identity(self, video_id, cid=None, allow_parts=False, page_number=None, *, authenticated=True):
         """Resolve BV/av, validate selected part, never silently choose another cid."""
         video_id = str(video_id)
         match = re.search(r"(BV[1-9A-HJ-NP-Za-km-z]{10})(?![A-Za-z0-9])", video_id)
@@ -270,7 +304,7 @@ class BiliAPI:
             params = {"aid": positive(video_id.removeprefix("av"), "aid")}
         else:
             raise ValueError("a full BV or av identifier is required; title matching is not identity")
-        info = await self.request("/x/web-interface/view", params)
+        info = await self.request("/x/web-interface/view", params, authenticated=authenticated)
         if (("bvid" in params and info.get("bvid") != params["bvid"])
                 or ("aid" in params and int(info.get("aid", 0)) != params["aid"])):
             raise BiliError("video API returned a different identity")
@@ -310,14 +344,19 @@ class BiliAPI:
     async def read(self, operation, args, *, anonymous=False):
         page, size = bounded_page(args)
         if operation == "status":
+            fingerprint = {"buvid3_present": bool(self.cookies().get("buvid3"))}
             if not self.credentials_present():
-                return {"logged_in": False, "credential_file_present": self.cookie_file.exists()}
-            nav = await self.request("/x/web-interface/nav")
-            return {"logged_in": bool(nav.get("isLogin")), "uid": nav.get("mid"), "name": nav.get("uname")}
+                return {"logged_in": False, "credential_file_present": self.cookie_file.exists(), **fingerprint}
+            try:
+                nav = await self.request("/x/web-interface/nav")
+            except BiliError as exc:
+                return {"ok": False, "logged_in": False if exc.code == -101 else None,
+                        "risk_code": exc.code, **fingerprint}
+            return {"logged_in": bool(nav.get("isLogin")), "uid": nav.get("mid"), "name": nav.get("uname"), **fingerprint}
         if operation in {"info", "subtitles", "danmaku", "comments", "replies"}:
             identity = await self.identity(args.get("bvid") or args.get("video_id"), args.get("cid"),
                                            allow_parts=operation == "info",
-                                           page_number=args.get("page") if operation == "info" else None)
+                                           page_number=args.get("page") if operation == "info" else None, authenticated=not anonymous)
             result = {"identity": identity, **{k: identity[k] for k in ("bvid", "aid", "cid")}}
             if operation == "info":
                 return result
@@ -345,12 +384,19 @@ class BiliAPI:
                         "next_offset": offset + limit if offset + limit < len(selected) else None,
                         "note": "current XML pool; not guaranteed to contain all historical danmaku"}
             if operation == "comments":
-                data = await self.request("/x/v2/reply/main", {
-                    "type": 1, "oid": identity["aid"], "mode": 3,
-                    "next": max(0, int(args.get("cursor", args.get("next", 0)))), "ps": size}, authenticated=not anonymous)
+                params = {"type": 1, "oid": identity["aid"], "mode": integer_range(args.get("mode", 3), "mode", 0, 3), "ps": size}
+                if "pagination_offset" in args:
+                    offset = args["pagination_offset"]
+                    if not isinstance(offset, str) or len(offset) > 4096:
+                        raise ValueError("invalid comments pagination offset")
+                    params["pagination_str"] = json.dumps({"offset": offset}, separators=(",", ":"))
+                else:
+                    params["next"] = max(0, int(args.get("cursor", args.get("next", 0))))
+                data = await self.signed("/x/v2/reply/wbi/main", params, authenticated=not anonymous)
                 cursor = data.get("cursor", {})
                 return {**result, "comments": [self.comment(x) for x in data.get("replies") or []],
                         "next_cursor": None if cursor.get("is_end") else cursor.get("next"),
+                        "next_offset": None if cursor.get("is_end") else (cursor.get("pagination_reply") or {}).get("next_offset"),
                         "is_end": bool(cursor.get("is_end"))}
             data = await self.request("/x/v2/reply/reply", {
                 "type": 1, "oid": identity["aid"], "root": positive(args.get("root_rpid"), "root_rpid"),
@@ -405,6 +451,8 @@ class BiliAPI:
         args = interaction_args(action, args)
         if not self.credentials_present():
             raise BiliError("QR login is required", code=-101)
+        if action in {"like", "coin"}:
+            await self.ensure_buvid3()
         if args.get("account_uid") and str(args["account_uid"]) != str(self.cookies().get("DedeUserID")):
             raise BiliError("login account changed since the proposal")
         csrf = self.cookies()["bili_jct"]
@@ -413,8 +461,8 @@ class BiliAPI:
         if action in {"comment", "reply", "favorite_add", "favorite_remove", "favorite_move", "like", "coin", "danmaku"}:
             identity = await self.identity(args.get("bvid"), args.get("cid"))
         if action == "like":
-            payload.update(aid=identity["aid"], like=args["like"])
-            return "/x/v2/view/like", payload, identity
+            payload.update(aid=identity["aid"], like=1 if args["like"] else 2)
+            return "/x/web-interface/archive/like", payload, identity
         if action == "coin":
             before = await self.request("/x/web-interface/archive/coins", {"aid": identity["aid"]})
             count = integer_range(before.get("multiply"), "current coins", 0, 2)
@@ -426,7 +474,7 @@ class BiliAPI:
         if action == "danmaku":
             if args["progress"] > float(identity["duration"]) * 1000:
                 raise ValueError("danmaku progress exceeds selected part duration")
-            payload.update(type=1, oid=identity["cid"], msg=args["message"],
+            payload.update(type=1, aid=identity["aid"], oid=identity["cid"], msg=args["message"], rnd=time.time_ns() // 1000,
                            **{k: args[k] for k in ("progress", "color", "fontsize", "pool", "mode")})
             return "/x/v2/dm/post", payload, identity
         if action in {"comment", "reply"}:
@@ -502,11 +550,12 @@ class BiliAPI:
         For a reply, expand its publicly listed root instead of trusting the
         small nested preview supplied with the top-level comments.
         """
-        args = {"bvid": identity["bvid"], "cid": identity["cid"], "page_size": 50}
-        cursor, seen = 0, set()
+        args = {"bvid": identity["bvid"], "cid": identity["cid"], "page_size": 50, "mode": 2}
+        cursor, seen, offset = 0, set(), None
         try:
             for _ in range(10):
-                page = await self.read("comments", args | {"cursor": cursor}, anonymous=True)
+                paging = {"pagination_offset": offset} if offset is not None else {"cursor": cursor}
+                page = await self.read("comments", args | paging, anonymous=True)
                 for item in page.get("comments", []):
                     if str(item.get("rpid")) == rpid or any(str(x.get("rpid")) == rpid for x in item.get("replies", [])):
                         return "public", None
@@ -517,20 +566,22 @@ class BiliAPI:
                             if any(str(x.get("rpid")) == rpid for x in replies.get("replies", [])):
                                 return "public", None
                             if replies.get("next_page") is None:
-                                return "not_public_or_folded", None
+                                return "unknown", None
                             pages.add(number)
                             number = replies["next_page"]
                             if number in pages:
                                 return "unknown", None
                         return "unknown", None
                 if page.get("is_end") is True:
-                    return "not_public_or_folded", None
-                seen.add(cursor)
-                cursor = page.get("next_cursor")
-                if cursor is None or cursor in seen:
                     return "unknown", None
-        except Exception as exc:
-            return "unknown", getattr(exc, "code", None)
+                seen.add((cursor, offset))
+                cursor = page.get("next_cursor")
+                offset = page.get("next_offset")
+                if (cursor is None and offset is None) or (cursor, offset) in seen:
+                    return "unknown", None
+        except Exception:
+            # Anonymous visibility failures are not evidence of account risk.
+            return "unknown", None
         return "unknown", None
 
     async def verify(self, action, args, response, identity):
@@ -542,26 +593,38 @@ class BiliAPI:
             result = await self.request("/x/web-interface/archive/coins", {"aid": identity["aid"]})
             count = result.get("multiply")
             verified = type(count) is int and count == identity["coins_before"] + int(args["multiply"])
+            value = {"verified": verified, "identity": identity, "visibility": "unknown"}
             if int(args.get("select_like", 0)):
-                liked = await self.request("/x/web-interface/archive/has/like", {"aid": identity["aid"]})
-                verified = verified and type(liked) is int and liked == 1
-            return {"verified": verified, "identity": identity, "visibility": "unknown"}
+                value["like_ok"] = None
+                try:
+                    liked = await self.request("/x/web-interface/archive/has/like", {"aid": identity["aid"]})
+                    value["like_ok"] = liked == 1 if type(liked) is int and liked in {0, 1} else None
+                except Exception as exc:
+                    # A failed optional read cannot erase confirmed coin spending.
+                    value.update(risk_code=getattr(exc, "code", None), risk_source="authenticated")
+            return value
         if action == "danmaku":
             dmid = str(response.get("dmid_str") or response.get("dmid") or "")
+            dmid = dmid if dmid.isascii() and dmid.isdigit() and int(dmid) > 0 else ""
+            value = {"verified": False, "visibility": "unknown", "dmid": dmid, "identity": identity,
+                     "accepted": bool(dmid) and response.get("visible") is True}
             offset = 0
             # The XML pool is bounded and may lag behind the POST response.
-            for _ in range(10):
-                result = await self.read("danmaku", {"bvid": identity["bvid"], "cid": identity["cid"],
-                    "start": max(0, int(args["progress"]) / 1000 - 1),
-                    "end": int(args["progress"]) / 1000 + 1, "offset": offset, "limit": 200})
-                if dmid and any(str(x.get("id")) == dmid and x.get("text") == args["message"].strip()
-                                and abs(float(x["at"]) * 1000 - int(args["progress"])) <= 1
-                                for x in result["items"]):
-                    return {"verified": True, "visibility": "public", "dmid": dmid, "identity": identity}
-                offset = result.get("next_offset")
-                if offset is None:
-                    break
-            return {"verified": False, "visibility": "unknown", "dmid": dmid, "identity": identity}
+            try:
+                for _ in range(10):
+                    result = await self.read("danmaku", {"bvid": identity["bvid"], "cid": identity["cid"],
+                        "start": max(0, int(args["progress"]) / 1000 - 1),
+                        "end": int(args["progress"]) / 1000 + 1, "offset": offset, "limit": 200})
+                    if dmid and any(str(x.get("id")) == dmid and x.get("text") == args["message"].strip()
+                                    and abs(float(x["at"]) * 1000 - int(args["progress"])) <= 1
+                                    for x in result["items"]):
+                        return value | {"verified": True, "visibility": "public"}
+                    offset = result.get("next_offset")
+                    if offset is None:
+                        break
+            except Exception:
+                pass  # Keep the POST receipt; XML failure is not a new write failure.
+            return value
         if action in {"follow", "unfollow"}:
             result = await self.request("/x/relation", {"fid": positive(args["uid"], "uid")})
             followed = int(result.get("attribute", 0)) in {2, 6}
@@ -589,7 +652,8 @@ class BiliAPI:
                     int(reply.get("oid", identity["aid"])) == identity["aid"])
         if action == "reply":
             verified = verified and (str(reply.get("root")) == str(args["root_rpid"])) and (str(reply.get("parent")) == str(args["parent_rpid"]))
-        visibility, risk_code = await self.comment_visibility(identity, rpid, args.get("root_rpid"))
+        visibility, risk_code = (await self.comment_visibility(identity, rpid, args.get("root_rpid"))
+                                 if verified else ("unknown", None))
         return {"verified": verified, "rpid": rpid, "identity": identity,
                 "visibility": visibility, "risk_code": risk_code}
 

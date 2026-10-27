@@ -179,6 +179,10 @@ class Store:
     def finish_proposal(self, pid, result):
         if result.get("verified") is True:
             status = "verified"
+        elif result.get("accepted") is True and str(result.get("dmid", "")).isdigit() and self.db.execute(
+                "SELECT 1 FROM proposals WHERE id=? AND action='danmaku'", (pid,)).fetchone():
+            # An acknowledged submission is terminal, but not readback evidence.
+            status = "accepted"
         elif result.get("executed") is False and result.get("reason") in {
             "switch_disabled", "interaction_blocked",
         }:
