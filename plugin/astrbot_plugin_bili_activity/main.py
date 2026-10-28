@@ -1614,7 +1614,7 @@ class BiliActivity(Star):
                     details.append(f"{label}：{args[field]}")
             if "message" in args:
                 details.append("完整评论：\n" + args["message"])
-            text = f"{reason[:300]}\n我想{labels[action]}。\n" + "\n".join(details) + "\n可以的话回‘可以’，不想就回‘算了’。"
+            text = f"{reason[:300]}\n我想{labels[action]}。\n" + "\n".join(details) + "\n可以的话回‘可以’或‘批准’，不想就回‘算了’。"
             try:
                 self.reserve_share(event, "proposal", "proposal:" + proposal["id"])
             except (BudgetExceeded, PermissionError):

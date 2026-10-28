@@ -44,9 +44,11 @@ def quiet_now(ranges, now=None):
 
 def decision(text):
     value = text.strip().rstrip("。！!~～ ")
-    if value in {"可以", "同意", "好", "好的", "执行", "可以呀", "行"}:
+    if value in {"可以", "同意", "好", "好的", "执行", "可以呀", "行",
+                 "批", "批准", "批准点赞", "批准执行", "确认", "确认执行", "同意执行"}:
         return "approve"
-    if value in {"算了", "取消", "不同意", "不要", "别发", "不行"}:
+    if value in {"算了", "取消", "不同意", "不要", "别发", "不行",
+                 "拒绝", "停", "先不要", "别点", "不批准"}:
         return "reject"
     return None
 
