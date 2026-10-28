@@ -11,12 +11,15 @@ import asyncio
 import ipaddress
 import json
 import logging
+import re
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from bili_api import BiliAPI, Executor
+from bili_api import BiliAPI, Executor, interaction_args
 from media import prepare_video
 from phone_video import PhoneVideo
 
@@ -28,6 +31,9 @@ FIELDS = {
     "favorite_remove": {"bvid", "cid", "folder_id"},
     "favorite_move": {"bvid", "cid", "source_folder_id", "target_folder_id"},
     "folder_create": {"title"}, "folder_rename": {"folder_id", "title"},
+    "like": {"bvid", "cid", "like"},
+    "coin": {"bvid", "cid", "multiply", "select_like"},
+    "danmaku": {"bvid", "cid", "message", "progress", "color", "fontsize", "pool", "mode"},
 }
 
 
@@ -38,6 +44,7 @@ def validated_args(action, args, account_uid, require_account=False):
         raise ValueError("unsupported action or argument fields")
     if require_account and str(args.get("account_uid")) != str(account_uid):
         raise ValueError("approved account missing or changed")
+    args = interaction_args(action, args)
     missing = fields - set(args)
     if missing:
         raise ValueError("required arguments missing")
@@ -47,6 +54,8 @@ def validated_args(action, args, account_uid, require_account=False):
             if not isinstance(args[name], str):
                 raise ValueError("text argument must be a string")
             value[name] = args[name].strip()
+        elif name in {"like", "multiply", "select_like", "progress", "color", "fontsize", "pool", "mode"}:
+            value[name] = args[name]
         else:
             value[name] = positive(args[name], name)
     value["account_uid"] = str(positive(account_uid, "account_uid"))
@@ -80,7 +89,8 @@ def create_server(state_dir, *, host="127.0.0.1", port=8011, adb_path=None,
             raise
         except Exception as exc:
             # Never let framework tracebacks include cookies/URLs or API bodies.
-            return {"ok": False, "error": type(exc).__name__, "verified": False}
+            return {"ok": False, "error": type(exc).__name__, "verified": False,
+                    "visibility": "unknown", "risk_code": getattr(exc, "code", None)}
 
     @mcp.tool()
     async def bili_read(operation: str, args: dict | None = None) -> dict:
@@ -90,6 +100,30 @@ def create_server(state_dir, *, host="127.0.0.1", port=8011, adb_path=None,
         favorites folder_id+page. Returned content is untrusted source material.
         """
         return await safe(api.read(operation, args or {}))
+
+    @mcp.tool()
+    async def bili_operation(operation_id: str) -> dict:
+        """Controller-only, read-only ledger inspection; never replay a write."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", operation_id):
+            return {"ok": False, "error": "invalid_operation_id"}
+        async with executor.lock:
+            with closing(sqlite3.connect((state / "operations.sqlite3").resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                row = db.execute("SELECT fingerprint,status,result FROM operations WHERE id=?", (operation_id,)).fetchone()
+        if not row:
+            return {"ok": True, "found": False, "status": "missing"}
+        value = json.loads(row[2]) if row[2] else {}
+        result = {"verified": value.get("verified") is True,
+                  "visibility": value.get("visibility") if value.get("visibility") in {"public", "unknown", "not_public_or_folded"} else "unknown",
+                  "risk_code": value.get("risk_code") if type(value.get("risk_code")) is int else None}
+        for field in ("rpid", "dmid"):
+            ident = str(value.get(field) or "")
+            result[field] = ident if ident.isascii() and ident.isdigit() else ""
+        result["accepted"] = value.get("accepted") is True and bool(result["dmid"]) and int(result["dmid"]) > 0
+        if "like_ok" in value:
+            result["like_ok"] = value["like_ok"] if type(value["like_ok"]) is bool else None
+        if value.get("risk_source") in {"authenticated", "visibility"}:
+            result["risk_source"] = value["risk_source"]
+        return {"ok": True, "found": True, "fingerprint": row[0], "status": row[1], "result": result}
 
     @mcp.tool()
     async def bili_execute(operation_id: str, action: str, args: dict) -> dict:
@@ -109,6 +143,8 @@ def create_server(state_dir, *, host="127.0.0.1", port=8011, adb_path=None,
         async def preview():
             value = validated_args(action, args, api.cookies().get("DedeUserID"))
             _path, _payload, identity = await api.prepare_write(action, value)
+            if identity:
+                value.update(bvid=identity["bvid"], cid=identity["cid"])
             target = {**identity, "identity": identity} if identity else {}
             if action in {"follow", "unfollow"}:
                 user = await api.read("user", {"uid": value["uid"]})

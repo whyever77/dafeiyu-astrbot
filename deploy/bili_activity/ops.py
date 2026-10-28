@@ -15,6 +15,17 @@ from urllib.parse import urlsplit
 
 
 DEFAULTS = {
+    "engagement_actions": False, "interaction_mode": "approval", "auto_public": False,
+    "allowed_uids": [], "allowed_keywords": [],
+    "max_actions_per_run": 3, "max_actions_per_day": 20,
+    "max_comments_per_day": 3, "max_replies_per_day": 5, "max_danmaku_per_day": 1,
+    "max_likes_per_day": 10, "max_coins_per_day": 1,
+    "action_interval_ms": [1500, 4000], "risk_cooldown_minutes": 60,
+    "reply_watch_enabled": False, "reply_poll_minutes": 3,
+    "reply_max_threads_per_tick": 15, "reply_min_len": 8, "reply_lookback_hours": 24,
+    "reply_max_per_thread_per_day": 2,
+    "comment_learning_enabled": False, "learn_min_score": 7, "learn_recent_notes": 5,
+    "learn_prompt": "挑选有信息量、补充视频内容的评论；跳过纯情绪、复读和广告。",
     "enabled": False,
     "periodic_enabled": False,
     "public_interactions": False,
@@ -46,6 +57,13 @@ DEFAULTS = {
 }
 DEFAULT_DATA_DIR = "/opt/dafeiyu/astrbot/data/plugin_data/astrbot_plugin_bili_activity"
 NUMERIC_LIMITS = {
+    "max_actions_per_run": (0, 10000), "max_actions_per_day": (0, 10000),
+    "max_comments_per_day": (0, 10000), "max_replies_per_day": (0, 10000),
+    "max_danmaku_per_day": (0, 10000), "max_likes_per_day": (0, 10000),
+    "max_coins_per_day": (0, 10000), "risk_cooldown_minutes": (1, 10000),
+    "reply_poll_minutes": (1, 1440), "reply_max_threads_per_tick": (1, 15),
+    "reply_min_len": (1, 1000), "reply_lookback_hours": (1, 720),
+    "reply_max_per_thread_per_day": (0, 100), "learn_min_score": (0, 10), "learn_recent_notes": (1, 20),
     "check_minutes": (1, 1440), "check_jitter_minutes": (0, 1440),
     "max_videos": (1, 10), "max_minutes": (1, 30),
     "daily_minutes": (1, 240), "max_model_calls_per_run": (1, 64),
@@ -288,6 +306,11 @@ def main(argv=None):
     for name in ("init", "start", "stop", "status", "enable-periodic", "disable-periodic"):
         sub.add_parser(name)
     cfg = sub.add_parser("configure")
+    cfg.add_argument("--interaction-mode", choices=["approval", "auto_low_risk", "auto_public"])
+    cfg.add_argument("--action-interval-ms", type=int, nargs=2)
+    cfg.add_argument("--allowed-uids")
+    cfg.add_argument("--allowed-keywords")
+    cfg.add_argument("--learn-prompt")
     cfg.add_argument("--owner-scope")
     cfg.add_argument("--owner-id")
     cfg.add_argument("--dnd-ranges", help='JSON, e.g. [["23:00","08:00"]]; copy the actual current settings')
@@ -299,7 +322,7 @@ def main(argv=None):
     once = sub.add_parser("once")
     once.add_argument("--delay-seconds", type=int, default=180)
     switches = sub.add_parser("switch")
-    switches.add_argument("name", choices=["public_interactions", "collection_management", "screenshot_enabled", "life_enabled", "workshop_enabled", "methods_enabled"])
+    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled", "auto_public"])
     switches.add_argument("value", choices=["on", "off"])
     accepted = sub.add_parser("accept-one-shot")
     accepted.add_argument("--evidence", type=Path, required=True,
@@ -384,6 +407,25 @@ def main(argv=None):
             print("配置已存在，保持原样。")
             return 0
         if args.command == "configure":
+            for field in ("interaction_mode", "learn_prompt", "action_interval_ms", "allowed_uids", "allowed_keywords"):
+                value = getattr(args, field)
+                if value is None:
+                    continue
+                if field == "learn_prompt" and len(value) > 1000:
+                    raise ValueError("learn_prompt 最多 1000 字")
+                if field == "action_interval_ms" and not 0 <= value[0] <= value[1] <= 60000:
+                    raise ValueError("action_interval_ms 必须为 0..60000 的递增范围")
+                if field in {"allowed_uids", "allowed_keywords"}:
+                    value = json.loads(value)
+                    if not isinstance(value, list) or len(value) > 100:
+                        raise ValueError(f"invalid {field}")
+                    if field == "allowed_uids" and any(type(v) not in (str, int) or not str(v).isascii() or not str(v).isdigit() or int(v) <= 0 for v in value):
+                        raise ValueError("allowed_uids 必须为 UID 数组")
+                    if field == "allowed_keywords" and any(not isinstance(v, str) or not v.strip() or len(v) > 100 for v in value):
+                        raise ValueError("allowed_keywords 必须为关键词数组")
+                control[field] = value
+                if field == "interaction_mode":
+                    control["auto_public"] = value == "auto_public"
             for field in ("owner_scope", "owner_id", "phone_url", "bili_url", "device_id", *NUMERIC_LIMITS):
                 value = getattr(args, field)
                 if value is not None:

@@ -16,9 +16,10 @@ from .life import LifeState, prepare_database
 
 WRITES = {
     "comment", "reply", "follow", "unfollow", "favorite_add", "favorite_remove",
-    "folder_create", "folder_rename", "favorite_move",
+    "folder_create", "folder_rename", "favorite_move", "like", "coin", "danmaku",
 }
-PUBLIC = {"comment", "reply"}
+PUBLIC = {"comment", "reply", "danmaku"}
+ENGAGEMENT = {"like", "coin"}
 
 
 def canonical(value):
@@ -43,9 +44,11 @@ def quiet_now(ranges, now=None):
 
 def decision(text):
     value = text.strip().rstrip("。！!~～ ")
-    if value in {"可以", "同意", "好", "好的", "执行", "可以呀", "行"}:
+    if value in {"可以", "同意", "好", "好的", "执行", "可以呀", "行",
+                 "批", "批准", "批准点赞", "批准执行", "确认", "确认执行", "同意执行"}:
         return "approve"
-    if value in {"算了", "取消", "不同意", "不要", "别发", "不行"}:
+    if value in {"算了", "取消", "不同意", "不要", "别发", "不行",
+                 "拒绝", "停", "先不要", "别点", "不批准"}:
         return "reject"
     return None
 
@@ -178,13 +181,41 @@ class Store:
     def finish_proposal(self, pid, result):
         if result.get("verified") is True:
             status = "verified"
-        elif result.get("executed") is False and result.get("reason") == "switch_disabled":
+        elif result.get("accepted") is True and str(result.get("dmid", "")).isdigit() and self.db.execute(
+                "SELECT 1 FROM proposals WHERE id=? AND action='danmaku'", (pid,)).fetchone():
+            # An acknowledged submission is terminal, but not readback evidence.
+            status = "accepted"
+        elif result.get("executed") is False and result.get("reason") in {
+            "switch_disabled", "interaction_blocked",
+        }:
             # Only the trusted local pre-execution check proves no write happened.
             status = "blocked"
         else:
             status = "uncertain"
         self.db.execute("UPDATE proposals SET status=?,result=? WHERE id=? AND status='executing'",
                         (status, canonical(result), pid))
+
+    def resolve_uncertain(self, scope, actor, pid, decision, review, event_id):
+        """Owner adjudication releases the slot, never edits execution evidence."""
+        if decision not in {"abandoned", "verified"} or not event_id:
+            raise ValueError("invalid resolution")
+        with self.transaction():
+            row = self.db.execute("SELECT * FROM proposals WHERE id=? AND scope=? AND actor=?",
+                                  (pid, scope, actor)).fetchone()
+            if not row or row["status"] != "uncertain":
+                raise ValueError("proposal is no longer uncertain")
+            key = "interaction_review:" + pid
+            pending = self.get_setting(key)
+            if (not pending or pending["expires"] < time.time() or pending["review"] != review
+                    or pending["event_id"] == event_id):
+                raise ValueError("review expired or changed; inspect the ledgers again")
+            # resolved_* is outside one_pending. Keep the original result and
+            # interaction dedupe/counts: abandoning is not proof of non-delivery.
+            self.db.execute("UPDATE proposals SET status=? WHERE id=?", ("resolved_" + decision, pid))
+            self.db.execute("DELETE FROM settings WHERE key=?", (key,))
+            self.event(scope, "uncertain_resolved", {"proposal_id": pid, "actor": actor,
+                "decision": decision, "source": "owner_confirmation", "event_id": event_id,
+                "review": review, "original_verified": False, "resubmitted": False})
 
     def delivery(self, scope, key, kind, fingerprint, meta, suppress_repeat=False):
         """Reserve before network I/O. An unknown send outcome is not retried."""

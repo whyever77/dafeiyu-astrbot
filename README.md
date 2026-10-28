@@ -6,7 +6,9 @@
 大肥鱼是 DeepSeek 蓝鲸 logo 的**社区二创形象**（非官方），本项目把「让她住进 QQ 里」
 的全套实践开源出来：一个高完成度的 AstrBot 插件、一套完整人格、以及踩过所有坑的实录。
 
-本分支新增[自主生活 v0.4：研究方法复用](deploy/bili_activity/LIFE_V04.md)：在[来源笔记与自主续写](deploy/bili_activity/LIFE_V03.md)之上，将已完成作品中的研究步骤保存为方法，在其他目标中复用并核对新产物。保留 v0.3.0 于 2026-10-25 上线的修复、真实 smoke 和 215 项测试基线；v0.4 methods 本次仅在本地合并验证，新开关默认关闭。详细结果见[验证记录](deploy/bili_activity/VALIDATION.md)。
+本分支新增[B站评论区互动 v0.5](deploy/bili_activity/INTERACT_V05.md)：在现有提议、主人批准、操作账本和回读链上扩展点赞/取消赞、投币、弹幕、互动配额与风控、回复监听和评论区观察。默认仍逐条审批，新增开关默认关闭；`verified` 与公开可见性分别报告。保留[研究方法复用](deploy/bili_activity/LIFE_V04.md)、[来源笔记与自主续写](deploy/bili_activity/LIFE_V03.md)及既有真实 smoke。v0.5 只完成本地代码和离线测试，未部署、未操作真实账号；开启、低配额建议、回滚和主人小号 smoke 见[互动文档](deploy/bili_activity/INTERACT_V05.md)。
+
+审查修复已按社区维护的 B站 Web API 文档校正点赞/弹幕参数、buvid3 和 WBI 请求；真实端点可用性仍待小号 smoke。新增主人 `/bili互动 清理不确定`，先查看账本再明确确认，释放未决提议但不重发原操作。弹幕 `accepted`（接口受理）、`verified`（回读核实）、`visibility`（公开可见性）分别报告。
 
 ## ✨ 能力清单
 

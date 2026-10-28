@@ -242,6 +242,12 @@ class StoreTests(unittest.TestCase):
         for value in ("可以吗", "你觉得可以吗", "如果可以", "引用：可以", "不可以", ""):
             self.assertIsNone(core.decision(value))
 
+    def test_expanded_consent_words(self):
+        for value in ("批", "批准", "批准点赞", "批准执行", "确认", "确认执行", "同意执行"):
+            self.assertEqual(core.decision(value), "approve")
+        for value in ("拒绝", "不批准", "先不要", "别点"):
+            self.assertEqual(core.decision(value), "reject")
+
 
 class FakeEvent:
     def __init__(self, scope=SCOPE, user="12345", event_id="qq1", run_id=None, text=""):
