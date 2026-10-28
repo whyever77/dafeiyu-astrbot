@@ -18,6 +18,24 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = integration.ActionTests.asyncSetUp
     asyncTearDown = integration.ActionTests.asyncTearDown
 
+    def test_human_result_hides_internal_fields(self):
+        cases = (
+            ("like", {"verified": True, "visibility": "not_applicable"}, "赞点上了"),
+            ("coin", {"verified": True, "visibility": "not_applicable", "like_ok": False}, "附带点赞没点上"),
+            ("comment", {"verified": True, "visibility": "unknown"}, "公开列表暂时没确认"),
+            ("reply", {"verified": True, "visibility": "public"}, "公开列表里也能看到"),
+            ("danmaku", {"verified": False, "accepted": True, "visibility": "unknown"}, "接口受理"),
+            ("like", {"verified": False, "risk_code": -352}, "风控"),
+            ("like", {"verified": False, "risk_code": -101}, "登录失效"),
+            ("like", {"executed": False, "reason": "switch_disabled"}, "开关"),
+        )
+        for action, value, expected in cases:
+            with self.subTest(action=action, value=value):
+                text = main.human_result(action, value)
+                self.assertIn(expected, text)
+                for raw in ("accepted", "verified", "visibility", "risk_code", "like_ok"):
+                    self.assertNotIn(raw, text)
+
     def test_malformed_optional_metadata_is_filtered(self):
         value = main.safe_result({"verified": True, "risk_code": -101, "risk_source": [], "like_ok": {"private": "body"}})
         self.assertIsNone(value["risk_code"])
@@ -275,7 +293,7 @@ class ControllerContractTests(unittest.IsolatedAsyncioTestCase):
         self.api.dm_accepted, self.api.dm_visible = True, False
         value = await self.propose("danmaku", VIDEO | {"message": "补充", "progress": 0})
         event = await self.approve()
-        self.assertIn("尚未回读", event.send.await_args.args[0])
+        self.assertIn("接口受理", event.send.await_args.args[0])
         row = self.plugin.store.db.execute("SELECT status FROM proposals WHERE id=?", (value["proposal_id"],)).fetchone()
         self.assertEqual(row[0], "accepted")
         status = json.loads(await self.plugin.interaction_status(fixtures.FakeEvent()))
@@ -293,7 +311,7 @@ class ControllerContractTests(unittest.IsolatedAsyncioTestCase):
         self.api.fail_verify = True
         await self.propose("coin", VIDEO | {"multiply": 1, "select_like": 1})
         event = await self.approve()
-        self.assertIn("like_ok=null", event.send.await_args.args[0])
+        self.assertIn("附带点赞没核实", event.send.await_args.args[0])
         value = json.loads(await self.plugin.interaction_status(fixtures.FakeEvent()))
         self.assertTrue(value["recent"][0]["verified"])
         self.assertIsNone(value["recent"][0]["like_ok"])

@@ -389,11 +389,19 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_second_comment_refused_with_clear_reason(self):
         await self.propose()
         answer = await self.approve()
-        self.assertIn("visibility=", answer.send.await_args.args[0])
+        self.assertIn("发出去了", answer.send.await_args.args[0])
         result = await self.propose(args=VIDEO | {"message": "不同正文也不重复"}, event=fixtures.FakeEvent(event_id="new"))
         self.assertFalse(result["proposal_created"])
         self.assertIn("重复", result["reason"])
         self.assertEqual(len(self.api.posts), 1)
+
+    async def test_verified_like_answer_is_human(self):
+        await self.propose("like", VIDEO | {"like": 1})
+        answer = await self.approve()
+        text = answer.send.await_args.args[0]
+        self.assertIn("赞点上了", text)
+        for raw in ("accepted", "visibility", "verified=", "like_ok"):
+            self.assertNotIn(raw, text)
 
     async def test_second_reply_same_target_refused(self):
         args = VIDEO | {"message": "回复内容", "root_rpid": 900, "parent_rpid": 900}

@@ -23,7 +23,7 @@ DEFAULTS = {
 ACTION_LIMITS = {"comment": "max_comments_per_day", "reply": "max_replies_per_day",
                  "danmaku": "max_danmaku_per_day", "like": "max_likes_per_day", "coin": "max_coins_per_day"}
 RISK_CODES = {12014, -412, -352}
-VISIBILITY = {"public", "not_public_or_folded", "unknown"}
+VISIBILITY = {"public", "not_public_or_folded", "unknown", "not_applicable"}
 
 
 def validate_config(cfg):
@@ -120,6 +120,53 @@ def safe_result(value):
         result.update(executed=False, reason=value["reason"], result="blocked")
     # reason/error strings from a transport are deliberately discarded.
     return result
+
+
+def human_result(action, value):
+    """Owner-facing summary; never exposes ledger field names."""
+    value = value if isinstance(value, dict) else {}
+    risk = value.get("risk_code")
+    if value.get("risk_applied") or risk in RISK_CODES | {-101}:
+        if risk == -101:
+            return "B站登录失效，需要重新扫码；这次动作先停下。"
+        return "B站风控了，先冷却一会儿，别连续重试。"
+    if value.get("reason") == "switch_disabled":
+        return "对应开关关着，这次没有执行。"
+    if value.get("reason") == "interaction_blocked":
+        return "这次被本地规则拦下了，没有执行。"
+    verified = value.get("verified") is True
+    visibility = value.get("visibility")
+    accepted = value.get("accepted") is True
+    if action == "like":
+        return "赞点上了，我回读确认过。" if verified else "这次没核对上，先别算成功。"
+    if action == "coin":
+        if not verified:
+            return "币数没核对上，先别算成功。"
+        like_ok = value.get("like_ok")
+        if like_ok is True:
+            return "币投出去了，附带点赞也成功了。"
+        if like_ok is False:
+            return "币投出去了，附带点赞没点上。"
+        if like_ok is None:
+            return "币投出去了，附带点赞没核实。"
+        return "币投出去了，币数回读对得上。"
+    if action in {"comment", "reply"}:
+        if not verified:
+            return "这次没核对上，先别算成功。"
+        if visibility == "public":
+            return "发出去了，公开列表里也能看到。"
+        return "发出去了，回读对得上；公开列表暂时没确认。"
+    if action == "danmaku":
+        if verified:
+            return "弹幕在公开池里看到了。"
+        if accepted:
+            return "弹幕接口受理了，公开池里还没出现，先不算公开成功。"
+        return "弹幕没受理/没核对上，先别算成功。"
+    if action in {"follow", "unfollow"}:
+        return "关注状态回读对得上。" if verified else "关注状态没核对上，先别算成功。"
+    if action.startswith("favorite") or action.startswith("folder"):
+        return "收藏操作回读对得上。" if verified else "收藏操作没核对上，先别算成功。"
+    return "办好了，回读核对上了。" if verified else "这次没核对上，先别算成功。"
 
 
 class InteractionBlocked(RuntimeError):
@@ -259,6 +306,13 @@ class Interactions:
     def finish(self, scope, run_id, pid, action, args, value, cfg, now=None):
         now = time.time() if now is None else now
         value = safe_result(value)
+        # `accepted` is a danmaku receipt; visibility does not apply to
+        # engagement/collection actions. Keep the ledger honest and keep the
+        # owner-facing model from treating those fields as a failed result.
+        if action != "danmaku":
+            value.pop("accepted", None)
+        if action not in PUBLIC:
+            value["visibility"] = "not_applicable"
         with self.store.transaction():
             self.db.execute("UPDATE interactions SET result=?,verified=?,visibility=?,risk_code=?,rpid=? WHERE proposal_id=? AND scope=?",
                 (value["result"], value["verified"], value["visibility"], value["risk_code"], value["rpid"], pid, scope))
@@ -280,9 +334,17 @@ class Interactions:
         for row in self.db.execute("SELECT i.proposal_id,i.action,i.bvid,i.cid,i.rpid,i.result,i.verified,i.visibility,i.risk_code,i.created,p.result AS evidence FROM interactions i LEFT JOIN proposals p ON p.id=i.proposal_id WHERE i.scope=? ORDER BY i.created DESC,i.rowid DESC LIMIT 5", (scope,)):
             entry = dict(row)
             evidence = safe_result(json.loads(entry.pop("evidence") or "{}"))
-            entry.update({key: evidence[key] for key in ("dmid", "accepted", "like_ok") if key in evidence})
+            # `accepted` is danmaku-only; never surface it for likes/coins.
+            if entry["action"] == "danmaku":
+                entry.update({key: evidence[key] for key in ("dmid", "accepted") if key in evidence})
+            if entry["action"] == "coin" and "like_ok" in evidence:
+                entry["like_ok"] = evidence["like_ok"]
+            entry["summary"] = human_result(entry["action"], {
+                **evidence, "verified": bool(entry["verified"]),
+                "visibility": entry["visibility"], "risk_code": entry["risk_code"]})
             recent.append(entry)
         return {"day": day, "mode": cfg["interaction_mode"], "counting": "attempts_including_unknown",
+            "report_note": "对主人只说 summary；不要念 accepted/verified/visibility/risk_code。",
             "today": {action: {"count": counts.get(action, 0), "limit": cfg.get(ACTION_LIMITS.get(action), cfg["max_actions_per_day"])} for action in sorted(WRITES)},
             "total": {"count": sum(counts.values()), "limit": cfg["max_actions_per_day"]},
             "max_actions_per_run": cfg["max_actions_per_run"],

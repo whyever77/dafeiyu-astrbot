@@ -30,7 +30,8 @@ from .budget import Budget, BudgetExceeded
 from .agent_budget import instrument_runner
 from .interactions import (DEFAULTS as INTERACTION_DEFAULTS, Interactions,
                            InteractionBlocked, enabled as interaction_enabled,
-                           validate_config as validate_interactions, safe_result, auto_allowed)
+                           validate_config as validate_interactions, safe_result,
+                           human_result, auto_allowed)
 from .replies import (DEFAULTS as REPLY_DEFAULTS, ReplyWatch,
                       validate_config as validate_replies)
 
@@ -1289,7 +1290,7 @@ class BiliActivity(Star):
             if tool.name.startswith("bilibili_") and any(x in tool.name for x in ("reply", "follow", "favorite", "like", "coin", "delete", "send_")):
                 if not tool.name.endswith(("followings", "followers", "favorites")):
                     req.func_tool.remove_tool(tool.name)
-        req.system_prompt = (req.system_prompt or "") + "\nB站账号写入必须通过df_bili_propose提交精确参数，默认等待主人答复；仅控制器按主人显式配置判定自动执行，模型不能批准。不要通过手机点击绕过。截图分享使用df_screen及df_share_screen，不要将截图成功等同于QQ发送成功。"
+        req.system_prompt = (req.system_prompt or "") + "\nB站账号写入必须通过df_bili_propose提交精确参数，默认等待主人答复；仅控制器按主人显式配置判定自动执行，模型不能批准。不要通过手机点击绕过。截图分享使用df_screen及df_share_screen，不要将截图成功等同于QQ发送成功。对主人汇报B站动作时用大白话：只说成了/没成、确认了什么、没确认什么；不要念 accepted/verified/visibility/risk_code 这些内部字段，也不要用弹幕字段解释点赞。"
         if event.unified_msg_origin == cfg["owner_scope"]:
             if cfg["comment_learning_enabled"]:
                 req.system_prompt += self.reply_watch().context(event.unified_msg_origin, cfg)
@@ -1382,19 +1383,9 @@ class BiliActivity(Star):
                                       "paused" if result.get("verified") else "blocked")
             self.store.event(event.unified_msg_origin, "execution_result", {"proposal_id": proposal["id"], "result": result})
             self.store.queue_memory(event.unified_msg_origin, "[主人明确同意本次操作，不代表一般喜好] " + canonical({"action": proposal["action"], "args": proposal["args"], "result": result}), "proposal:" + proposal["id"])
-            answer = ("办好了，重新读回也核对上了。" if result.get("verified") else
-                      "接口已受理弹幕，尚未回读确认；不会重发，也不代表已公开。" if result.get("accepted") else
-                      "对应操作开关已关闭，这次没有执行。" if result.get("reason") == "switch_disabled" else
-                      "这次没能核实完成，已保留记录，先不重试，免得重复操作。")
-            if result.get("reason") == "interaction_blocked":
+            answer = human_result(proposal["action"], result)
+            if result.get("reason") == "interaction_blocked" and result.get("message"):
                 answer = result["message"]
-            if result.get("risk_applied") and result.get("risk_code") == -101:
-                answer += " B站登录失效，请主人重新扫码，再查询互动状态确认。"
-            elif result.get("risk_applied") and result.get("risk_code") in {12014, -412, -352}:
-                answer += " 检测到B站风控，本轮已停止并进入冷却。"
-            answer += f"\nverified={str(result['verified']).lower()}；visibility={result['visibility']}（公开可见性独立于接口回读）。"
-            if "like_ok" in result:
-                answer += "\n附带点赞 like_ok=" + canonical(result["like_ok"]) + "（null 表示未核实）。"
             await event.send(event.plain_result(answer))
             await self.flush_memory(event)
 
