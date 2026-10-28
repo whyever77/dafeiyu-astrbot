@@ -166,7 +166,7 @@ class BiliAPI:
                     # Validate all supplied fields before writing either cookie.
                     # Padding is valid only at the end; delimiters stay forbidden.
                     if (not isinstance(value, str) or len(value) > 256
-                            or not re.fullmatch(r"[A-Za-z0-9_%.\-]+={0,2}", value)):
+                            or not re.fullmatch(r"[A-Za-z0-9_%.\-+/|]+={0,2}", value)):
                         raise ValueError("invalid browser fingerprint")
                     values[cookie] = value
                 if not values.get("buvid3"):

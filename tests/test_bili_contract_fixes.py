@@ -74,7 +74,9 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_spi_preserves_padded_and_encoded_fingerprints_in_both_formats(self):
         metadata = {"refresh_token": "keep", "updated_at": 42, "custom": [1]}
         for wrapped in (False, True):
-            for buvid4 in ("fixture_-.buvid4==", "fixture_-.buvid4%3D%3D", "x" * 254 + "==", "x" * 256):
+            for buvid4 in ("fixture_-.buvid4==", "fixture_-.buvid4%3D%3D",
+                           "fixture_-.buvid4+bBvg==", "fixture_-.buvid4/bBvg==",
+                           "x" * 254 + "==", "x" * 256):
                 with self.subTest(wrapped=wrapped, buvid4=buvid4):
                     cookies = dict(integration.COOKIES)
                     document = ({"cookies": cookies} if wrapped else cookies) | metadata
