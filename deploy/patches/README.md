@@ -1,10 +1,14 @@
 # 核心补丁（随仓库提供）
 
-这两个文件是 **AstrBot v4.29.0** 核心源码的修改版（对应 `docs/踩坑合集.md` #15 的两个 TTS 补丁），
-以修改版文件的形式在 compose 里 bind-mount 进容器，升级镜像不丢补丁。
+这些文件是 **AstrBot v4.29.0** 核心源码的修改版（TTS 补丁见
+`docs/踩坑合集.md` #15），以修改版文件的形式在 compose 里 bind-mount 进容器，
+升级镜像不丢补丁。
 
-- `dashscope_tts.py`：补丁 1（qwen-audio → WebSocket 通道）+ 补丁 2（instruction / speech_rate / pitch_rate 接线）
-- `stage.py`：补丁 3（TTS 朗读前过滤 `[表情名]` 标记与纯标点）
+- `dashscope_tts.py`：qwen-audio → WebSocket 通道；按模型能力接
+  instruction/speech_rate/pitch_rate；超时、音频头校验与文字降级
+- `stage.py`：整条回复只合成一次语音；显示气泡照常分；TTS 合成前清理表情标记
+- `respond_stage.py`：按语义气泡发送（表情并回句子），首条不等待；被新消息打断时停止剩余气泡
+- `chat_layout.py`：上面的分泡 / 朗读文本 / 音频校验纯函数（两个 stage 共用）
 
 ⚠️ **升级 AstrBot 版本时**，请在新版对应文件上**重新打补丁**，不要直接沿用本目录文件
 （版本不匹配可能引入行为差异）。仓库钉的已验证组合见 `../Dockerfile` 与 `../compose.yaml`。

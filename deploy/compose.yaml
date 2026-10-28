@@ -17,6 +17,8 @@ services:
       # 核心补丁用 bind-mount 接入：升级镜像不会覆盖（见 docs/踩坑合集）
       - /opt/dafeiyu/patches/dashscope_tts.py:/AstrBot/astrbot/core/provider/sources/dashscope_tts.py:ro
       - /opt/dafeiyu/patches/stage.py:/AstrBot/astrbot/core/pipeline/result_decorate/stage.py:ro
+      - /opt/dafeiyu/patches/respond_stage.py:/AstrBot/astrbot/core/pipeline/respond/stage.py:ro
+      - /opt/dafeiyu/patches/chat_layout.py:/AstrBot/astrbot/core/pipeline/chat_layout.py:ro
     environment:
       - TZ=Asia/Shanghai
 

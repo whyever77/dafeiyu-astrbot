@@ -10,8 +10,8 @@ QQ 用户 ⇄ 腾讯服务器 ⇄ NapCat(Docker) ⇄ WebSocket(6199) ⇄ AstrBot
 ```
 
 - 两个容器在同一个 compose 网络里，NapCat 通过 `ws://astrbot:6199/ws` 反向连接 AstrBot
-- 两个核心补丁（TTS WebSocket、TTS 表情过滤）用 **bind-mount** 接入容器，
-  升级镜像不丢补丁
+- 四个核心补丁（TTS WebSocket、整段语音/分泡、气泡发送节奏、布局工具）用
+  **bind-mount** 接入容器，升级镜像不丢补丁
 - 嵌入 provider 从本地 Ollama 切到**硅基流动 bge-m3**（同模型，向量余弦 0.9999+，零重嵌）
 
 ## 目录约定
@@ -20,7 +20,7 @@ QQ 用户 ⇄ 腾讯服务器 ⇄ NapCat(Docker) ⇄ WebSocket(6199) ⇄ AstrBot
 /opt/dafeiyu/
 ├── compose.yaml        # 编排（基于本目录的 compose）
 ├── Dockerfile          # 官方镜像 + edge-tts / imageio-ffmpeg
-├── patches/            # 两个核心补丁（从旧机 core 提取）
+├── patches/            # 四个核心补丁（从旧机 core 提取 + 分泡/整段语音）
 ├── astrbot/data/       # 旧机 core/data（排除 temp / logs / *.bak_*）
 ├── napcat/config|qq/   # NapCat 配置与登录态
 ├── backups/            # 每日滚动备份

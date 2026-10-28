@@ -36,6 +36,11 @@ _PUNCT_CLAUSE_STARTERS = (
 _PUNCT_DUNHAO_CLAUSE_RE = re.compile(rf"、(?=(?:{_PUNCT_CLAUSE_STARTERS}))")
 DEFAULT_CONFIG = {
     "hedge_eraser": True,
+    # 听写/看图凭证与模型独立于 TTS provider：换音源、改 provider id 时
+    # 不会连带把 ASR / 视频理解弄哑。留空则回退到旧版 dashscope_tts 凭证。
+    "asr_api_key": "",
+    "asr_model": "qwen3-asr-flash",
+    "vl_model": "qwen3-vl-plus",
     "face_cooldown_minutes": 10,
     "max_media_mb": 80,
     "video_timeout_s": 300,
@@ -151,9 +156,19 @@ async def run_bounded(
     "astrbot_plugin_face_convert",
     "dafeiyu-tools",
     "把 LLM 回复中的 [流泪][doge] 等文字表情自动转换为真实 QQ 表情段",
-    "1.2.0",
+    "1.3.0",
 )
 class FaceConvertPlugin(Star):
+    # 静默暗号只在“整条回复就是它”时生效；正常解释这个标记时不能吞整条。
+    NO_REPLY_RE = re.compile(
+        r"(?:\s*[\[【]\s*NO[_ -]?REPLY\s*[\]】]\s*)+", re.IGNORECASE
+    )
+    # 私聊里明确喊停时，取消上一轮还没发完的气泡/语音。
+    INTERRUPT_RE = re.compile(
+        r"^(?:等等|等一下|先别(?:说|发|回)?|停(?:一下)?|打住|别说了|不是这个意思)"
+        r"[\s！!。.…？?~～]*$"
+    )
+
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context)
         map_path = os.path.join(PLUGIN_DIR, "face_map.json")
@@ -194,30 +209,54 @@ class FaceConvertPlugin(Star):
         # 表情冷却：按会话记录她最近用过的脸 [(脸id, 时间戳)]（治"又发好多狗头"；
         # 早期版本是全局共享列表，会跨群串扰，已改为按会话隔离 + 时间过期）
         self._face_history: dict[str, list[tuple[int, float]]] = {}
-        # DashScope key（用于语音转写）+ 管理员名单（群聊里标成「主人」）
-        self.dashscope_key = ""
+        # 听写/看图凭证与管理员名单。凭证按「独立配置 -> 环境变量 ->
+        # 旧版 dashscope_tts provider」顺序解析，不再绑定 TTS 的 id。
+        self.asr_key = ""
+        self.asr_model = str(self.cfg.get("asr_model") or "qwen3-asr-flash")
+        self.vl_model = str(self.cfg.get("vl_model") or "qwen3-vl-plus")
         self.admins: list[str] = []
+        key_source = "未配置"
         try:
+            self.asr_key = str(self.cfg.get("asr_api_key") or "").strip()
+            if self.asr_key:
+                key_source = "config.json:asr_api_key"
+            if not self.asr_key:
+                self.asr_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+                if self.asr_key:
+                    key_source = "环境变量 DASHSCOPE_API_KEY"
+
             cfg_path = os.path.abspath(
                 os.path.join(PLUGIN_DIR, "..", "..", "cmd_config.json")
             )
             with open(cfg_path, encoding="utf-8-sig") as f:
                 cfg = json.load(f)
-            for prov in cfg.get("provider", []):
-                if prov.get("id") == "dashscope_tts" and prov.get("api_key"):
-                    self.dashscope_key = prov["api_key"]
-                    break
+            if not self.asr_key:
+                # 兼容旧部署：只按 provider 类型找 DashScope，不再写死 id。
+                for prov in cfg.get("provider", []):
+                    if (
+                        prov.get("type") in ("dashscope_tts", "dashscope")
+                        or prov.get("provider") == "dashscope"
+                    ) and prov.get("api_key"):
+                        self.asr_key = prov["api_key"]
+                        key_source = f"旧版 provider {prov.get('id', '?')}（建议改为 asr_api_key）"
+                        logger.warning(
+                            "[face_convert] ASR 仍在借用 TTS provider 的凭证；"
+                            "请在 config.json 设置 asr_api_key 或环境变量 "
+                            "DASHSCOPE_API_KEY 以彻底解耦。"
+                        )
+                        break
             self.admins = [str(a).strip() for a in (cfg.get("admins_id") or [])]
         except Exception as e:
-            logger.warning(f"[face_convert] 读取 DashScope key 失败: {e}")
+            logger.warning(f"[face_convert] 读取 ASR 凭证失败: {e}")
         logger.info(
             f"[face_convert] 表情字典载入完成，共 {len(self.face_map)} 条；"
-            f"语音转写{'已就绪' if self.dashscope_key else '未配置'}"
+            f"语音转写{'已就绪' if self.asr_key else '未配置'}"
+            f"（{key_source}，模型 {self.asr_model}/{self.vl_model}）"
         )
 
     async def _transcribe_voice(self, event: AstrMessageEvent, rec) -> str | None:
         """语音消息 -> 文字：NapCat 转 mp3 -> 百炼 qwen3-asr-flash"""
-        if not self.dashscope_key:
+        if not self.asr_key:
             return None
         try:
             file_ref = getattr(rec, "file", None) or getattr(rec, "url", None) or getattr(rec, "path", None)
@@ -292,7 +331,7 @@ class FaceConvertPlugin(Star):
 
     async def _mm_call(self, model: str, content_items: list, timeout: int = 60) -> str | None:
         """可取消的 DashScope HTTP 请求，避免超时后 SDK 工作线程继续上传。"""
-        if not self.dashscope_key:
+        if not self.asr_key:
             return None
         try:
             import dashscope
@@ -309,7 +348,7 @@ class FaceConvertPlugin(Star):
         ) as session:
             async with session.post(
                 base_url.rstrip("/") + "/services/aigc/multimodal-generation/generation",
-                headers={"Authorization": f"Bearer {self.dashscope_key}"},
+                headers={"Authorization": f"Bearer {self.asr_key}"},
                 json=payload,
             ) as resp:
                 resp.raise_for_status()
@@ -327,7 +366,7 @@ class FaceConvertPlugin(Star):
     async def _asr_file(self, path: str) -> str | None:
         """本地音频文件 -> 文字（qwen3-asr-flash）。"""
         return await self._mm_call(
-            "qwen3-asr-flash",
+            self.asr_model,
             [{"audio": self._media_data_url(
                 path, "audio/wav" if path.lower().endswith(".wav") else "audio/mpeg"
             )}],
@@ -347,7 +386,7 @@ class FaceConvertPlugin(Star):
             "每帧不超过80字。只描述截图能确认的事实，不补写帧间剧情，不要客套。"
         )})
         return await self._mm_call(
-            "qwen3-vl-plus", content, timeout=self.cfg["vl_timeout_s"],
+            self.vl_model, content, timeout=self.cfg["vl_timeout_s"],
         )
 
     @staticmethod
@@ -548,7 +587,7 @@ class FaceConvertPlugin(Star):
     async def _process_video(self, event: AstrMessageEvent, comp) -> VideoAnalysis:
         """最长五分钟，超时/单段失败仍返回已识别结果；外部取消继续传播。"""
         result = VideoAnalysis()
-        if not self.dashscope_key:
+        if not self.asr_key:
             result.notes.append("未配置 DashScope key")
             return result
         with tempfile.TemporaryDirectory(prefix="vid_") as tmpdir:
@@ -572,6 +611,24 @@ class FaceConvertPlugin(Star):
         纯表情消息的 message_str 为空，上游会当"空消息"处理导致她装死不回；
         这里把表情名拼进文本，让整条链路正常运转。
         """
+        # 私聊里用户明确喊停：取消上一轮还在生成/发送的回复，避免旧气泡
+        # 一条条追着新消息发。群聊不自动打断，免得误伤别人的回复。
+        try:
+            raw = (event.message_str or "").strip()
+            if raw and event.is_private_chat() and self.INTERRUPT_RE.fullmatch(raw):
+                from astrbot.core.utils.active_event_registry import (
+                    active_event_registry,
+                )
+
+                stopped = active_event_registry.stop_all(
+                    event.unified_msg_origin, exclude=event
+                )
+                logger.info(
+                    f"[face_convert] 收到打断指令「{raw}」，已停止 {stopped} 条旧回复"
+                )
+        except Exception as e:
+            logger.debug(f"[face_convert] 打断处理失败: {str(e)[:80]}")
+
         try:
             comps = event.get_messages()
         except Exception:
@@ -663,15 +720,14 @@ class FaceConvertPlugin(Star):
         except Exception as e:
             logger.warning(f"[face_convert] 身份标记失败: {str(e)[:100]}")
 
-    SCRUB_RE = re.compile(r"[（(]{2}.*?[）)]{2}", re.DOTALL)
-    # 嘴硬橡皮擦：擦掉"看不清/模模糊糊/隐约"类小尾巴（上下文回声病，人格治不动）
-    # 边界字符集含半角标点/引号/空白，防咬边
+    # 嘴硬橡皮擦：只擦「隐约听见/看到…」这种回声腔。
+    # “看不清/没听清/模模糊糊”是诚实的不确定性说明，必须保留；
+    # 旧版把它们一并擦掉，会把真实的能力边界也吞了。
     _HEDGE_STOP = r",，\.。！？!?;；、：:~…“”\"‘’（）()【】\[\]\s"
     HEDGE_RE = re.compile(
-        f"[^{_HEDGE_STOP}]{{0,14}}"
-        f"(?:看不太清|看不太清楚|看不清|模模糊糊|糊糊的|没看清也没听清|没听清|听不太清|听不清楚|听不清"
-        f"|隐约(?:听见|听到|飘|看))"
-        f"[^{_HEDGE_STOP}]{{0,14}}[，、：]?"
+        f"[^{_HEDGE_STOP}]{{0,6}}"
+        f"隐约(?:听见|听到|看到|飘来|飘进)"
+        f"[^{_HEDGE_STOP}]{{0,20}}[，、：]?"
     )
 
     # 格式壳拆包：被"按格式输出"类的注入带偏时，她可能把回复套进程序结构里
@@ -690,6 +746,27 @@ class FaceConvertPlugin(Star):
     META_KW = re.compile(_META_BASE)  # 私聊版：留着她"喊冤/自我修正"的通道
     # 群聊版：把"框框/顶着嘴"这类也擦掉——朋友们不该看到她拆自己的台
     META_KW_GROUP = re.compile(_META_BASE + r"|框框|顶着.{0,3}嘴")
+    # 清理内部标记前先保护：行内代码、链接、中文引号里的引用内容。
+    # 这些是用户要的信息，不能因为句子里混了 meta 关键词就整句删掉。
+    _PROTECT_INLINE = re.compile(
+        r"`[^`\n]+`|https?://\S+|“[^”\n]{1,300}”|【[^】\n]{1,160}】"
+    )
+
+    @staticmethod
+    def _protect_inline(text: str) -> tuple[str, list[str]]:
+        saved: list[str] = []
+
+        def repl(match: re.Match) -> str:
+            saved.append(match.group(0))
+            return f"\x00{len(saved) - 1}\x00"
+
+        return FaceConvertPlugin._PROTECT_INLINE.sub(repl, text), saved
+
+    @staticmethod
+    def _restore_inline(text: str, saved: list[str]) -> str:
+        for index, value in enumerate(saved):
+            text = text.replace(f"\x00{index}\x00", value)
+        return text
 
     @staticmethod
     def _normalize_punctuation(text: str) -> str:
@@ -720,12 +797,15 @@ class FaceConvertPlugin(Star):
             return text
 
         def scrub_segment(segment: str) -> str:
-            if not kw.search(segment):
+            protected, saved = self._protect_inline(segment)
+            if not kw.search(protected):
                 return segment
             # 按句丢弃带 meta 标记的句子（她那些"不理它/不照模板走"的前戏）
-            parts = re.split(r"(?<=[。！？\n])", segment)
-            kept = [s for s in parts if not kw.search(s)]
+            parts = re.split(r"(?<=[。！？\n])", protected)
+            # 含代码/链接/引用的句子整句保留，宁可少擦也不能误删内容
+            kept = [s for s in parts if "\x00" in s or not kw.search(s)]
             joined = "".join(kept).replace("---", "")
+            joined = self._restore_inline(joined, saved)
             joined = re.sub(r"\n{2,}", "\n", joined).strip().strip("，、")
             # meta 句被整句丢掉以后可能留下配对不上的括号残骸（比如结尾一个
             # 孤零零的"）"）。按数量补删：哪种括号多出来就删哪个，配对好的不动。
@@ -745,7 +825,11 @@ class FaceConvertPlugin(Star):
 
     @filter.on_llm_response()
     async def scrub_drafts(self, event: AstrMessageEvent, response) -> None:
-        """发送前的三道橡皮擦：①草稿箱（双层括号）②嘴硬小尾巴 ③meta 口癖句。"""
+        """发送前的两道橡皮擦：①嘴硬回声 ②meta 口癖句。
+
+        双括号草稿机制已在 v1.4.0 移除：`((a+b))` 这类合法表达式不能被
+        当成内心戏撕掉。真正需要隐藏的内部标记由 meta 句清理处理。
+        """
         try:
             text = getattr(response, "completion_text", None) or ""
             if not text:
@@ -767,13 +851,9 @@ class FaceConvertPlugin(Star):
                 )
                 if cleaned != pre:
                     logger.info("[face_convert] 已拆格式壳")
-            if "（（" in cleaned or "((" in cleaned:
-                cleaned = self.SCRUB_RE.sub("", cleaned)
-                if cleaned != text:
-                    logger.info("[face_convert] 已撕掉草稿箱内容")
-            # 嘴硬橡皮擦：只擦"回声型小尾巴"。真实识别失败时她会请求重发
-            #（"没听清，请再说一次"）——含请求词的整条放行，绝不误删；
-            # config.json 里 hedge_eraser=false 可整体关闭。
+            # 嘴硬橡皮擦：只擦“隐约听见/看到…”这种回声腔。真实识别失败时
+            # 她会说“没听清，请再说一次”——这些诚实说明必须保留；含请求词
+            # 的整条也放行。config.json 里 hedge_eraser=false 可整体关闭。
             _request_words = r"重发|再发|再说|再听|再看|发一遍|发一张|换一张|重新发|发个"
             hedged = (
                 self.HEDGE_RE.sub("", cleaned)
@@ -831,14 +911,30 @@ class FaceConvertPlugin(Star):
                 return
             result.chain = cleaned_chain
 
-        # 暗号：整条消息都是怪东西时，LLM 只输出 [NO_REPLY] -> 整条回复蒸发
-        joined = "".join(
-            c.text for c in result.chain if isinstance(c, Plain) and c.text
-        )
-        if "[NO_REPLY]" in joined.upper():
+        # 暗号：只有整条回复就是 [NO_REPLY] 时才静默。旧逻辑只要出现这个
+        # 字符串就吞掉整条，连“这个标记是静默暗号”的解释也会被吃掉。
+        plain_comps = [
+            c for c in result.chain if isinstance(c, Plain) and c.text
+        ]
+        joined = "".join(c.text for c in plain_comps)
+        if (
+            plain_comps
+            and len(plain_comps) == len(result.chain)
+            and self.NO_REPLY_RE.fullmatch(joined.strip())
+        ):
             result.chain = []
             logger.info("[face_convert] 收到 [NO_REPLY] 暗号，已吞掉这条回复")
             return
+        # 不是整条暗号时，只丢掉“单独成段”的暗号，解释文字照常保留。
+        marker_only = [
+            c for c in plain_comps if self.NO_REPLY_RE.fullmatch(c.text.strip())
+        ]
+        if marker_only:
+            marker_ids = {id(c) for c in marker_only}
+            result.chain = [c for c in result.chain if id(c) not in marker_ids]
+            logger.info("[face_convert] 已移除单独成段的 [NO_REPLY] 标记")
+            if not result.chain:
+                return
 
         # 工具循环（tool_loop_agent_runner）的最终回复不经过 on_llm_response，
         # 在出门关口再擦一遍 meta 口癖和中文标点；只处理 Plain 文本，不碰图片/工具结果。

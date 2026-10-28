@@ -67,7 +67,7 @@ logging.basicConfig(level=logging.CRITICAL)
 def plugin(**config):
     instance = mod.FaceConvertPlugin(None)
     instance.cfg.update(config)
-    instance.dashscope_key = "test-only"
+    instance.asr_key = "test-only"
     return instance
 
 

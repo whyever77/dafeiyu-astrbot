@@ -106,18 +106,19 @@ for s in (
 ):
     check("keep: " + s, scrub(s) == s, repr(scrub(s)))
 
-# 2) 回声型小尾巴：应被擦掉
+# 2) 只有“隐约…”回声腔该被擦掉；真实的看不清/没听清必须保留
 for s, want in (
-    ("看不太清诶", ""),
-    ("模模糊糊的", ""),
+    ("看不太清诶", "看不太清诶"),
+    ("模模糊糊的", "模模糊糊的"),
+    ("我看不清这个字", "我看不清这个字"),
     ("隐约飘进来一句：你好", "你好"),
 ):
     got = scrub(s)
-    check("strip: " + s, got == want, repr(got))
+    check("hedge: " + s, got == want, repr(got))
 
-# 3) 不跨逗号吃下一句
+# 3) 诚实说明不跨逗号误删
 got = scrub("昨天的事模模糊糊的，今天想起来了")
-check("cross-clause", "今天想起来了" in got and "模模糊糊" not in got, repr(got))
+check("cross-clause", "模模糊糊" in got and "今天想起来了" in got, repr(got))
 
 # 4) file:// 路径三种形态
 P = mod.file_uri_to_path
@@ -148,6 +149,57 @@ for src, want in (
 ):
     got = NORM(src)
     check("punct: " + src, got == want, repr(got))
+
+# 6) [NO_REPLY] 只在整条回复就是暗号时生效
+NO_REPLY = mod.FaceConvertPlugin.NO_REPLY_RE
+for s, want in (
+    ("[NO_REPLY]", True),
+    ("【NO_REPLY】", True),
+    (" [no reply] ", True),
+    ("[NO_REPLY]\n[NO_REPLY]", True),
+    ("这个 [NO_REPLY] 是静默暗号", False),
+    ("用 [NO_REPLY] 表示不想说话", False),
+):
+    got = bool(NO_REPLY.fullmatch(s.strip()))
+    check("no-reply: " + s, got == want, repr(got))
+
+# 7) 双括号表达式不再被当成草稿撕掉
+import asyncio
+
+
+class _Event:
+    def get_group_id(self):
+        return ""
+
+    def get_extra(self, _key):
+        return None
+
+
+class _Resp:
+    def __init__(self, text):
+        self.completion_text = text
+
+
+plugin = mod.FaceConvertPlugin(None)
+for src in (
+    "((a+b)) 是合法表达式",
+    "结果是 ((a+b))*c。",
+    "`((a+b))`",
+    "```python\nprint(((a+b)))\n```",
+):
+    resp = _Resp(src)
+    asyncio.run(plugin.scrub_drafts(_Event(), resp))
+    check("keep-double-paren: " + src, resp.completion_text == src, repr(resp.completion_text))
+
+# 8) meta 清理先保护代码/链接/引用，不能整句误删
+for src in (
+    "看 `PROTOCOL_ENFORCEMENT` 这个标记。",
+    "文档在 https://example.com/PROTOCOL_ENFORCEMENT 。",
+    "她说“PROTOCOL_ENFORCEMENT 是内部标记”。",
+):
+    resp = _Resp(src)
+    asyncio.run(plugin.scrub_drafts(_Event(), resp))
+    check("protect-meta-content: " + src, resp.completion_text == src, repr(resp.completion_text))
 
 print()
 if failures:

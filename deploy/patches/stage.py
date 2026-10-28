@@ -1,3 +1,4 @@
+import asyncio
 import random
 import re
 import time
@@ -14,6 +15,7 @@ from astrbot.core.star.session_llm_manager import SessionServiceManager
 from astrbot.core.star.star import star_map
 from astrbot.core.star.star_handler import EventType, star_handlers_registry
 
+from ..chat_layout import is_valid_audio_file, make_tts_text
 from ..context import PipelineContext
 from ..stage import Stage, register_stage, registered_stages
 
@@ -86,6 +88,17 @@ class ResultDecorateStage(Stage):
         self.content_cleanup_rule = ctx.astrbot_config["platform_settings"][
             "segmented_reply"
         ]["content_cleanup_rule"]
+        # 整段语音的兜底时限；TTS 卡住时必须退回文字，不能把整条回复拖死。
+        tts_cfg = ctx.astrbot_config.get("provider_tts_settings", {})
+        try:
+            self.tts_timeout_s = max(3.0, float(tts_cfg.get("timeout", 30)))
+        except (TypeError, ValueError):
+            self.tts_timeout_s = 30.0
+        try:
+            # 单次合成的文本上限；超长回复直接发文字，避免供应商截断/报错。
+            self.tts_max_chars = max(50, int(tts_cfg.get("max_chars", 600)))
+        except (TypeError, ValueError):
+            self.tts_max_chars = 600
 
         # exception
         self.content_safe_check_reply = ctx.astrbot_config["content_safety"][
@@ -205,6 +218,12 @@ class ResultDecorateStage(Stage):
                         comp.text = self.reply_prefix + comp.text
                         break
 
+            # 分段前先保存完整语义文本：语音按整段合成，显示才分气泡。
+            # 这样表情、标点和句子结构不会因为分泡而反复重置语调。
+            full_reply_text = "".join(
+                comp.text for comp in result.chain if isinstance(comp, Plain)
+            )
+
             # 分段回复
             if self.enable_segmented_reply and event.get_platform_name() not in [
                 "qq_official_webhook",
@@ -214,11 +233,13 @@ class ResultDecorateStage(Stage):
                 if (
                     self.only_llm_result and result.is_model_result()
                 ) or not self.only_llm_result:
+                    # 阈值按“整条回复”算，不能因为表情把 Plain 切开就误判成短消息。
+                    long_reply = len(full_reply_text) > self.words_count_threshold
                     new_chain = []
                     for comp in result.chain:
                         if isinstance(comp, Plain):
-                            if len(comp.text) > self.words_count_threshold:
-                                # 不分段回复
+                            if long_reply:
+                                # 长回复不分段，整段发出去
                                 new_chain.append(comp)
                                 continue
 
@@ -315,62 +336,70 @@ class ResultDecorateStage(Stage):
                     )
 
             if should_tts and tts_provider:
-                new_chain = []
-                for comp in result.chain:
-                    if isinstance(comp, Plain) and len(comp.text) > 1:
+                # 补丁3: 整条回复只合成一次语音。显示气泡照常分，但语音不再
+                # 按气泡逐段合成——表情和分泡不会再把一句话的语调切碎。
+                if any(isinstance(comp, Record) for comp in result.chain):
+                    logger.info("TTS skipped: the result already contains a voice record")
+                else:
+                    tts_text = make_tts_text(full_reply_text)
+                    if not tts_text:
+                        logger.info("TTS skipped: reply has no readable text")
+                    elif len(tts_text) > self.tts_max_chars:
+                        logger.info(
+                            "TTS skipped: reply is %d chars, above the %d-char limit",
+                            len(tts_text),
+                            self.tts_max_chars,
+                        )
+                    else:
                         try:
-                            # 补丁3: 朗读前过滤表情标记（如 [旺柴]），防 TTS 把方括号文字念出来。
-                            # 只影响合成文本；发送用的 comp.text 保持原样（留给表情转换）。
-                            tts_text = re.sub(r"\[[A-Za-z一-鿿]{1,6}\]", "", comp.text).strip()
-                            # 纯标点/省略号（如橡皮擦后的"……"）不合成语音
-                            if not tts_text.strip("…。.，,!！?？~～、 　"):
-                                new_chain.append(comp)
-                                continue
-                            logger.info(f"TTS request: {tts_text}")
-                            audio_path = await tts_provider.get_audio(tts_text)
+                            logger.info(f"TTS request (whole reply): {tts_text[:200]}")
+                            audio_path = await asyncio.wait_for(
+                                tts_provider.get_audio(tts_text),
+                                timeout=self.tts_timeout_s,
+                            )
                             logger.info(f"TTS result: {audio_path}")
-                            if not audio_path:
-                                logger.error(
-                                    "Failed to convert the message segment to speech "
-                                    f"because no TTS audio file was found: {comp.text}",
+                            if not is_valid_audio_file(audio_path):
+                                raise RuntimeError(
+                                    "TTS provider returned an empty or unreadable audio file"
                                 )
-                                new_chain.append(comp)
-                                continue
 
-                            use_file_service = self.ctx.astrbot_config[
+                            tts_settings = self.ctx.astrbot_config[
                                 "provider_tts_settings"
-                            ]["use_file_service"]
+                            ]
                             callback_api_base = self.ctx.astrbot_config[
                                 "callback_api_base"
                             ]
-                            dual_output = self.ctx.astrbot_config[
-                                "provider_tts_settings"
-                            ]["dual_output"]
-
                             url = None
-                            if use_file_service and callback_api_base:
+                            if tts_settings["use_file_service"] and callback_api_base:
                                 token = await file_token_service.register_file(
                                     audio_path,
                                 )
                                 url = f"{callback_api_base}/api/file/{token}"
                                 logger.debug(f"Registered: {url}")
 
-                            new_chain.append(
-                                Record(
-                                    file=url or audio_path,
-                                    url=url or audio_path,
-                                    text=comp.text,
-                                ),
+                            record = Record(
+                                file=url or audio_path,
+                                url=url or audio_path,
+                                text=tts_text,
                             )
-                            if dual_output:
-                                new_chain.append(comp)
+                            if tts_settings["dual_output"]:
+                                # 文字气泡 + 一条完整语音
+                                result.chain.append(record)
+                            else:
+                                # 只发语音，保留图片等非文本段
+                                result.chain = [record] + [
+                                    comp
+                                    for comp in result.chain
+                                    if not isinstance(comp, Plain)
+                                ]
+                        except asyncio.TimeoutError:
+                            logger.error(
+                                "TTS timed out after %.1fs; sending text instead.",
+                                self.tts_timeout_s,
+                            )
                         except Exception:
                             logger.error(traceback.format_exc())
                             logger.error("TTS failed; sending text instead.")
-                            new_chain.append(comp)
-                    else:
-                        new_chain.append(comp)
-                result.chain = new_chain
 
             # 文本转图片
             elif (
