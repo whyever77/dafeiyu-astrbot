@@ -58,6 +58,11 @@ Write-Log "=== start_phone_service begin (server=$Server port=$Port) ==="
 
 # 1. LDPlayer emulator
 if (-not $NoEmulator) {
+    # PS 5.1: with EAP=Stop, redirecting a native command's stderr (2>$null)
+    # raises NativeCommandError. adb prints "daemon not running..." on first
+    # start after boot, which killed this script before the readiness loop.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     if (Get-Process -Name dnplayer -ErrorAction SilentlyContinue) {
         Write-Log "LDPlayer already running"
     } else {
@@ -91,6 +96,7 @@ if (-not $NoEmulator) {
     } else {
         Write-Log "WARN: emulator-5554 not ready after 120s; PhoneMCP may see no device"
     }
+    $ErrorActionPreference = $prevEap
 }
 
 # 2. PhoneMCP

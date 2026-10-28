@@ -33,6 +33,12 @@
 - 状态刷新不被互动 guard 阻止；CLI 模式同步 auto_public 开关；关闭文案明确包含关注/收藏；回复监听采用发送前时间下界并兼容服务端秒级时间，避免漏掉回读完成前的回复。
 - Windows 365 项（11 skip）、Linux 365 项（6 skip）离线回归通过。已按社区文档校正，真实端点及小号 smoke 未验证；未 push、未部署、未操作云端。
 
+## 2026-10-27 · 开机自启被 PowerShell 5.1 的 stderr 坑打断
+
+- `deploy/phone_mcp/start_phone_service.ps1` 在 `$ErrorActionPreference='Stop'` 下执行 `& $adb devices 2>$null`：Windows PowerShell 5.1 会把原生命令的 stderr 包成 `RemoteException`，而开机后 adb server 首次启动恰好打印 “daemon not running...”，脚本在拉起雷电后立刻退出，模拟器、PhoneMCP 与 Bili 隧道整条链路都没起来。
+- 修复：等待模拟器就绪期间临时切到 `Continue`，结束后恢复；顺带覆盖 `pm list packages` / 输入法设置的同类 stderr 重定向。
+- 背景：10-27 13:06 开机自启再次失败，20:30 活动全部 `TransportError`；10-21/10-24/10-25/10-26 的日志也都停在 `Starting LDPlayer`，同一根因。
+
 ## 2026-10-26 · B站评论区互动插件 v0.5.0（本地交付）
 
 - 扩展原 proposal/Executor：新增点赞/取消赞、投币 1/2 枚及可选点赞、指定分P/毫秒/色值/字号的弹幕。默认审批，`engagement_actions=false`；公开评论/回复/弹幕仍受 `public_interactions` 控制。
