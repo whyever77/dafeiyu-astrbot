@@ -1,0 +1,17 @@
+{
+  "base": "http://127.0.0.1:8766",
+  "checks": [
+    "desktop loads 32 scoped memories with no horizontal overflow",
+    "memory selection and 2D controls update the actual view",
+    "future simulation fades detail but preserves source confidence",
+    "simulated pin and reset are reversible",
+    "cue retrieval explains seed and one-hop associations",
+    "timeline and lab navigation work",
+    "group scope never exposes private matches or cards",
+    "JSON upload renders malicious-looking content literally",
+    "mobile layout fits 390px with usable controls",
+    "no uncaught browser JavaScript exceptions"
+  ],
+  "failures": [],
+  "errors": []
+}
