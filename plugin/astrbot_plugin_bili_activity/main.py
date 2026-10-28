@@ -1406,7 +1406,7 @@ class BiliActivity(Star):
             operation(string): info/search/home/following_feed/subtitles/danmaku/comments/replies/folders/favorites/followings/user。
             arguments(string): JSON对象；视频传bvid及cid，评论mode默认3，翻页优先传pagination_offset=上次next_offset，也兼容next；回复传root_rpid和page。
         """
-        self.check_owner(event, interaction_guard=operation != "status")
+        self.check_owner(event)
         self.require_goal(event)
         args = parse_json_argument(arguments, "arguments", dict)
         value = await self.bili().json_call("bili_read", {"operation": operation, "args": args})

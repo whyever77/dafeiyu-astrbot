@@ -71,6 +71,53 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.api.posts), 1)
         self.assertTrue((await self.api.read("status", {}))["buvid3_present"])
 
+    async def test_spi_preserves_padded_and_encoded_fingerprints_in_both_formats(self):
+        metadata = {"refresh_token": "keep", "updated_at": 42, "custom": [1]}
+        for wrapped in (False, True):
+            for buvid4 in ("fixture_-.buvid4==", "fixture_-.buvid4%3D%3D", "x" * 254 + "==", "x" * 256):
+                with self.subTest(wrapped=wrapped, buvid4=buvid4):
+                    cookies = dict(integration.COOKIES)
+                    document = ({"cookies": cookies} if wrapped else cookies) | metadata
+                    private_json(self.api.cookie_file, document)
+                    self.api.spi = {"b_3": "fixture_-.buvid3%3D", "b_4": buvid4}
+                    await self.api.ensure_buvid3()
+                    after = json.loads(self.api.cookie_file.read_text(encoding="utf-8"))
+                    target = after["cookies"] if wrapped else after
+                    self.assertEqual(target["buvid3"], self.api.spi["b_3"])
+                    self.assertEqual(target.get("buvid4"), buvid4)
+                    self.assertEqual({k: after[k] for k in metadata}, metadata)
+                    self.assertEqual(target["SESSDATA"], integration.COOKIES["SESSDATA"])
+        # Persisted fingerprints support both engagement actions without another SPI.
+        self.api.spi = {}
+        for action, args in (("like", {"like": 1}), ("coin", {"multiply": 1})):
+            value = await self.executor.execute("saved-fingerprint-" + action, action, VIDEO | args)
+            self.assertTrue(value["verified"])
+        self.assertEqual(len(self.api.posts), 2)
+
+    async def test_spi_rejects_invalid_fields_without_writing_or_posting(self):
+        invalid = ["", None, 123, "x" * 257, "x===", "x=y", "==", "x;y", "x,y", "x y"]
+        invalid += ["x" + chr(code) + "y" for code in (*range(32), 127)]
+        for wrapped in (False, True):
+            document = ({"cookies": dict(integration.COOKIES)} if wrapped else dict(integration.COOKIES))
+            private_json(self.api.cookie_file, document | {"refresh_token": "keep", "updated_at": 42})
+            before = self.api.cookie_file.read_bytes()
+            for field in ("b_3", "b_4"):
+                for value in invalid:
+                    with self.subTest(wrapped=wrapped, field=field, value=value):
+                        self.api.spi = {"b_3": "valid-buvid3", "b_4": "valid-buvid4==", field: value}
+                        with self.assertRaises(BiliError) as caught:
+                            await self.api.prepare_write("like", VIDEO | {"like": 1})
+                        self.assertEqual(str(caught.exception), "buvid3 missing; re-login")
+                        self.assertIsNone(caught.exception.code)
+                        self.assertEqual(self.api.cookie_file.read_bytes(), before)
+        self.assertEqual(self.api.posts, [])
+
+    async def test_spi_allows_absent_optional_buvid4(self):
+        self.api.spi = {"b_3": "valid-buvid3"}
+        await self.api.ensure_buvid3()
+        self.assertEqual(self.api.cookies()["buvid3"], "valid-buvid3")
+        self.assertNotIn("buvid4", self.api.cookies())
+
     async def test_existing_buvid_skips_spi_and_concurrent_provision_is_single_flight(self):
         original = self.api.request
         calls = []

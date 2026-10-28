@@ -158,8 +158,17 @@ class BiliAPI:
                 return
             try:
                 data = await self.request("/x/frontend/finger/spi", authenticated=False)
-                values = {cookie: data.get(field) for cookie, field in (("buvid3", "b_3"), ("buvid4", "b_4"))}
-                values = {k: v for k, v in values.items() if isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,256}", v)}
+                values = {}
+                for cookie, field in (("buvid3", "b_3"), ("buvid4", "b_4")):
+                    if field not in data:
+                        continue
+                    value = data[field]
+                    # Validate all supplied fields before writing either cookie.
+                    # Padding is valid only at the end; delimiters stay forbidden.
+                    if (not isinstance(value, str) or len(value) > 256
+                            or not re.fullmatch(r"[A-Za-z0-9_%.\-]+={0,2}", value)):
+                        raise ValueError("invalid browser fingerprint")
+                    values[cookie] = value
                 if not values.get("buvid3"):
                     raise ValueError("fingerprint unavailable")
                 # Re-read after network I/O: a concurrent login may have refreshed

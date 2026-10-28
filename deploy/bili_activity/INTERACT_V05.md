@@ -204,7 +204,7 @@ Windows 命令前将 `C:\Program Files\Git\bin` 前置 PATH，解释器为 `C:\U
 - 新增主人私聊命令 `/bili互动 清理不确定` 列出记录，追加提议 ID 查看 proposals 与伴随服务 operations 的只读摘要。再按展示的五分钟一次性凭据，发送 `/bili互动 清理不确定 <id> abandoned|verified 确认 <凭据>`。群聊、非主人、自主轮次不能确认；账本变化、超时、重复确认均拒绝。
 - 恢复只将 proposal 置为 `resolved_abandoned` / `resolved_verified` 并记主人确认事件。保留原 result、Executor 账本、次数及目标判重，不重发 POST；人工 verified 不改写机器 `verified`。现有 one_pending 索引自然排除这些终态，无需删除未解决 uncertain 的保护。
 - `execute_interaction` 覆盖等待锁、权限检查、发送前等待的取消/拒绝；未交给执行端时结束为 blocked，已交给执行端且结果未知才为 uncertain。
-- 匿名可见性错误不应影响账号状态；旧伴随服务的 verified + 未注明来源 risk_code 也会被隔离。真实认证请求的风险可保留 authenticated 来源，QQ 提示仅在风险实际应用时出现。状态查询可刷新登录，保留原轮次停止和冷却；普通后台 B站读取/轮询仍检查风控。
+- 匿名可见性错误不应影响账号状态；旧伴随服务的 verified + 未注明来源 risk_code 也会被隔离。真实认证请求的风险可保留 authenticated 来源，QQ 提示仅在风险实际应用时出现。状态查询可刷新登录，保留原轮次停止和冷却；2026-10-28 起普通 `df_bili_read` 豁免互动 guard，提议、执行和回复监听仍检查风控。
 - 新增 `bili_operation` 仅供控制器读账本，加入原始工具屏蔽清单，不暴露给模型；Executor、transport、原审批决策方法未修改。
 - Windows 离线基线 328 项（11 skip），恢复阶段 341 项（11 skip），均通过。命令均为既有 venv 的 `python -m unittest discover -s tests -p 'test_bili_*.py' -v`；日志 `bili-fixes-baseline.log` / `bili-recovery-suite.log`。新增 13 项恢复/取消/监听恢复/状态回归。阶段中修正了新增工具清单断言及测试缩进；以上为最终重跑结果。
 
@@ -252,5 +252,51 @@ Windows 命令前将 `C:\Program Files\Git\bin` 前置 PATH，解释器为 `C:\U
 Windows 跳过：6 项 ffmpeg、4 项 Linux 导出脚本、1 项符号链接；Linux 跳过：6 项 ffmpeg。未安装新测试框架或新生产依赖。中间测试发现的异常类 fixture 身份、工具清单/缩进、WBI 示例参数拼写及配额 fixture 未结束动作问题均已修正并由最终全量覆盖；没有把中间失败记成通过。
 
 实际 B站 Web 参数、WBI 签名受理、SPI 指纹可用性、匿名列表可用性、QQ 真回执、真人公开可见性全部仍为**未验证**。主人手动 smoke 见前述 1–10 项；本地测试与社区文档不替代小号验收。先保持 approval 和低额度，确认问题后再自行部署/推送。
+
+## 独立验收 C/H 修复与复验（2026-10-28）
+
+- C：SPI 的 b_3/b_4 接受字母数字、`_`、`-`、`.`、`%` 及末尾最多两个 `=`，总长度不超过 256。先校验全部已提供字段，再合并写入；b_4 可以缺省，但已提供且不合法时返回原有固定脱敏错误，不静默丢弃，也不写入任何指纹。flat/wrapped、元数据、single-flight、网络等待后重读语义保留。
+- H：`df_bili_read` 所有 operation 均只调用普通 `check_owner`，仍受主人/私聊、enabled、DND、goal、life、workshop、methods 检查。`df_bili_propose`、`execute_interaction`、`poll_replies` 的冷却/登录 guard 保留。状态刷新仍不解除冷却或恢复已停止轮次的写权限。
+- **观察项，未改行为：** 普通读取失败仍调用 `interactions().risk()`；认证读取的 -101 会标登录失效，12014/-412/-352 会设置写冷却及停止标记。读取 guard 豁免不等于清除这些标记，也不保证真实接口在登录失效时仍允许读取。
+- 仅修改 `bili_api.py`、插件 `main.py`、`test_bili_contract_fixes.py`、`test_bili_recovery.py` 及本文档；未改审批、Executor、transport 或受保护模块。预存在的 `deploy/phone_mcp/start_phone_service.ps1` 修改单独保留，不纳入本次提交。
+
+### 本轮实测
+
+Windows 使用现有 venv，Git bin 前置 PATH；全部使用 `-B`、fake/mock 和临时数据库。
+
+| 命令 | 实际结果 |
+| --- | --- |
+| `python -B -m unittest discover -s tests -p "test_bili_*.py" -v` | Windows 371 项，360 通过、11 skip，21.429 秒；0 失败/错误 |
+| `wsl -d Ubuntu-22.04 --cd /mnt/d/GitHub/dafeiyu-astrbot -- /var/tmp/dafeiyu-v05/venv/bin/python -B -m unittest discover -s tests -p 'test_bili_*.py' -v` | Linux 371 项，365 通过、6 skip，22.204 秒；0 失败/错误 |
+| 同一 unittest discover 命令，分别指定 contract_fixes/recovery/interact/replies/service 五份文件 | 分别 25/17/31/23/10 项，全部 OK，无 skip |
+| 上次独立验收临时反例及 wire/XML 断言 | 12 项 + 2 项，全部 OK；原 C/H 两项失败已消除 |
+
+新增 6 项测试：合法/编码/256 字符边界的 b4 保存、非法 b3/b4 不写入、可选 b4 缺省；冷却/登录失效下 life 的 info/comments 读取、冷却下提议/执行/监听仍被拦、读取豁免仍保留原权限检查。已有状态刷新测试也通过，原测试断言未放宽。
+
+临时副本红/绿使用以下命令，分别在正常、故意回退、恢复后执行：
+
+```text
+python -B -m unittest -v test_bili_contract_fixes.ContractTests.test_spi_preserves_padded_and_encoded_fingerprints_in_both_formats
+python -B -m unittest -v test_bili_recovery.RecoveryTests.test_life_reads_bypass_interaction_cooldown_and_invalid_login
+```
+
+- C：仅去掉正则的 `={0,2}` 支持，合法带 padding 的 4 个子用例报 `BiliError: buvid3 missing; re-login`；恢复后 1 项 OK。
+- H：恢复旧的 `interaction_guard=operation != "status"`，4 个读取子用例报 `InteractionBlocked`（冷却或登录失效）；恢复后 1 项 OK。
+- 两项红阶段均是预期的故意回退错误；修复版本正常测试全通过。副本恢复原始字节，当前工作区代码没有被变异。
+
+| 验收项 | 结果与证据 |
+| --- | --- |
+| A 点赞 | PASS：Web 路径/1、2 映射、0/1 回读及 replay 测试通过 |
+| B 弹幕 | PASS：参数/长度、accepted 与 verified/visibility 分离、XML 不匹配反例通过 |
+| C 指纹 | PASS：两种文件格式保留 `==` / `%3D%3D`；非法字段拒绝且文件不变；like/coin fake 执行及缺 b3 零 POST 通过 |
+| D 可见性 | PASS：匿名 WBI、offset、无 Cookie、风险隔离通过 |
+| E uncertain 恢复 | PASS：权限/凭据/账本变化/重复确认/不重发/监听恢复通过 |
+| F 状态机 | PASS：发送前 blocked、发送后未知 uncertain 及取消回归通过 |
+| G 风险隔离 | PASS：可见性风险隔离，真实认证风险仍生效 |
+| H guard/状态 | PASS：普通读取恢复，写入和监听 guard 保留，刷新登录不解除冷却 |
+| I 小项 | PASS：模式联锁、关闭文案、reserve 冲突不转 uncertain 通过 |
+| J 本次范围 | PASS：全量/定向回归通过；受保护文件未改；预存在的手机脚本修改排除在本次范围外 |
+
+以上 PASS 仅限离线验收。真实 B站写入、SPI 可用性、QQ 回执、公开可见性及风控仍为 **UNVERIFIED**，未 push、未部署、未操作云端。主人 smoke 保持小号、approval、每轮 1 次及低日额度：先查账号/指纹，再逐条审批点赞/取消赞、1 枚投币、1 条弹幕及自有楼评论/回复；分别核对回读与另一会话可见性，unknown 不重发，最后关闭互动。
 
 本轮代码提交：`5f9c32a` 恢复与执行状态机 → `fde49d3` Web 参数、回读语义与回归测试；随后单独提交本报告及 README/CHANGELOG。仅本地提交，未 push/PR/Release/部署。

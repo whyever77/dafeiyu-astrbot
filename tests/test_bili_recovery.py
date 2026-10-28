@@ -195,6 +195,84 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.plugin.store.get_setting("interaction_login:" + SCOPE))
         self.assertIsNone(self.plugin.store.get_setting("interaction_cooldown:" + SCOPE))
 
+    def life_event(self):
+        self.config.update(life_enabled=True, workshop_enabled=True, one_shot_verified=True)
+        self.save()
+        run_id = "read-during-cooldown"
+        self.plugin.life_runs = {run_id}
+        goal = self.plugin.store.life.create_goal(SCOPE, "Read fixture", "Check read permission", "Read info", "read-goal")
+        self.plugin.store.life.claim_goal(SCOPE, goal["id"], run_id)
+        self.plugin.run_goals = {run_id: goal["id"]}
+        self.plugin.activity_budget().start_run(SCOPE, run_id, 60, self.config)
+        return fixtures.FakeEvent(run_id=run_id)
+
+    async def test_life_reads_bypass_interaction_cooldown_and_invalid_login(self):
+        event = self.life_event()
+        state = self.plugin.interactions()
+        state.risk(SCOPE, "earlier-run", -412, self.config)
+        until = self.plugin.store.get_setting("interaction_cooldown:" + SCOPE)
+        self.assertGreater(until, time.time())
+        for login in ("valid", "invalid"):
+            self.plugin.store.setting("interaction_login:" + SCOPE, login)
+            for operation in ("info", "comments"):
+                with self.subTest(login=login, operation=operation):
+                    before = self.backend.json_call.await_count
+                    value = json.loads(await self.plugin.read(event, operation, VIDEO))
+                    self.assertIsInstance(value, dict)
+                    self.assertEqual(self.backend.json_call.await_count, before + 1)
+                    self.backend.json_call.assert_awaited_with("bili_read", {"operation": operation, "args": VIDEO})
+                    self.assertEqual(self.plugin.store.get_setting("interaction_cooldown:" + SCOPE), until)
+                    self.assertEqual(self.plugin.store.get_setting("interaction_login:" + SCOPE), login)
+        self.assertEqual(self.api.posts, [])
+
+    async def test_cooldown_still_blocks_proposal_execute_and_reply_poll(self):
+        proposal = await self.executing()
+        self.config["reply_watch_enabled"] = True
+        self.save()
+        self.plugin.make_event = AsyncMock(side_effect=lambda run_id: fixtures.FakeEvent(run_id=run_id))
+        self.plugin.agent = AsyncMock()
+        self.plugin.interactions().risk(SCOPE, "earlier-run", -412, self.config)
+        self.backend.json_call.reset_mock()
+        event = fixtures.FakeEvent(run_id="blocked-run")
+        offered = await self.propose("like", VIDEO | {"like": 1}, event)
+        self.assertFalse(offered["proposal_created"])
+        self.assertIn("冷却", offered["reason"])
+        result = await self.plugin.execute_interaction(event, proposal)
+        self.assertEqual(result["result"], "blocked")
+        self.assertEqual(self.row(proposal["id"])["status"], "blocked")
+        await self.plugin.poll_replies()
+        poll = self.plugin.store.db.execute("SELECT details FROM events WHERE kind='reply_poll' ORDER BY seq DESC LIMIT 1").fetchone()
+        self.assertEqual(json.loads(poll[0])["status"], "blocked")
+        self.backend.json_call.assert_not_awaited()
+        self.plugin.agent.assert_not_awaited()
+        self.assertEqual(self.api.posts, [])
+
+    async def test_read_exemption_preserves_owner_and_background_permissions(self):
+        event = self.life_event()
+        self.plugin.interactions().risk(SCOPE, "earlier-run", -412, self.config)
+        for other in (fixtures.FakeEvent(scope=fixtures.OTHER_SCOPE), fixtures.FakeEvent(user="stranger")):
+            with self.assertRaises(PermissionError):
+                await self.plugin.read(other, "info", VIDEO)
+        for key, value in (("enabled", False), ("dnd_ranges", [["00:00", "00:00"]]), ("life_enabled", False)):
+            original = self.config[key]
+            self.config[key] = value
+            self.save()
+            with self.assertRaises(PermissionError):
+                await self.plugin.read(event, "info", VIDEO)
+            self.config[key] = original
+        self.config["workshop_enabled"] = False
+        self.save()
+        self.plugin.writing_runs = {"writing"}
+        with self.assertRaises(PermissionError):
+            await self.plugin.read(fixtures.FakeEvent(run_id="writing"), "info", VIDEO)
+        self.plugin.method_runs = {"method"}
+        with self.assertRaises(PermissionError):
+            await self.plugin.read(fixtures.FakeEvent(run_id="method"), "info", VIDEO)
+        self.plugin.run_goals.clear()
+        with self.assertRaises(ValueError):
+            await self.plugin.read(event, "info", VIDEO)
+        self.backend.json_call.assert_not_awaited()
+
     async def test_status_can_refresh_login_in_stopped_run_without_resuming_writes(self):
         state = self.plugin.interactions()
         state.risk(SCOPE, "run", -101, self.config)
