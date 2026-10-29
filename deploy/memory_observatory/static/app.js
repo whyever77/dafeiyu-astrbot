@@ -116,13 +116,13 @@ function renderTrace(){
   if(state.query&&!state.data.trace.length)list.append(el('div','empty-state','没有找到相关片段。试试更具体的主题、人物或场景。'));
 }
 function setView(view){
-  state.view=view;for(const button of $$('.nav-item')){const active=button.dataset.view===view;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}
+  state.view=view;for(const button of $$('.nav-item[data-view]')){const active=button.dataset.view===view;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}
   $('#graph-stage').hidden=view!=='atlas';$('#timeline-view').hidden=view!=='timeline';$('#lab-view').hidden=view!=='lab';$('.view-options').hidden=view!=='atlas';
   const content={atlas:['每一次想起，都有回响','让经历连成星海，看见记忆如何沉淀，又被轻轻唤起。','记忆星海'],timeline:['走过的日子，都有微光','沿着时间，重新遇见那些留下意义的片段。','共同经历'],lab:['有些淡去，是为了留下','用时间、巩固与保留，观察记忆的不同轨迹。','遗忘实验室']}[view];
   $('#page-title').replaceChildren(document.createTextNode(content[0]),el('span','','。'));$('#page-description').textContent=content[1];$('#view-label').textContent=content[2];if(view==='atlas')requestAnimationFrame(()=>graph.resize());
 }
 function resetExperiment(){state.days=0;state.rehearsed.clear();state.pinned.clear();}
-for(const button of $$('.nav-item'))button.addEventListener('click',()=>setView(button.dataset.view));
+for(const button of $$('.nav-item[data-view]'))button.addEventListener('click',()=>setView(button.dataset.view));
 $('#kind-filters').addEventListener('click',event=>{const button=event.target.closest('.kind-filter');if(!button)return;const kind=button.dataset.kind;if(state.kinds.has(kind))state.kinds.delete(kind);else state.kinds.add(kind);render();});
 $('#scope').addEventListener('change',()=>{state.scope=$('#scope').value;state.selected=null;resetExperiment();refresh();});
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();state.query=$('#query').value.trim();refresh();});

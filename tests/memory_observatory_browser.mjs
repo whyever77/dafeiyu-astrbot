@@ -8,8 +8,10 @@ import {mkdtemp, readFile, writeFile, mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 
-const base = process.env.MEMORY_TEST_URL || 'http://127.0.0.1:8766';
+let base = process.env.MEMORY_TEST_URL || 'http://127.0.0.1:8766';
 const liveReadonly = process.argv.includes('--live-readonly');
+const spawnDemo = process.argv.includes('--spawn-demo');
+assert.ok(!(spawnDemo && liveReadonly), 'Synthetic server and live mode are mutually exclusive');
 assert.match(base, /^http:\/\/127\.0\.0\.1:\d+$/);
 const output = await mkdtemp(path.join(tmpdir(), 'memory-observatory-browser-'));
 const profile = path.join(output, 'chrome-profile');
@@ -17,7 +19,7 @@ await mkdir(profile);
 const executable = process.env.MEMORY_CHROME || (process.platform === 'win32' ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : 'google-chrome');
 const chrome = spawn(executable, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
   '--disable-extensions', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--window-size=1600,1150', 'about:blank'], {windowsHide:true, stdio:'ignore'});
-let socket, sequence=0;
+let socket, ownedServer, sequence=0;
 const pending=new Map(), errors=[], failures=[], checks=[];
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(fn, label, timeout=10000) {const start=Date.now();while(Date.now()-start<timeout){if(await fn())return;await pause(70);}throw new Error(`Timed out: ${label}`);}
@@ -29,13 +31,19 @@ async function check(name,fn){try{await fn();checks.push(name);console.log(`PASS
 async function screenshot(name,full=false){let clip;if(full){const metrics=await cdp('Page.getLayoutMetrics');clip={x:0,y:0,width:metrics.cssContentSize.width,height:metrics.cssContentSize.height,scale:1};}const result=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:full,...(clip?{clip}:{})});await writeFile(path.join(output,name),Buffer.from(result.data,'base64'));}
 
 try {
+  if(spawnDemo){
+    let startup='';
+    ownedServer=spawn(process.env.MEMORY_PYTHON||'python',['-B','-m','deploy.memory_observatory.server','--port','0'],{windowsHide:true,stdio:['ignore','pipe','pipe']});
+    ownedServer.stdout.on('data',chunk=>startup+=chunk.toString());
+    await until(()=>{const match=startup.match(/http:\/\/127\.0\.0\.1:\d+/);if(match){base=match[0];return true;}return false;},'owned synthetic server');
+  }
   let devtools;
   await until(async()=>{try{devtools=await readFile(path.join(profile,'DevToolsActivePort'),'utf8');return true;}catch{return false;}},'Chrome startup');
   const port=devtools.split('\n')[0];
   const pages=await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   socket=new WebSocket(pages.find(p=>p.type==='page').webSocketDebuggerUrl);
   await new Promise((resolve,reject)=>{socket.addEventListener('open',resolve,{once:true});socket.addEventListener('error',reject,{once:true});});
-  socket.addEventListener('message',event=>{const m=JSON.parse(event.data);if(m.id){const item=pending.get(m.id);if(item){pending.delete(m.id);if(m.error)item.reject(new Error(m.error.message));else item.resolve(m.result);}}else if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text);});
+  socket.addEventListener('message',event=>{const m=JSON.parse(event.data);if(m.id){const item=pending.get(m.id);if(item){pending.delete(m.id);if(m.error)item.reject(new Error(m.error.message));else item.resolve(m.result);}}else if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.exception?.description||m.params.exceptionDetails.text);});
   await cdp('Page.enable');await cdp('Runtime.enable');
   await cdp('Emulation.setDeviceMetricsOverride',{width:1600,height:1150,deviceScaleFactor:1,mobile:false});
   await cdp('Page.navigate',{url:base});
@@ -142,10 +150,44 @@ try {
     await click('#about-button');assert.equal(await evaluate('document.querySelector("#info-dialog").open'),true);
     await click('#info-dialog .dialog-close');
   });
+  await check('room opens from the atlas and labels fiction independently',async()=>{
+    await cdp('Emulation.setDeviceMetricsOverride',{width:1600,height:1150,deviceScaleFactor:1,mobile:false});
+    await click('a[href="/room"]');await waitText('#room-source','虚构演示');
+    assert.equal(await evaluate('document.querySelector("#journal-content").textContent.includes("不等于目标完成")'),true);
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
+    await click('#room-motion');await screenshot('room-desktop.png',true);
+  });
+  await check('room corners show actual snapshot records and keep controls read-only',async()=>{
+    await click('[data-zone="shelf"]');await waitText('#journal-content','深海来信');
+    await click('[data-zone="window"]');assert.equal(await evaluate('document.querySelectorAll(".journal-item").length'),3);
+    await click('[data-zone="rest"]');await waitText('#journal-content','不模拟体力');
+    assert.equal(await evaluate('document.querySelector("#room-refresh").disabled'),true);
+    await click('[data-zone="desk"]');assert.equal(await evaluate('document.querySelectorAll("[data-zone][aria-pressed=true]").length'),1);
+  });
+  await check('room keeps malicious record text literal and marks stale data',async()=>{
+    const original=await evaluate('fetch("/api/room").then(r=>r.json())');
+    const hostile={...original,mode:'activity',connection:'stale',goals:[],decisions:[{...original.decisions[0],reason:'<img src=x onerror="window.ROOM_INJECTED=1">'}]};
+    await cdp('Fetch.enable',{patterns:[{urlPattern:'*/api/room',requestStage:'Request'}]});
+    const handler=async event=>{const msg=JSON.parse(event.data);if(msg.method==='Fetch.requestPaused')await cdp('Fetch.fulfillRequest',{requestId:msg.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'application/json'}],body:Buffer.from(JSON.stringify(hostile)).toString('base64')});};
+    socket.addEventListener('message',handler);
+    await cdp('Page.reload');await waitText('#room-source','旧快照');
+    assert.equal(await evaluate('document.querySelector("#journal-content").textContent.includes("<img")'),true);
+    assert.equal(await evaluate('window.ROOM_INJECTED || document.querySelectorAll("#journal-content img").length || 0'),0);
+    await cdp('Fetch.disable');socket.removeEventListener('message',handler);
+    await cdp('Page.reload');await waitText('#room-source','虚构演示');
+  });
+  await check('room mobile layout and reduced motion remain usable',async()=>{
+    await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+    await cdp('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
+    await pause(200);assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".room-whale")).animationName'),'none');
+    await click('[data-zone="shelf"]');await waitText('#journal-content','深海来信');
+    await screenshot('room-mobile.png',true);
+  });
   await check('no uncaught browser JavaScript exceptions',async()=>assert.deepEqual(errors,[]));
   }
 } finally {
-  if(socket)socket.close();chrome.kill();
+  if(socket)socket.close();chrome.kill();if(ownedServer)ownedServer.kill();
   await writeFile(path.join(output,'results.json'),JSON.stringify({base,checks,failures,errors},null,2));
   console.log(`Artifacts: ${output}`);
 }
