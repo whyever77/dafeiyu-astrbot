@@ -773,6 +773,11 @@ class EmotionAIPlugin(Star):
         state = await self.user_manager.get_user_state(user_key)
         orig_text = self._strip_internal_artifacts(resp.completion_text or "")
 
+        # Tool-call rounds are intermediate; analyze only the final visible reply.
+        if getattr(resp, "tools_call_args", None) or getattr(resp, "tools_call_name", None):
+            resp.completion_text = orig_text.strip()
+            return
+
         updates = {}
         if self.analysis_mode == "separate":
             updates = await self._analyze_emotion(event, state, orig_text)

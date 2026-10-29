@@ -18,7 +18,7 @@
 - `inject_emotional_context`：只保留对旧测试样本的清理，不再追加任何伪造消息；情感状态和语气只注入 `system_prompt`。
 - `_build_cognitive_context`：删除「必须 `<thought>`」「输出格式强制协议」「XML 模板」，只保留情感面板和语气要求。
 - `process_emotional_update`：主回复先做内部残留清洗；情感更新改为**独立分析调用**。
-- 独立分析只接收当前情感值、最近一条用户消息和刚生成的回复，要求 `deepseek-chat` 返回：
+- 独立分析只分析**最终可见回复**，工具调用中间轮不分析；输入当前情感值、最近一条用户消息和刚生成的回复，要求 `deepseek-chat` 返回：
   ```json
   {"updates": {"joy": 3, "favor": 2}, "reason": "一句话理由"}
   ```
