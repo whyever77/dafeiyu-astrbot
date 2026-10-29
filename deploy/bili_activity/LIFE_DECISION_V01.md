@@ -1,6 +1,6 @@
 # 生活决策 v0.1：先决定这一轮想做什么
 
-状态：本地实现，默认关闭，未部署。基于 `171e9b0`，分支 `codex/life-decision-v01`。
+状态：2026-10-29 已部署到云端并开启 planner（代码 `181fa6c` / v2.7.0）；云端 `enabled` 与 `periodic_enabled` 仍为 false，尚未产生真实决策记录。默认配置仍为关闭。
 这是自主生活进化清单的第一步：统一现有研究、写作、探索与休息的选择，记录理由并延续进度。
 跨 proactive_chat 的联系协调、虚拟房间、作息情绪和真实记忆策略仍为后续工作。
 
@@ -47,7 +47,7 @@
 | `life_decision_enabled` | false | 使用新的生活选择器；同时需要 life_enabled |
 | `life_repeat_cooldown_minutes` | 180 | 重复/失败与探索冷却窗口，整数 15–1440 |
 
-以下是未来实际部署后的操作示例，本轮没有执行它们或改动真实状态目录：
+以下为云端操作示例；2026-10-29 已执行 planner 开关，未改动 `activity`/`periodic`：
 
 ```bash
 # 需要已核对主人私聊、免打扰、已有一次性活动验收，并已开启 life_enabled。
@@ -68,6 +68,14 @@ python3 /opt/dafeiyu/tools/bili_activity/ops.py switch life_decision_enabled off
 `enabled` 表示功能开关组合，`activity_enabled / periodic_enabled / paused` 分别报告活动总开关、周期和暂停。
 `run_status=completed` 只表示该轮 Agent 正常返回，不证明目标完成；目标和作品完成仍按原有证据检查。
 休息记录的 `run_status=rested` 不对应一条执行成功的活动。
+
+## 部署记录（2026-10-29）
+
+- 代码：`181fa6c`（v2.7.0）；云端插件日志版本仍显示 `v0.5.0`（本次未改插件版本号）。
+- 部署：`release.py deploy --yes`；备份 `/opt/dafeiyu/backups/bili-activity-20261029T135732.428194Z.tar.gz`。
+- 开关：`life_decision_enabled=true`、`life_repeat_cooldown_minutes=180`；前置 `life_enabled=true`、`workshop_enabled=true`、`one_shot_verified=true`。
+- 未开启：`enabled=false`、`periodic_enabled=false`，所以 planner 暂时不会触发；`life-decisions` 查询为空。
+- 插件已加载、适配器已连接；未改人格、cron 或其他配置。
 
 ## 实现与恢复
 
@@ -111,11 +119,11 @@ $env:Path = 'C:\Program Files\Git\bin;' + $env:Path
 
 ## 主人后续现场验收
 
-1. 保留现有配置和周期状态，先部署检查，再单独开启新开关；不新增其他插件定时任务。
+1. 2026-10-29 已保留现有配置并单独开启 planner；`enabled/periodic_enabled` 仍关闭，以下现场验收待在打开活动后执行；不新增其他插件定时任务。
 2. 准备一个已有来源的小目标和一个草稿，验证选择理由、目标领取、实际内容及下一步一致。
 3. 用临时测试目标验证无进展时换方向或休息；检查休息没有 QQ 投递或新长期记忆。
 4. 重启后继续同一目标，前台占用手机时仍能离线写作；暂停或关闭后不再发起新工具调用。
 5. 问“你最近为什么想做这件事”，答案须对应选择记录和真实经历。
 
 真实模型是否自然采用这些安排、QQ 表达、跨日长期效果及 LivingMemory 实际召回均 UNVERIFIED。
-本轮没有部署、开启真实周期、调用真实账号写接口或发送 QQ。
+2026-10-29 已部署 v2.7.0 并开启 `life_decision_enabled`；未开启真实周期，未产生真实决策记录，未调用真实账号写接口或发送 QQ。上述现场验收仍未完成。
