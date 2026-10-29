@@ -2,8 +2,8 @@ import {Constellation, COLORS} from './graph.js';
 
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const KINDS={episode:'经历',preference:'偏好',knowledge:'知识',method:'方法',document:'文档',plan:'计划',relation:'关系',unclassified:'未分类'};
-const state={data:null,selected:null,view:'atlas',days:0,query:'',scope:null,rehearsed:new Set(),pinned:new Set(),kinds:new Set(Object.keys(KINDS))};
-let requestSerial=0,sliderTimer,toastTimer;
+const state={data:null,selected:null,view:'atlas',days:0,query:'',scope:null,rehearsed:new Set(),pinned:new Set(),kinds:new Set(Object.keys(KINDS)),autoSync:true};
+let requestSerial=0,sliderTimer,toastTimer,autoSyncing=false;const AUTO_SYNC_MS=60000;
 const graph=new Constellation($('#constellation'),selectMemory);
 function el(tag,className,text){const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;}
 function icon(name){const node=document.createElementNS('http://www.w3.org/2000/svg','svg');node.setAttribute('class','icon');const use=document.createElementNS(node.namespaceURI,'use');use.setAttribute('href',`#i-${name}`);node.append(use);return node;}
@@ -22,6 +22,28 @@ async function refresh(){
   try{const data=await api('/api/project',{scope:state.scope,days:state.days,query:state.query,rehearsed:[...state.rehearsed],pinned:[...state.pinned]});if(serial===requestSerial)install(data);}
   catch(error){if(serial===requestSerial)toast(error.message);}
 }
+function loadAutoSync(){try{state.autoSync=localStorage.getItem('observatory-auto-sync')!=='0';}catch{state.autoSync=true;}const box=$('#auto-sync');if(box)box.checked=state.autoSync;}
+async function syncLive(auto=false){
+  if(auto&&(!state.autoSync||document.visibilityState==='hidden'||!state.data?.connection?.enabled))return;
+  if(autoSyncing)return;
+  autoSyncing=true;
+  const button=$('#sync-livingmemory');
+  if(!auto){button.disabled=true;button.textContent='正在只读同步…';}
+  try{
+    const data=await api('/api/livingmemory/refresh',{scope:state.scope});
+    ++requestSerial;
+    if(!auto){resetExperiment();state.query='';$('#query').value='';}
+    install(data);
+    await refresh();
+    if(!auto)toast('已重新读取 LivingMemory，原库内容与访问计数未由此操作更新。');
+  }catch(error){
+    await refresh();
+    if(!auto)toast(error.message);
+  }finally{
+    autoSyncing=false;
+    if(!auto){button.disabled=false;button.textContent='同步真实记忆';}
+  }
+}
 function render(){
   const data=state.data;if(!data)return;
   for(const key of ['total','connections','clear','fading'])$(`#count-${key}`).textContent=String(data.stats[key]).padStart(2,'0');
@@ -30,14 +52,14 @@ function render(){
   $('#dataset-badge').textContent=live?(connection.state==='ready'?'LivingMemory · 真实只读':'LivingMemory · 旧快照'):data.demo?'演示记忆':'导入快照';
   $('#footer-mode').textContent=live?'真实内容 · 曲线与线索检索仍为本地模拟':data.demo?'虚构演示 · 不读取聊天记录':'导入快照 · 仅存在本地服务内存中';
   $('#source-panel').hidden=!live;$('#import-button').hidden=live;$('#reset-dataset').hidden=live;
-  $('#connection-about').textContent=live?'已连接 LivingMemory '+connection.version+' 的只读快照。手动同步会重新读取；浏览与实验不更新访问计数、不巩固、不删除原记忆。':'当前未连接 LivingMemory。所有实验只作用于内存快照，浏览不增加访问计数，不巩固、不删除原记忆。页面刷新会清空实验；服务重启会清空导入。';
+  $('#connection-about').textContent=live?'已连接 LivingMemory '+connection.version+' 的只读快照。每 60 秒自动同步（仅页面可见，可关闭）或手动同步会重新读取；浏览与实验不更新访问计数、不巩固、不删除原记忆。':'当前未连接 LivingMemory。所有实验只作用于内存快照，浏览不增加访问计数，不巩固、不删除原记忆。页面刷新会清空实验；服务重启会清空导入。';
   if(live){
     const c=connection.counts;
     $('#source-state').textContent=connection.state==='ready'?'已连接真实记忆 · 只读':'同步失败 · 正在显示上次快照';
     $('#source-panel').classList.toggle('stale',connection.state!=='ready');
     $('#source-detail').textContent=`LivingMemory ${connection.version} · ${c.documents_loaded} 篇文档 + ${c.atoms_loaded} 条有效原子 · ${data.scopes.length} 个独立作用域`;
     $('#source-exclusions').textContent=`过滤：${c.inactive_documents} 篇非活跃文档，${c.inactive_atoms} 条非活跃/过期原子；缺少归属或有效父记录：${c.unscoped+c.orphan_or_scope_mismatch_atoms} 条；无效 ${c.invalid_records} 条，超出上限 ${c.capacity_omitted} 条。`;
-    $('#source-sync-time').textContent=`快照时间 ${new Date(connection.synced_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})} · 手动刷新`;
+    $('#source-sync-time').textContent=`快照时间 ${new Date(connection.synced_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})} · ${state.autoSync?'每 60 秒自动同步':'手动刷新'}`;
   }
   $('#snapshot-date').textContent=`快照 ${date(data.as_of)} · 模拟至 ${date(data.projected_at)}`;
   $('#days').value=state.days;$('#days').style.setProperty('--progress',`${state.days/365*100}%`);
@@ -119,5 +141,9 @@ $('#import-file').addEventListener('change',async()=>{
   catch(error){$('#import-error').textContent=error instanceof SyntaxError?'文件不是有效的 JSON。':error.message;}
 });
 $('#reset-dataset').addEventListener('click',async()=>{try{const data=await api('/api/reset',{});++requestSerial;resetExperiment();state.query='';$('#query').value='';state.selected=null;state.kinds=new Set(Object.keys(KINDS));install(data);toast('已返回虚构演示数据。');}catch(error){toast(error.message);}});
-$('#sync-livingmemory').addEventListener('click',async()=>{const button=$('#sync-livingmemory');button.disabled=true;button.textContent='正在只读同步…';++requestSerial;try{const data=await api('/api/livingmemory/refresh',{scope:state.scope});resetExperiment();state.query='';$('#query').value='';install(data);toast('已重新读取 LivingMemory，原库内容与访问计数未由此操作更新。');}catch(error){await refresh();toast(error.message);}finally{button.disabled=false;button.textContent='同步真实记忆';}});
+$('#sync-livingmemory').addEventListener('click',()=>syncLive(false));
+loadAutoSync();
 try{install(await api('/api/snapshot'));}catch(error){toast(`无法连接本地服务：${error.message}`);$('#memory-detail').append(el('p','empty-state','请确认本地 Python 服务仍在运行，然后刷新页面。'));}
+$('#auto-sync').addEventListener('change',()=>{state.autoSync=$('#auto-sync').checked;try{localStorage.setItem('observatory-auto-sync',state.autoSync?'1':'0');}catch{}render();});
+setInterval(()=>syncLive(true),AUTO_SYNC_MS);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncLive(true);});
