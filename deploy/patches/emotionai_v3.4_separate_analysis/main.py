@@ -683,7 +683,7 @@ class EmotionAIPlugin(Star):
                     if legacy_fake_user in content_str:
                         skip_next = True
                         continue
-                    clean_content = self.history_clean_pattern.sub("", content_str).strip()
+                    clean_content = self._strip_internal_artifacts(content_str)
                     if clean_content:
                         new_ctx = ctx.copy()
                         new_ctx["content"] = clean_content
@@ -694,7 +694,7 @@ class EmotionAIPlugin(Star):
                     if legacy_fake_user in ctx:
                         skip_next = True
                         continue
-                    clean_str = self.history_clean_pattern.sub("", ctx).strip()
+                    clean_str = self._strip_internal_artifacts(ctx)
                     if clean_str:
                         cleaned_contexts.append(clean_str)
             req.contexts = cleaned_contexts

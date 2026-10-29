@@ -59,6 +59,7 @@ docker restart astrbot
 
 - 云端备份：`/opt/dafeiyu/backups/emotionai_separate_20261029_225640`
 - 已从 conversation 2 / 5 / 6 删除旧伪造三连；全库扫描 `[PROTOCOL_ENFORCEMENT]`、`星绘`、`报告前辈`、精确假用户消息均零命中。
+- 另外清理了历史 assistant/system 消息里的空 `xml` 围栏和 `<thought>` 块（含一条只有 thought、没有可见正文的旧消息）；用户可见正文保留。
 - 历史正文里仍有一句正常的「被系统自检打断」叙述，不是伪造注入消息，未删除。
 - 插件加载成功（v3.4），OneBot v11 适配器已连接。
 - 容器内纯逻辑测试通过：旧上下文清洗、`<thought>`/空围栏清洗、JSON 解析、`process_emotional_update` 流程。
