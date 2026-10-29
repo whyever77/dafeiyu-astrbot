@@ -8,6 +8,26 @@
 
 ## 运行
 
+Windows 桌面入口：**「记忆星海」鲸鱼图标**。双击后打开真实只读 LivingMemory；已有服务直接复用，
+未启动时用 `pythonw.exe` 隐藏启动，等待就绪后打开默认浏览器。连续点击串行检查启动状态，
+端口被其他服务或演示模式占用时提示，不覆盖、不结束现有进程，也不回退到虚构数据。
+
+在当前仓库中安装/更新桌面快捷方式（会保存当前仓库绝对路径，移动仓库后需重新运行）：
+
+```powershell
+& .\deploy\memory_observatory\install_shortcut.ps1 -Pythonw 'C:\Users\ACER\miniconda3\pythonw.exe'
+```
+
+图标原图与多尺寸 ICO 位于 `assets/memory-whale.png`、`static/memory-whale.ico`。
+删除桌面 `.lnk` 即可移除快捷方式；没有注册登录启动项或后台定时任务。
+关闭浏览器不会关闭本地观测服务。新服务提供不含记忆内容的 `/api/health` 供启动器检查；
+兼容已运行的旧 v0.2 时，仅在内存里核对页面标识与快照的真实来源字段，不导出或记录正文。
+
+2026-10-29 Windows 验证：`python -B -m unittest discover -s tests -p 'test_memory_*.py' -v`
+共 58 项通过（0 skip），包含启动器新增 10 项。实际调用桌面 `.lnk` 返回退出码 0，
+调用前后为同一个本地服务进程，来源检查均为真实 LivingMemory。
+图标使用内置图像生成工具，最终提示词与文件说明见 [ICON.md](assets/ICON.md)。
+
 在仓库根目录运行（Python 3.10+，仅标准库，无需安装依赖）：
 
 ```powershell

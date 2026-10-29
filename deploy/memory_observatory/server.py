@@ -90,6 +90,9 @@ class Handler(BaseHTTPRequestHandler):
         if path in ASSETS:
             filename, mime = ASSETS[path]
             self.send(200, (STATIC / filename).read_bytes(), mime)
+        elif path == "/api/health":
+            self.send(200, {"application": "dafeiyu-memory-observatory",
+                            "mode": "livingmemory" if self.server.source is not None else "local"})
         elif path == "/api/snapshot":
             with self.server.lock:
                 view = self.server.view()
