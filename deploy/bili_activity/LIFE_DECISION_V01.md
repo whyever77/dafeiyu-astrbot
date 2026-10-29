@@ -1,6 +1,6 @@
 # 生活决策 v0.1：先决定这一轮想做什么
 
-状态：2026-10-29 已部署到云端并开启 planner（代码 `181fa6c` / v2.7.0）；云端 `enabled` 与 `periodic_enabled` 仍为 false，尚未产生真实决策记录。默认配置仍为关闭。
+状态：2026-10-29 已部署到云端并开启 planner 与周期（代码 `181fa6c` / v2.7.0）；首轮真实决策为 `writing`，run `be8a4e25...` completed，作品 r7，目标完成。默认配置仍为关闭。
 这是自主生活进化清单的第一步：统一现有研究、写作、探索与休息的选择，记录理由并延续进度。
 跨 proactive_chat 的联系协调、虚拟房间、作息情绪和真实记忆策略仍为后续工作。
 
@@ -73,9 +73,9 @@ python3 /opt/dafeiyu/tools/bili_activity/ops.py switch life_decision_enabled off
 
 - 代码：`181fa6c`（v2.7.0）；云端插件日志版本仍显示 `v0.5.0`（本次未改插件版本号）。
 - 部署：`release.py deploy --yes`；备份 `/opt/dafeiyu/backups/bili-activity-20261029T135732.428194Z.tar.gz`。
-- 开关：`life_decision_enabled=true`、`life_repeat_cooldown_minutes=180`；前置 `life_enabled=true`、`workshop_enabled=true`、`one_shot_verified=true`。
-- 未开启：`enabled=false`、`periodic_enabled=false`，所以 planner 暂时不会触发；`life-decisions` 查询为空。
-- 插件已加载、适配器已连接；未改人格、cron 或其他配置。
+- 开关：`enabled=true`、`periodic_enabled=true`、`life_decision_enabled=true`、`life_repeat_cooldown_minutes=180`；前置 `life_enabled=true`、`workshop_enabled=true`、`one_shot_verified=true`。
+- 首轮真实决策：`action=writing`、`goal=8f4dcb66...`、`work=f99232fc...`、run `be8a4e257a4d4833a0152d23e930fd9a` completed；作品修订到 r7，目标转为 completed。候选 `explore` 43 分，未选。
+- `life-decisions` 现有 1 条记录；插件已加载、适配器已连接；未改人格、cron 或其他配置。
 
 ## 实现与恢复
 
@@ -119,11 +119,11 @@ $env:Path = 'C:\Program Files\Git\bin;' + $env:Path
 
 ## 主人后续现场验收
 
-1. 2026-10-29 已保留现有配置并单独开启 planner；`enabled/periodic_enabled` 仍关闭，以下现场验收待在打开活动后执行；不新增其他插件定时任务。
+1. 2026-10-29 已保留现有配置并开启 planner、`enabled` 与 `periodic_enabled`；首轮真实决策 `writing` 已完成，后续按 60–180 分钟周期继续现场验收；不新增其他插件定时任务。
 2. 准备一个已有来源的小目标和一个草稿，验证选择理由、目标领取、实际内容及下一步一致。
 3. 用临时测试目标验证无进展时换方向或休息；检查休息没有 QQ 投递或新长期记忆。
 4. 重启后继续同一目标，前台占用手机时仍能离线写作；暂停或关闭后不再发起新工具调用。
 5. 问“你最近为什么想做这件事”，答案须对应选择记录和真实经历。
 
 真实模型是否自然采用这些安排、QQ 表达、跨日长期效果及 LivingMemory 实际召回均 UNVERIFIED。
-2026-10-29 已部署 v2.7.0 并开启 `life_decision_enabled`；未开启真实周期，未产生真实决策记录，未调用真实账号写接口或发送 QQ。上述现场验收仍未完成。
+2026-10-29 已部署 v2.7.0，并开启 `life_decision_enabled`、`enabled` 与 `periodic_enabled`；首轮真实决策 `writing` 已完成（作品 r7、目标 completed）。未调用真实账号写接口或发送 QQ；跨日长期效果等现场验收仍未完成。
