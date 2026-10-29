@@ -39,8 +39,8 @@ sender 源码固定于[上游提交 2dab585](https://github.com/Pancakes-Labs/as
 
 ## 安装 / 升级后检查
 
-以下由主人后续操作，本轮未部署。先确认标准 AstrBot data/plugins 与 plugin_data 布局。
-默认只检查；版本不匹配时不生成备份、不修改目标文件。不要绕过哈希检查强行覆盖。
+2026-10-30 已在云端安装；备份 `.dafeiyu-contact-backup-20261029T163946620609Z`。以下为可复现步骤。
+先确认标准 AstrBot data/plugins 与 plugin_data 布局。默认只检查；版本不匹配时不生成备份、不修改目标文件。不要绕过哈希检查强行覆盖。
 
 ```bash
 python install_contact.py --plugin-dir <现有社区插件目录>

@@ -8,9 +8,9 @@
 
 [记忆星海 v0.2](deploy/memory_observatory/README.md)：本地深海风格记忆星图、时间线、遗忘模拟与来源检查。已接通运行中的 LivingMemory 2.7.0-beta.2，只读展示真实文档、记忆原子和来源关系，支持手动同步；曲线与线索检索仍为本地模拟，不修改 QQ 中的记忆行为。使用已有运维 SSH 配置，在仓库根目录运行 `python -B -m deploy.memory_observatory.server --port 8767 --livingmemory-ssh`，打开 `http://127.0.0.1:8767`。不加 `--livingmemory-ssh` 则使用虚构演示数据。实测与边界见[接入验收](deploy/memory_observatory/LIVINGMEMORY_V02.md)。
 
-未发布的[生活决策 v0.1](deploy/bili_activity/LIFE_DECISION_V01.md)：复用已有调度、目标与预算，根据自己的兴趣、未完成项目和近期尝试选择研究、写作、探索或休息，记录理由并支持主人查询。默认关闭，尚未部署；休息不调用模型、不发消息、不写入虚构经历。
+[生活决策 v0.1](deploy/bili_activity/LIFE_DECISION_V01.md)：复用已有调度、目标与预算，根据自己的兴趣、未完成项目和近期尝试选择研究、写作、探索或休息，记录理由并支持主人查询。2026-10-29 已部署并开启，首轮真实决策为 writing；休息不调用模型、不发消息、不写入虚构经历。
 
-后续的[主动联系协调 v0.1](deploy/bili_activity/CONTACT_V01.md) 已完成本地实现：生活分享与 proactive_chat 共用联系额度、间隔和未回应记录，主人正在聊天时先让出时间。默认关闭，需配套社区补丁，真实 QQ 联动尚未验收。
+[主动联系协调 v0.1](deploy/bili_activity/CONTACT_V01.md)：生活分享与 proactive_chat 共用联系额度、间隔和未回应记录，主人正在聊天时先让出时间。2026-10-30 已部署云端并开启，社区补丁已安装，额度 1/120/5/1；真实 QQ 联动 smoke 尚未执行。
 
 本分支新增[B站评论区互动 v0.5](deploy/bili_activity/INTERACT_V05.md)：在现有提议、主人批准、操作账本和回读链上扩展点赞/取消赞、投币、弹幕、互动配额与风控、回复监听和评论区观察。默认仍逐条审批，新增开关默认关闭；`verified` 与公开可见性分别报告。保留[研究方法复用](deploy/bili_activity/LIFE_V04.md)、[来源笔记与自主续写](deploy/bili_activity/LIFE_V03.md)及既有真实 smoke。v0.5 只完成本地代码和离线测试，未部署、未操作真实账号；开启、低配额建议、回滚和主人小号 smoke 见[互动文档](deploy/bili_activity/INTERACT_V05.md)。
 

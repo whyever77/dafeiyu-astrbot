@@ -1,6 +1,6 @@
 # 主动联系协调 v0.1
 
-2026-10-30，本地实现、默认关闭、尚未部署。接续[生活决策](LIFE_DECISION_V01.md)：
+2026-10-30，已在云端部署并开启协调；proactive_chat 社区补丁也已安装，额度设为 1/120/5/1。真实 QQ 联动 smoke 尚未执行（当前处于 23:00–08:00 免打扰）。接续[生活决策](LIFE_DECISION_V01.md)：
 让她保留自己的活动，又能在刚分享过、主人正在聊天或连续没有回应时安静下来。
 本阶段协调联系时机，不增加定时任务，不生成虚构经历，不改变人格。
 
@@ -33,7 +33,7 @@
 共享层使用原 `owner_scope` / `owner_id` 和 `dnd_ranges`。不推断新的免打扰时段。
 不要求开启 B站公开写操作；生活侧仍必须通过现有 enabled、life、goal、methods、审批等检查。
 
-主人完成安装检查后，可用原 ops 命令配置（本轮没有执行真实配置写入）：
+2026-10-30 已执行以下配置（实际额度 1、间隔 120、主人留白 5、未回应 1）：
 
 ```bash
 python ops.py --data-dir <原B站插件数据目录> configure --contact-daily-limit 1 --contact-cooldown-minutes 120 --contact-unanswered-limit 1
@@ -111,10 +111,18 @@ $env:Path = 'C:\Program Files\Git\bin;' + $env:Path
 停用/免打扰复查、预留和发送后取消、重启未知结果防重、过期预留释放、生成前省调用、
 TTS/分段计数、主人插话、缺协调器、默认关闭、审批仍需主人确认、安装哈希/备份/回滚。
 
+## 部署记录（2026-10-30）
+
+- B站插件已部署 main `7912bcc`；备份 `bili-activity-20261029T163641.318699Z.tar.gz`。
+- proactive_chat 补丁已安装；备份 `.dafeiyu-contact-backup-20261029T163946620609Z`。
+- `contact_coordination_enabled=true`，`contact_daily_limit=1`、`contact_cooldown_minutes=120`、`contact_owner_quiet_minutes=5`、`contact_unanswered_limit=1`。
+- `enabled/periodic_enabled/life_enabled/life_decision_enabled` 仍为 true；proactive_chat 私聊已启用。
+- AstrBot 两插件加载正常，OneBot v11 适配器已连接；`contacts` 目前为空，真实发送 smoke 待免打扰结束后执行。
+
 ## 主人后续最小 smoke 与回滚
 
-1. 备份现有配置与 activity.sqlite3，暂停 AstrBot 后运行社区补丁只读检查；不匹配先停下核对源码。
-2. 安装本次生活插件及社区补丁，保持 B站公开写入关闭，联系额度 1、间隔 120 分钟、未回应上限 1。
+1. 已完成：备份现有配置与 activity.sqlite3，社区补丁只读检查通过并已安装。
+2. 已完成：安装本次生活插件及社区补丁，保持 B站公开写入关闭，联系额度 1、间隔 120 分钟、未回应上限 1。
 3. 先由生活侧分享一个有真实来源的感想，再触发社区主动聊天；第二次不发送，账本来源/额度正确。
 4. 换一个测试日/独立临时配置反向验证社区先发；观察 reported 不冒充 QQ 已核验回执。
 5. 主人在 TTS 合成或第一段后插话，确认剩余内容停下；确认前台正常聊天不受主动额度阻挡。
