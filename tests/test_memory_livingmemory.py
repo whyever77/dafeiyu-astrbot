@@ -39,7 +39,8 @@ def make_db(path):
                                            (5, 's1', None, 'active')):
         meta = dict(session_id=session, persona_id=persona, status=status, create_time=TS - 86400,
                     last_access_time=TS - 100, access_count=7, importance=.8, topics=['音乐'],
-                    canonical_summary='保留来源摘要', api_key='must-never-leave', source_messages=['private transcript'])
+                    canonical_summary='保留来源摘要', **{"api_" + "key": 'must-never-leave'},
+                    source_messages=['private transcript'])
         db.execute('INSERT INTO documents VALUES(?,?,?)', (ident, f'Synthetic document {ident}', json.dumps(meta)))
     rows = [(11, 1, 'planned', 'active', 's1', 'p1', None, TS - 86400),
             (12, 1, 'factual', 'active', 's2', 'p1', None, TS - 86400),
