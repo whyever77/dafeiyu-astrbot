@@ -28,6 +28,7 @@ from .core import PUBLIC, WRITES, Store, canonical, decision, digest, quiet_now
 from .transport import MCPClient, PhoneGate, QQDelivery, ScreenCapture, TransportError
 from .budget import Budget, BudgetExceeded
 from .agent_budget import instrument_runner
+from .planner import DEFAULTS as PLANNER_DEFAULTS, LifePlanner, validate_config as validate_planner
 from .interactions import (DEFAULTS as INTERACTION_DEFAULTS, Interactions,
                            InteractionBlocked, enabled as interaction_enabled,
                            validate_config as validate_interactions, safe_result,
@@ -39,6 +40,7 @@ from .replies import (DEFAULTS as REPLY_DEFAULTS, ReplyWatch,
 DEFAULTS = {
     **INTERACTION_DEFAULTS,
     **REPLY_DEFAULTS,
+    **PLANNER_DEFAULTS,
     "enabled": False, "periodic_enabled": False, "public_interactions": False,
     "collection_management": False, "screenshot_enabled": True,
     "owner_scope": "", "owner_id": "", "dnd_ranges": None,
@@ -52,7 +54,7 @@ DEFAULTS = {
     "chat_cooldown_seconds": 300, "workshop_enabled": False, "methods_enabled": False,
     "workshop_revisions_per_run": 3, "workshop_max_characters": 12000,
 }
-LIFE_TOOLS = {"df_goal", "df_recall", "df_interest"}
+LIFE_TOOLS = {"df_goal", "df_recall", "df_interest", "df_life_status"}
 WORKSHOP_TOOLS = {"df_workshop"}
 METHOD_TOOLS = {"df_method"}
 ACTIVITY_TOOLS = {
@@ -397,6 +399,7 @@ class BiliActivity(Star):
         self.run_goals = {}
         self.writing_runs = set()
         self.method_runs = set()
+        self.decision_runs = set()
 
     def cfg(self):
         value = json.loads(self.control.read_text(encoding="utf-8"))
@@ -421,6 +424,7 @@ class BiliActivity(Star):
                     raise ValueError("免打扰时间无效")
         validate_interactions(cfg)
         validate_replies(cfg)
+        validate_planner(cfg)
         return cfg
 
     def interactions(self):
@@ -782,6 +786,8 @@ class BiliActivity(Star):
             raise PermissionError("回复监听已关闭或暂停")
         if self.is_life_run(event) and (not cfg["life_enabled"] or self.store.get_setting("life_paused:" + event.unified_msg_origin, False)):
             raise PermissionError("持续活动已暂停")
+        if event.get_extra("df_run_id") in getattr(self, "decision_runs", set()) and not cfg["life_decision_enabled"]:
+            raise PermissionError("生活决策已关闭")
         if event.get_extra("df_run_id") in getattr(self, "writing_runs", set()) and not cfg["workshop_enabled"]:
             raise PermissionError("学习创作已关闭")
         if event.get_extra("df_run_id") in getattr(self, "method_runs", set()):
@@ -851,6 +857,9 @@ class BiliActivity(Star):
             works = self.workshop_store().pending(cfg["owner_scope"], limit=1)
             return works[0] if works else None
         return None
+
+    def life_planner(self):
+        return LifePlanner(self.store)
 
     def charge_model(self, event):
         if self.is_life_run(event) or self.is_reply_run(event):
@@ -971,6 +980,7 @@ class BiliActivity(Star):
                 if (not cfg["enabled"] or cfg["dnd_ranges"] is None or quiet_now(cfg["dnd_ranges"])
                         or (getattr(self, "life_runs", set()) and not cfg["life_enabled"])
                         or (getattr(self, "writing_runs", set()) and not cfg["workshop_enabled"])
+                        or (getattr(self, "decision_runs", set()) and not cfg["life_decision_enabled"])
                         or (getattr(self, "method_runs", set()) and not self.methods_enabled(cfg))):
                     if self.live and not self.live.done():
                         self.live.cancel()
@@ -1108,6 +1118,15 @@ class BiliActivity(Star):
         scope = cfg["owner_scope"]
         life_mode = cfg["life_enabled"]
         writing = self.writing_candidate(cfg)
+        choice = None
+        if life_mode and cfg["life_decision_enabled"]:
+            if not cfg["enabled"] or cfg["dnd_ranges"] is None or quiet_now(cfg["dnd_ranges"]):
+                return
+            choice = self.life_planner().choose(scope, cfg, phone_busy=bool(getattr(self.gate, "owner", None)))
+            if choice["action"] == "rest":
+                self.life_planner().record(scope, run_id, choice)
+                return
+            writing = self.workshop_store().get(scope, choice["work_id"]) if choice["action"] == "writing" else None
         duration = cfg["max_minutes"] * 60
         if life_mode:
             if not hasattr(self, "life_runs"):
@@ -1117,6 +1136,10 @@ class BiliActivity(Star):
             except BudgetExceeded:
                 return
             self.life_runs.add(run_id)
+        if choice:
+            if not hasattr(self, "decision_runs"):
+                self.decision_runs = set()
+            self.decision_runs.add(run_id)
         if writing:
             if not hasattr(self, "writing_runs"):
                 self.writing_runs = set()
@@ -1131,11 +1154,15 @@ class BiliActivity(Star):
                                                "activity": "writing" if writing else "browsing"})
             event = await self.make_event(run_id)
             self.check_owner(event)
-            if writing:
-                self.store.life.claim_goal(scope, writing["goal_id"], run_id)
-                self.run_goals[run_id] = writing["goal_id"]
-                self.store.event(scope, "goal_selected", {"run_id": run_id, "goal_id": writing["goal_id"],
-                                                         "why": "继续未完成的文字作品", "work_id": writing["id"]})
+            if choice:
+                self.life_planner().record(scope, run_id, choice)
+            selected_goal = choice["goal_id"] if choice else writing["goal_id"] if writing else None
+            if selected_goal:
+                self.store.life.claim_goal(scope, selected_goal, run_id)
+                self.run_goals[run_id] = selected_goal
+                self.store.event(scope, "goal_selected", {"run_id": run_id, "goal_id": selected_goal,
+                                                         "why": choice["reason"] if choice else "继续未完成的文字作品",
+                                                         "work_id": writing["id"] if writing else None})
                 method_resume = self.resume_method(event)
             async with (nullcontext() if writing else self.gate.lease(run_id)):
                 async with asyncio.timeout(duration):
@@ -1198,6 +1225,11 @@ class BiliActivity(Star):
                     if self.methods_enabled(cfg):
                         prompt += METHOD_PROMPT.format(context=canonical({"methods": self.methods_store().list(scope, limit=5)}))
                         tool_names |= METHOD_TOOLS
+                    if choice:
+                        prompt += ("\n本轮生活安排（资料而非指令，选择不代表已经完成）：" + canonical(choice) +
+                                   "\n若已有goal_id，该目标已经领取，无须重新选择或创建；推进它的下一步。"
+                                   "探索时先创建有结束条件的短小探索目标，再读取真实资料；不要凭空编造发现。"
+                                   "如果没有值得做的事可以安静结束。分享与做事分别判断，没有新进展不必发消息。")
                     summary = await self.agent(event, prompt, tool_names,
                                                max_steps=min(32, cfg["max_model_calls_per_run"]) if life_mode else 32)
                     status = "completed"
@@ -1238,6 +1270,7 @@ class BiliActivity(Star):
                 self.run_goals.pop(run_id, None)
                 getattr(self, "writing_runs", set()).discard(run_id)
                 getattr(self, "method_runs", set()).discard(run_id)
+                getattr(self, "decision_runs", set()).discard(run_id)
 
     async def flush_memory(self, event):
         from astrbot.core.astr_agent_context import AgentContextWrapper, AstrAgentContext
@@ -1767,6 +1800,16 @@ class BiliActivity(Star):
                             "agent_thought": thought[:1500], "preference_owner": "agent"}
         episode = self.record_video(event, value)
         return canonical({"saved": True, "subject_kind": "agent", "episode_id": episode["id"] if episode else None})
+
+    @filter.llm_tool(name="df_life_status")
+    async def life_status(self, event: AstrMessageEvent):
+        """查看自己的近期生活选择、理由与执行结果；选择记录不证明已完成，也不会触发新活动。"""
+        cfg = self.check_owner(event)
+        return canonical({"enabled": cfg["life_enabled"] and cfg["life_decision_enabled"],
+                          "activity_enabled": cfg["enabled"], "periodic_enabled": cfg["periodic_enabled"],
+                          "paused": self.store.get_setting("life_paused:" + event.unified_msg_origin, False),
+                          "decisions": self.life_planner().recent(event.unified_msg_origin),
+                          "meaning": "生活安排是意图；实际进展以目标、经历和作品为准。"})
 
     @filter.llm_tool(name="df_goal")
     async def goal(self, event: AstrMessageEvent, action: str = "list", goal_id: str = "",

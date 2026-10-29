@@ -32,6 +32,8 @@ DEFAULTS = {
     "collection_management": False,
     "screenshot_enabled": True,
     "life_enabled": False,
+    "life_decision_enabled": False,
+    "life_repeat_cooldown_minutes": 180,
     "workshop_enabled": False,
     "methods_enabled": False,
     "workshop_revisions_per_run": 3,
@@ -70,6 +72,7 @@ NUMERIC_LIMITS = {
     "daily_model_calls": (1, 1000), "daily_shares": (0, 50),
     "screenshots_per_run": (0, 10), "chat_cooldown_seconds": (0, 3600),
     "workshop_revisions_per_run": (1, 10), "workshop_max_characters": (500, 20000),
+    "life_repeat_cooldown_minutes": (15, 1440),
 }
 
 
@@ -186,6 +189,20 @@ def read_episodes(folder, scope, limit=8, goal_id=None):
                      "SELECT id,goal_id,run_id,occurred_at,kind,subject_kind,subject_id,source_id "
                      "FROM episodes WHERE scope=?" + where + " ORDER BY occurred_at DESC LIMIT ?",
                      params, optional_table="episodes")
+
+
+def read_life_decisions(folder, scope, limit=8):
+    rows = read_rows(folder, "SELECT details FROM events WHERE scope=? "
+                    "AND kind IN ('life_decision','life_rest') ORDER BY seq DESC LIMIT ?",
+                    (scope, max(1, min(32, limit))), optional_table="events")
+    result = []
+    for row in rows:
+        item = json.loads(row["details"])
+        run = read_rows(folder, "SELECT status FROM runs WHERE scope=? AND id=?",
+                        (scope, item["run_id"]), optional_table="runs")
+        item["run_status"] = run[0]["status"] if run else "rested" if item["action"] == "rest" else "not_started"
+        result.append(item)
+    return result
 
 
 def read_budget(folder, scope):
@@ -322,7 +339,7 @@ def main(argv=None):
     once = sub.add_parser("once")
     once.add_argument("--delay-seconds", type=int, default=180)
     switches = sub.add_parser("switch")
-    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled", "auto_public"])
+    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "life_decision_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled", "auto_public"])
     switches.add_argument("value", choices=["on", "off"])
     accepted = sub.add_parser("accept-one-shot")
     accepted.add_argument("--evidence", type=Path, required=True,
@@ -332,6 +349,8 @@ def main(argv=None):
     goals = sub.add_parser("goals", help="只读查看当前主人私聊的持续目标")
     goals.add_argument("--limit", type=int, default=8)
     goals.add_argument("--all", action="store_true", help="同时显示已完成或已取消目标")
+    decisions = sub.add_parser("life-decisions", help="只读查看生活选择与理由；选择不等于执行成功")
+    decisions.add_argument("--limit", type=int, default=8)
     episodes = sub.add_parser("episodes", help="只读查看当前主人私聊的经历索引")
     episodes.add_argument("--limit", type=int, default=8)
     episodes.add_argument("--goal-id")
@@ -362,11 +381,16 @@ def main(argv=None):
                           "deliveries": read_rows(folder, "SELECT id,kind,status,created,receipt FROM deliveries ORDER BY created DESC LIMIT 10"),
                           "goals": read_goals(folder, control["owner_scope"]),
                           "episodes": read_episodes(folder, control["owner_scope"]),
+                          "life_decisions": read_life_decisions(folder, control["owner_scope"]),
                           "budget": read_budget(folder, control["owner_scope"]),
                           "works": read_works(folder, control["owner_scope"]),
                           "methods": read_methods(folder, control["owner_scope"]),
                           "method_attempts": read_method_attempts(folder, control["owner_scope"])},
                          ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "life-decisions":
+        control = load_control(folder)
+        print(json.dumps(read_life_decisions(folder, control["owner_scope"], args.limit), ensure_ascii=False, indent=2))
         return 0
     if args.command == "method":
         control = load_control(folder)
@@ -458,6 +482,10 @@ def main(argv=None):
         elif args.command == "disable-periodic":
             control["periodic_enabled"] = False
         elif args.command == "switch":
+            if args.name == "life_decision_enabled" and args.value == "on":
+                ready(control)
+                if control["life_enabled"] is not True or control["one_shot_verified"] is not True:
+                    raise ValueError("先完成一次性活动验收并开启 life_enabled，再开启生活决策")
             if args.name == "life_enabled" and args.value == "on":
                 ready(control)
                 if control["one_shot_verified"] is not True:
