@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from .demo import demo_snapshot
 from .model import InvalidSnapshot, normalize, project
+from .livingmemory_reader import SourceError
 
 STATIC = Path(__file__).parent / "static"
 MAX_BODY = 4 * 1024 * 1024
@@ -23,13 +24,29 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
 class ObservatoryServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address=("127.0.0.1", 8766)):
+    def __init__(self, address=("127.0.0.1", 8766), *, source=None):
         if address[0] != "127.0.0.1":
             raise ValueError("Only 127.0.0.1 is supported")
         self.snapshot = demo_snapshot()
         self.demo = True
         self.lock = threading.Lock()
+        self.refresh_lock = threading.Lock()
+        self.source, self.connection = source, None
+        if source is not None:
+            # Fail startup on first-read failure; never silently show fiction.
+            self.snapshot, self.connection = source.load()
+            self.demo = False
         super().__init__(address, Handler)
+
+    def view(self, scope=None, **kwargs):
+        scopes = {m["scope"] for m in self.snapshot["memories"]}
+        if scope not in scopes:
+            scope = self.snapshot["memories"][0]["scope"] if scopes else None
+        view = project(self.snapshot, scope=scope, **kwargs)
+        view["demo"] = self.demo
+        if self.connection is not None:
+            view["connection"] = self.connection.copy()
+        return view
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -75,9 +92,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, (STATIC / filename).read_bytes(), mime)
         elif path == "/api/snapshot":
             with self.server.lock:
-                first = self.server.snapshot["memories"][0]["scope"]
-                view = project(self.server.snapshot, scope=first)
-                view["demo"] = self.server.demo
+                view = self.server.view()
             self.send(200, view)
         elif path == "/api/example":
             # Clean interchange data, never an export of someone's imported snapshot.
@@ -101,6 +116,9 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise InvalidSnapshot("请求必须是 JSON 对象")
             path = urlsplit(self.path).path
+            if self.server.source is not None and path in ("/api/import", "/api/reset"):
+                self.send(409, {"error": "当前连接真实只读源；请在另一个端口启动演示或导入模式。"})
+                return
             if path == "/api/import":
                 incoming = normalize(body)  # Complete validation before replacing any state.
                 with self.server.lock:
@@ -117,6 +135,27 @@ class Handler(BaseHTTPRequestHandler):
                     view = project(self.server.snapshot, scope=body.get("scope"), days=body.get("days", 0),
                                    query=body.get("query", ""), rehearsed=body.get("rehearsed", []), pinned=body.get("pinned", []))
                     view["demo"] = self.server.demo
+                    if self.server.connection is not None:
+                        view["connection"] = self.server.connection.copy()
+            elif path == "/api/livingmemory/refresh":
+                if self.server.source is None:
+                    self.send(409, {"error": "此服务未配置 LivingMemory 只读源"})
+                    return
+                if not self.server.refresh_lock.acquire(blocking=False):
+                    self.send(409, {"error": "正在读取，请等待当前同步完成"})
+                    return
+                try:
+                    snapshot, info = self.server.source.load()
+                    with self.server.lock:
+                        self.server.snapshot, self.server.connection = snapshot, info
+                        view = self.server.view(body.get("scope"))
+                except SourceError:
+                    with self.server.lock:
+                        self.server.connection = {**self.server.connection, "state": "stale"}
+                    self.send(503, {"error": "同步失败；仍显示上次快照，不代表当前在线状态。"})
+                    return
+                finally:
+                    self.server.refresh_lock.release()
             else:
                 self.send(404, {"error": "未找到接口"})
                 return
@@ -128,10 +167,22 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="大肥鱼 · 本地记忆星海（不连接真实记忆）")
+    parser = argparse.ArgumentParser(description="大肥鱼 · 本地记忆星海（演示或显式连接只读源）")
     parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument("--livingmemory-ssh", action="store_true", help="使用现有 SSH 配置只读连接 LivingMemory")
     args = parser.parse_args()
-    with ObservatoryServer(("127.0.0.1", args.port)) as server:
+    source = None
+    if args.livingmemory_ssh:
+        from .livingmemory import SSHMemorySource
+        try:
+            source = SSHMemorySource()
+        except SourceError as exc:
+            parser.exit(1, str(exc) + "\n")
+    try:
+        server = ObservatoryServer(("127.0.0.1", args.port), source=source)
+    except SourceError as exc:
+        parser.exit(1, str(exc) + "\n")
+    with server:
         print(f"Memory observatory: http://127.0.0.1:{server.server_port} (local, in-memory only)", flush=True)
         try:
             server.serve_forever()

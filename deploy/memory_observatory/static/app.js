@@ -1,7 +1,7 @@
 import {Constellation, COLORS} from './graph.js';
 
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const KINDS={episode:'经历',preference:'偏好',knowledge:'知识',method:'方法'};
+const KINDS={episode:'经历',preference:'偏好',knowledge:'知识',method:'方法',document:'文档',plan:'计划',relation:'关系',unclassified:'未分类'};
 const state={data:null,selected:null,view:'atlas',days:0,query:'',scope:null,rehearsed:new Set(),pinned:new Set(),kinds:new Set(Object.keys(KINDS))};
 let requestSerial=0,sliderTimer,toastTimer;
 const graph=new Constellation($('#constellation'),selectMemory);
@@ -14,7 +14,7 @@ async function api(path,body){const response=await fetch(path,body===undefined?{
 function install(data){
   state.data=data;state.scope=data.scope;
   if(!data.memories.some(m=>m.id===state.selected))state.selected=data.memories[0]?.id||null;
-  $('#scope').replaceChildren(...data.scopes.map(scope=>{const option=el('option','',scope);option.value=scope;option.selected=scope===data.scope;return option;}));
+  $('#scope').replaceChildren(...data.scopes.map(scope=>{const option=el('option','',data.connection?.scopes?.[scope]?.label||scope);option.value=scope;option.selected=scope===data.scope;return option;}));
   render();
 }
 async function refresh(){
@@ -26,12 +26,23 @@ function render(){
   const data=state.data;if(!data)return;
   for(const key of ['total','connections','clear','fading'])$(`#count-${key}`).textContent=String(data.stats[key]).padStart(2,'0');
   $('#scope-count').textContent=`${data.stats.total} 个片段`;
-  $('#dataset-badge').textContent=data.demo?'演示记忆':'导入快照';
-  $('#footer-mode').textContent=data.demo?'虚构演示 · 不读取聊天记录':'导入快照 · 仅存在本地服务内存中';
+  const connection=data.connection,live=Boolean(connection?.enabled);
+  $('#dataset-badge').textContent=live?(connection.state==='ready'?'LivingMemory · 真实只读':'LivingMemory · 旧快照'):data.demo?'演示记忆':'导入快照';
+  $('#footer-mode').textContent=live?'真实内容 · 曲线与线索检索仍为本地模拟':data.demo?'虚构演示 · 不读取聊天记录':'导入快照 · 仅存在本地服务内存中';
+  $('#source-panel').hidden=!live;$('#import-button').hidden=live;$('#reset-dataset').hidden=live;
+  $('#connection-about').textContent=live?'已连接 LivingMemory '+connection.version+' 的只读快照。手动同步会重新读取；浏览与实验不更新访问计数、不巩固、不删除原记忆。':'当前未连接 LivingMemory。所有实验只作用于内存快照，浏览不增加访问计数，不巩固、不删除原记忆。页面刷新会清空实验；服务重启会清空导入。';
+  if(live){
+    const c=connection.counts;
+    $('#source-state').textContent=connection.state==='ready'?'已连接真实记忆 · 只读':'同步失败 · 正在显示上次快照';
+    $('#source-panel').classList.toggle('stale',connection.state!=='ready');
+    $('#source-detail').textContent=`LivingMemory ${connection.version} · ${c.documents_loaded} 篇文档 + ${c.atoms_loaded} 条有效原子 · ${data.scopes.length} 个独立作用域`;
+    $('#source-exclusions').textContent=`过滤：${c.inactive_documents} 篇非活跃文档，${c.inactive_atoms} 条非活跃/过期原子；缺少归属或有效父记录：${c.unscoped+c.orphan_or_scope_mismatch_atoms} 条；无效 ${c.invalid_records} 条，超出上限 ${c.capacity_omitted} 条。`;
+    $('#source-sync-time').textContent=`快照时间 ${new Date(connection.synced_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})} · 手动刷新`;
+  }
   $('#snapshot-date').textContent=`快照 ${date(data.as_of)} · 模拟至 ${date(data.projected_at)}`;
   $('#days').value=state.days;$('#days').style.setProperty('--progress',`${state.days/365*100}%`);
   $('#day-label').textContent=state.days?`向未来 ${state.days} 天`:'快照当日';
-  for(const button of $$('.kind-filter')){button.setAttribute('aria-pressed',String(state.kinds.has(button.dataset.kind)));button.querySelector('span').textContent=data.memories.filter(m=>m.kind===button.dataset.kind).length;}
+  $('#kind-filters').replaceChildren(...Object.entries(KINDS).filter(([kind])=>['episode','preference','knowledge','method'].includes(kind)||data.memories.some(m=>m.kind===kind)).map(([kind,label])=>{const button=el('button','kind-filter');button.dataset.kind=kind;button.setAttribute('aria-pressed',String(state.kinds.has(kind)));button.append(el('i',`dot ${kind}`),document.createTextNode(label),el('span','',data.memories.filter(m=>m.kind===kind).length));return button;}));
   $('#lab-summary').textContent=`模拟第 ${state.days} 天：${data.stats.clear} 段仍然清晰，${data.stats.fading} 段正在淡去，${data.stats.dormant} 段细节已沉入深处。${data.stats.protected} 段被保留。`;
   graph.setData(data,state.selected,state.kinds);renderDetail();renderShelf();renderTimeline();renderTrace();
 }
@@ -60,8 +71,9 @@ function renderDetail(){
     if(button.disabled){button.textContent='原记录已保留';button.title='源快照中的保留状态在此处不可取消';}
     button.addEventListener('click',()=>{if(set.has(m.id))set.delete(m.id);else set.add(m.id);refresh();});actions.append(button);
   }
-  const source=el('div','source-box');source.append(el('span','','记忆来源'),document.createTextNode(m.source),el('small','',`作用域：${m.scope} · 可信度来自导入字段`));
+  const source=el('div','source-box');source.append(el('span','','记忆来源'),document.createTextNode(m.source),el('small','',`作用域：${state.data.connection?.scopes?.[m.scope]?.label||m.scope} · 可信度来自来源字段`));
   target.append(kind,el('h2','detail-title',m.title),el('p','detail-text',m.text),gist,scores,curveLabel,curveSVG(m),key,actions,el('p','experiment-note','实验仅改变当前视图，浏览不会强化记忆。'),source);
+  if(m.upstream){const u=m.upstream;const facts=el('div','upstream-facts');facts.append(el('h3','','原库记录 · 观测值'));const lines=[`类型：${u.atom_type||u.record_type} · 状态：${u.status}`];if(u.access_count!==undefined)lines.push(`原库访问次数：${u.access_count}（此页面不增加）`);if(u.reinforcement_count!==undefined)lines.push(`原库强化次数：${u.reinforcement_count}`);if(u.ttl_days!==undefined)lines.push(`原库 TTL：${u.ttl_days} 天；不是模拟半衰期`);if(u.expires_at)lines.push(`原库过期时间：${date(u.expires_at)}`);if(u.atom_type==='planned')lines.push('这是计划，不代表已经发生。');if(u.truncated)lines.push('正文超过展示上限，当前仅展示前 4,000 字符。');if(!u.access_time_known)lines.push('缺少可用的访问时间；模拟年龄暂从创建时间计算。');for(const line of lines)facts.append(el('p','',line));if(u.relations?.length){facts.append(el('h3','','原图谱关系 · 来源抽取，非事实核验'));for(const relation of u.relations)facts.append(el('p','',`${relation.source} → ${relation.relation} → ${relation.target}`));}target.append(facts);}
   const related=state.data.edges.filter(e=>e.source===m.id||e.target===m.id).slice(0,3);
   if(related.length)target.append(el('h3','related-title','沿着微光，继续想起'));
   for(const edge of related){const other=state.data.memories.find(v=>v.id===(edge.source===m.id?edge.target:edge.source));if(!other)continue;const button=el('button','related-item');const text=el('span','',other.title);text.append(el('small','',edge.inferred?'共同主题 · 推导联想':edge.label));button.append(text,icon('arrow'));button.addEventListener('click',()=>selectMemory(other.id));target.append(button);}
@@ -89,7 +101,7 @@ function setView(view){
 }
 function resetExperiment(){state.days=0;state.rehearsed.clear();state.pinned.clear();}
 for(const button of $$('.nav-item'))button.addEventListener('click',()=>setView(button.dataset.view));
-for(const button of $$('.kind-filter'))button.addEventListener('click',()=>{const kind=button.dataset.kind;if(state.kinds.has(kind))state.kinds.delete(kind);else state.kinds.add(kind);render();});
+$('#kind-filters').addEventListener('click',event=>{const button=event.target.closest('.kind-filter');if(!button)return;const kind=button.dataset.kind;if(state.kinds.has(kind))state.kinds.delete(kind);else state.kinds.add(kind);render();});
 $('#scope').addEventListener('change',()=>{state.scope=$('#scope').value;state.selected=null;resetExperiment();refresh();});
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();state.query=$('#query').value.trim();refresh();});
 $('#clear-query').addEventListener('click',()=>{state.query='';$('#query').value='';refresh();});
@@ -107,4 +119,5 @@ $('#import-file').addEventListener('change',async()=>{
   catch(error){$('#import-error').textContent=error instanceof SyntaxError?'文件不是有效的 JSON。':error.message;}
 });
 $('#reset-dataset').addEventListener('click',async()=>{try{const data=await api('/api/reset',{});++requestSerial;resetExperiment();state.query='';$('#query').value='';state.selected=null;state.kinds=new Set(Object.keys(KINDS));install(data);toast('已返回虚构演示数据。');}catch(error){toast(error.message);}});
+$('#sync-livingmemory').addEventListener('click',async()=>{const button=$('#sync-livingmemory');button.disabled=true;button.textContent='正在只读同步…';++requestSerial;try{const data=await api('/api/livingmemory/refresh',{scope:state.scope});resetExperiment();state.query='';$('#query').value='';install(data);toast('已重新读取 LivingMemory，原库内容与访问计数未由此操作更新。');}catch(error){await refresh();toast(error.message);}finally{button.disabled=false;button.textContent='同步真实记忆';}});
 try{install(await api('/api/snapshot'));}catch(error){toast(`无法连接本地服务：${error.message}`);$('#memory-detail').append(el('p','empty-state','请确认本地 Python 服务仍在运行，然后刷新页面。'));}
