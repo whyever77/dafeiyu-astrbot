@@ -1,0 +1,74 @@
+{
+    "session_based": {
+        "description": "是否启用会话独立的情感系统",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，每个群聊/私聊的情感状态将独立计算"
+    },
+    "favour_min": {
+        "description": "好感度最小值",
+        "type": "int",
+        "default": -100,
+        "hint": "达到此值时，用户将被自动拉入黑名单"
+    },
+    "favour_max": {
+        "description": "好感度最大值",
+        "type": "int",
+        "default": 100,
+        "hint": "设置好感度的最高值"
+    },
+    "change_min": {
+        "description": "单次情感变化最小值",
+        "type": "int",
+        "default": -10,
+        "hint": "限制 LLM 单次扣分上限"
+    },
+    "change_max": {
+        "description": "单次情感变化最大值",
+        "type": "int",
+        "default": 5,
+        "hint": "限制 LLM 单次加分上限"
+    },
+    "admin_qq_list": {
+        "description": "管理员QQ列表",
+        "type": "list",
+        "default": [],
+        "hint": "在此列表中的QQ号可以使用管理员命令"
+    },
+    "plugin_priority": {
+        "description": "插件优先级",
+        "type": "int",
+        "default": 100000,
+        "hint": "建议保持高优先级，以便先于其他插件处理情感拦截"
+    },
+    "emotion_analysis_mode": {
+        "description": "情感分析方式",
+        "type": "string",
+        "default": "separate",
+        "hint": "separate=独立 JSON 分析（推荐）；off=关闭情感分析"
+    },
+    "emotion_analysis_provider_id": {
+        "description": "独立分析使用的 provider ID",
+        "type": "string",
+        "default": "",
+        "hint": "留空使用当前聊天 provider；可填 deepseek-reasoner"
+    },
+    "emotion_analysis_timeout": {
+        "description": "独立分析超时（秒）",
+        "type": "int",
+        "default": 8,
+        "hint": "超时后保留原情感值，不阻塞主回复"
+    },
+    "emotion_analysis_max_tokens": {
+        "description": "独立分析最大 token",
+        "type": "int",
+        "default": 160,
+        "hint": "建议 96–256"
+    },
+    "inject_emotion_state": {
+        "description": "是否把当前情感状态和语气注入主对话",
+        "type": "bool",
+        "default": true,
+        "hint": "只注入状态和语气，不注入内部推理/XML"
+    }
+}

@@ -1,0 +1,14 @@
+{
+    "session_based": false,
+    "favour_min": -100,
+    "favour_max": 100,
+    "change_min": -10,
+    "change_max": 5,
+    "admin_qq_list": [],
+    "plugin_priority": 100000,
+    "emotion_analysis_mode": "separate",
+    "emotion_analysis_provider_id": "",
+    "emotion_analysis_timeout": 8,
+    "emotion_analysis_max_tokens": 160,
+    "inject_emotion_state": true
+}
