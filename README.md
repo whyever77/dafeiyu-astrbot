@@ -6,7 +6,7 @@
 大肥鱼是 DeepSeek 蓝鲸 logo 的**社区二创形象**（非官方），本项目把「让她住进 QQ 里」
 的全套实践开源出来：一个高完成度的 AstrBot 插件、一套完整人格、以及踩过所有坑的实录。
 
-本分支新增[记忆星海 v0.1](deploy/memory_observatory/README.md)：可本地运行的深海风格记忆星图、经历时间线、遗忘模拟与可解释召回。使用演示数据或显式导入的快照，尚未接入运行中的 LivingMemory，不修改真实记忆。仓库根目录运行 `python -B -m deploy.memory_observatory.server`，浏览器打开 `http://127.0.0.1:8766`。
+[记忆星海 v0.2](deploy/memory_observatory/README.md)：本地深海风格记忆星图、时间线、遗忘模拟与来源检查。已接通运行中的 LivingMemory 2.7.0-beta.2，只读展示真实文档、记忆原子和来源关系，支持手动同步；曲线与线索检索仍为本地模拟，不修改 QQ 中的记忆行为。使用已有运维 SSH 配置，在仓库根目录运行 `python -B -m deploy.memory_observatory.server --port 8767 --livingmemory-ssh`，打开 `http://127.0.0.1:8767`。不加 `--livingmemory-ssh` 则使用虚构演示数据。实测与边界见[接入验收](deploy/memory_observatory/LIVINGMEMORY_V02.md)。
 
 本分支新增[B站评论区互动 v0.5](deploy/bili_activity/INTERACT_V05.md)：在现有提议、主人批准、操作账本和回读链上扩展点赞/取消赞、投币、弹幕、互动配额与风控、回复监听和评论区观察。默认仍逐条审批，新增开关默认关闭；`verified` 与公开可见性分别报告。保留[研究方法复用](deploy/bili_activity/LIFE_V04.md)、[来源笔记与自主续写](deploy/bili_activity/LIFE_V03.md)及既有真实 smoke。v0.5 只完成本地代码和离线测试，未部署、未操作真实账号；开启、低配额建议、回滚和主人小号 smoke 见[互动文档](deploy/bili_activity/INTERACT_V05.md)。
 

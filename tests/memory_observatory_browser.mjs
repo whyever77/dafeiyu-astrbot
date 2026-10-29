@@ -9,6 +9,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 
 const base = process.env.MEMORY_TEST_URL || 'http://127.0.0.1:8766';
+const liveReadonly = process.argv.includes('--live-readonly');
 assert.match(base, /^http:\/\/127\.0\.0\.1:\d+$/);
 const output = await mkdtemp(path.join(tmpdir(), 'memory-observatory-browser-'));
 const profile = path.join(output, 'chrome-profile');
@@ -38,6 +39,39 @@ try {
   await cdp('Page.enable');await cdp('Runtime.enable');
   await cdp('Emulation.setDeviceMetricsOverride',{width:1600,height:1150,deviceScaleFactor:1,mobile:false});
   await cdp('Page.navigate',{url:base});
+  if(liveReadonly){
+    // Never import/reset, export private text, or capture private screenshots.
+    await waitText('#dataset-badge','真实只读');
+    await check('real source is labelled read-only with a nonempty scoped view',async()=>{
+      assert.equal(await evaluate('document.querySelector("#source-panel").hidden'),false);
+      assert.ok(await evaluate('document.querySelectorAll(".memory-card").length > 0'));
+      assert.equal(await evaluate('document.querySelector("#import-button").hidden && document.querySelector("#reset-dataset").hidden'),true);
+    });
+    await check('upstream evidence is separated from simulation controls',async()=>{
+      assert.equal(await evaluate('Boolean(document.querySelector(".upstream-facts"))'),true);
+      assert.equal(await evaluate('document.querySelector("#footer-mode").textContent.includes("本地模拟")'),true);
+      assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
+    });
+    await check('viewing and local projection keep the last sync time unchanged',async()=>{
+      const before=await evaluate('fetch("/api/snapshot").then(r=>r.json()).then(d=>d.connection.synced_at)');
+      await click('.memory-card');await click('#dimension');
+      await evaluate('document.querySelector("#days").value=30;document.querySelector("#days").dispatchEvent(new Event("input",{bubbles:true}))');
+      await pause(250);
+      assert.equal(await evaluate('fetch("/api/snapshot").then(r=>r.json()).then(d=>d.connection.synced_at)'),before);
+      await click('#reset-simulation');
+    });
+    await check('manual synchronization succeeds without changing source mode',async()=>{
+      const before=await evaluate('fetch("/api/snapshot").then(r=>r.json()).then(d=>d.connection.synced_at)');
+      await click('#sync-livingmemory');
+      await until(()=>evaluate('!document.querySelector("#sync-livingmemory").disabled'),'source refresh',45000);
+      assert.ok(await evaluate(`fetch("/api/snapshot").then(r=>r.json()).then(d=>d.connection.state === "ready" && d.connection.synced_at !== ${JSON.stringify(before)})`));
+    });
+    await check('real source mobile layout has no horizontal overflow',async()=>{
+      await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+      await pause(200);assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
+    });
+    await check('real source view has no uncaught browser JavaScript exceptions',async()=>assert.deepEqual(errors,[]));
+  } else {
   await waitText('#count-total','32');
   await click('#motion'); // Static for consistent screenshot, no data effects.
   await screenshot('desktop.png',true);
@@ -109,6 +143,7 @@ try {
     await click('#info-dialog .dialog-close');
   });
   await check('no uncaught browser JavaScript exceptions',async()=>assert.deepEqual(errors,[]));
+  }
 } finally {
   if(socket)socket.close();chrome.kill();
   await writeFile(path.join(output,'results.json'),JSON.stringify({base,checks,failures,errors},null,2));

@@ -13,7 +13,8 @@ import re
 from datetime import datetime, timedelta, timezone
 
 UTC = timezone.utc
-KINDS = {"episode": 30, "preference": 120, "knowledge": 90, "method": 180}
+KINDS = {"episode": 30, "preference": 120, "knowledge": 90, "method": 180,
+         "document": 90, "plan": 30, "relation": 120, "unclassified": 30}
 MAX_MEMORIES = 500
 
 
@@ -49,16 +50,48 @@ def number(value, name, low, high):
     return float(value)
 
 
-def normalize(payload):
+def upstream_metadata(value):
+    """Keep an explicit evidence allowlist; never relay arbitrary metadata."""
+    if not isinstance(value, dict):
+        raise InvalidSnapshot("upstream 必须是对象")
+    result = {}
+    for key in ("record_id", "record_type", "status", "version", "atom_type", "parent_id", "decay_type"):
+        if key in value:
+            result[key] = string(value[key], key, 100, empty=True)
+    for key in ("access_time_known", "truncated"):
+        if key in value:
+            if not isinstance(value[key], bool):
+                raise InvalidSnapshot(f"{key} 必须是布尔值")
+            result[key] = value[key]
+    for key in ("access_count", "reinforcement_count"):
+        if key in value:
+            result[key] = int(number(value[key], key, 0, 1_000_000_000))
+    if "ttl_days" in value:
+        result["ttl_days"] = number(value["ttl_days"], "ttl_days", -1_000_000, 1_000_000)
+    if "expires_at" in value:
+        result["expires_at"] = timestamp(value["expires_at"]).isoformat()
+    relations = value.get("relations", [])
+    if not isinstance(relations, list) or len(relations) > 5:
+        raise InvalidSnapshot("每条记录最多展示 5 条原图谱关系")
+    result["relations"] = []
+    for relation in relations:
+        if not isinstance(relation, dict):
+            raise InvalidSnapshot("图谱关系必须是对象")
+        result["relations"].append({k: string(relation.get(k), k, 100, empty=True)
+                                    for k in ("id", "source", "relation", "target")})
+    return result
+
+
+def normalize(payload, *, allow_empty=False):
     """Validate the explicit v1 exchange format, dropping all unknown metadata.
 
-Not a claimed adapter for arbitrary LivingMemory exports. An upstream adapter
-must map its version's export to this format and supply the correct scope.
-"""
+    The versioned LivingMemory reader maps its schema here. Arbitrary native
+    exports are still not guessed. Empty snapshots are for trusted readers only.
+    """
     if not isinstance(payload, dict) or payload.get("schema") != "memory-observatory/v1":
         raise InvalidSnapshot("需要 memory-observatory/v1 格式；请先按接入文档转换导出文件")
     raw = payload.get("memories")
-    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_MEMORIES:
+    if not isinstance(raw, list) or not (0 if allow_empty else 1) <= len(raw) <= MAX_MEMORIES:
         raise InvalidSnapshot(f"memories 必须包含 1–{MAX_MEMORIES} 条记忆")
     as_of = timestamp(payload.get("as_of"))
     memories, seen = [], set()
@@ -70,8 +103,8 @@ must map its version's export to this format and supply the correct scope.
             raise InvalidSnapshot("记忆 id 重复")
         seen.add(ident)
         kind = item.get("kind", "episode")
-        if kind not in KINDS:
-            raise InvalidSnapshot("kind 必须是 episode / preference / knowledge / method")
+        if not isinstance(kind, str) or kind not in KINDS:
+            raise InvalidSnapshot("kind 不是支持的记忆类型")
         created = timestamp(item.get("created_at"))
         recalled = timestamp(item.get("last_recalled_at", item.get("created_at")))
         if created > as_of or recalled > as_of or recalled < created:
@@ -103,6 +136,8 @@ must map its version's export to this format and supply the correct scope.
             "stability_assumed": assumed,
             "source": string(item.get("source", "导入快照 · 未提供原始出处"), "source", 300),
         })
+        if "upstream" in item:
+            memories[-1]["upstream"] = upstream_metadata(item["upstream"])
     by_id = {m["id"]: m for m in memories}
     edges, pairs = [], set()
     explicit = payload.get("edges", [])
@@ -170,7 +205,7 @@ def project(snapshot, *, scope, days=0, query="", rehearsed=(), pinned=()):
     days = number(days, "模拟天数", 0, 730)
     query = string(query, "线索", 200, empty=True)
     scopes = sorted({m["scope"] for m in snapshot["memories"]})
-    if scope not in scopes:
+    if scope not in scopes and not (not scopes and scope is None):
         raise InvalidSnapshot("请选择有效作用域")
     # Filter before lexical retrieval AND graph spreading.
     records = [m for m in snapshot["memories"] if m["scope"] == scope]

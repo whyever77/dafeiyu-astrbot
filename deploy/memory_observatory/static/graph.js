@@ -1,5 +1,5 @@
 // A stable, decorative projection of the memory graph, not an embedding space.
-export const COLORS = {episode: '#8ce0d4', preference: '#dbbd8b', knowledge: '#85a9e5', method: '#b6a0dd'};
+export const COLORS = {episode: '#8ce0d4', preference: '#dbbd8b', knowledge: '#85a9e5', method: '#b6a0dd', document:'#9bbac9', plan:'#e1aa80', relation:'#c39fc8', unclassified:'#879ba7'};
 const TAU = Math.PI * 2;
 function hash(text) { let n = 2166136261; for (const c of text) n = Math.imul(n ^ c.charCodeAt(0), 16777619); return (n >>> 0) / 4294967296; }
 function rgba(hex, a) {return `rgba(${parseInt(hex.slice(1,3),16)},${parseInt(hex.slice(3,5),16)},${parseInt(hex.slice(5,7),16)},${Math.max(0,Math.min(1,a))})`;}

@@ -1,5 +1,7 @@
 # 记忆星海 v0.1 · 验收记录
 
+> 本文保留 v0.1 的历史结果。v0.2 的真实 LivingMemory 接入与当前验证结果见 [LIVINGMEMORY_V02.md](LIVINGMEMORY_V02.md)。
+
 验收日期：2026-10-28。基于本地 `021355a`，新分支 `codex/memory-observatory-v01`。
 
 ## 结论与边界

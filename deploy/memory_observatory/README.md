@@ -1,13 +1,28 @@
-# 大肥鱼 · 记忆星海 v0.1
+# 大肥鱼 · 记忆星海 v0.2
 
 一座可以本地运行的记忆观测台：深海星图、经历时间线、遗忘实验、线索召回和来源检查。
-当前实现是**只读快照 + 策略模拟**。尚未接入她运行中的 LivingMemory，也不会改变她在 QQ 中的记忆行为。
+已接入她运行中的 **LivingMemory 2.7.0-beta.2 真实只读快照**。可以浏览与手动同步真实记忆；
+遗忘曲线、模拟巩固和线索检索仍在本地计算，不改变她在 QQ 中的记忆行为。
 
-![桌面演示：星图、记忆详情与遗忘曲线](assets/preview.png)
+![虚构演示截图：星图、记忆详情与遗忘曲线](assets/preview.png)
 
 ## 运行
 
 在仓库根目录运行（Python 3.10+，仅标准库，无需安装依赖）：
+
+```powershell
+python -B -m deploy.memory_observatory.server --port 8767 --livingmemory-ssh
+```
+
+打开 <http://127.0.0.1:8767>。使用已有运维配置：`DAFEIYU_SSH_HOST` 或 `~/.dafeiyu-admin/host`，
+以及 `~/.ssh/ecs_dafeiyu`。SSH 必须能以非交互方式连接，目标主机密钥必须已经在 known_hosts 中受信任；
+不会关闭主机校验。主机、密钥和数据库路径不能通过页面指定。
+
+启动和「同步真实记忆」会读取一次；平时浏览、搜索和拖动时间轴只操作本地内存快照。
+首次读取失败就退出；后续同步失败会保留上次快照并显示「旧快照」。每次最多一个同步请求。
+真实模式隐藏并拒绝导入/返回演示，避免把合成数据混入真实来源。
+
+也可以在另一个端口运行虚构演示或手动导入模式：
 
 ```powershell
 python -B -m deploy.memory_observatory.server --port 8766
@@ -17,7 +32,7 @@ python -B -m deploy.memory_observatory.server --port 8766
 端口占用时换一个 `--port`。只绑定 `127.0.0.1`，不支持把绑定地址改成公网或局域网地址。
 
 浏览器使用 ES modules、Canvas 2D、原生 dialog 和本机字体，无 CDN、远程字体或模型请求。
-默认 35 条**虚构**记忆，分为私聊演示 32 条、群聊隔离演示 3 条。不是从主人的聊天中提取。
+未指定真实连接参数时，默认 35 条**虚构**记忆，分为私聊演示 32 条、群聊隔离演示 3 条。不是从主人的聊天中提取。
 
 ## 可以体验什么
 
@@ -27,7 +42,7 @@ python -B -m deploy.memory_observatory.server --port 8766
 4. 对单条记忆切换「模拟巩固」「模拟保留」，对照曲线；重置实验恢复快照参数。
 5. 打开「共同经历」按时间浏览；「遗忘实验室」解释参数和整个作用域的变化。
 6. 切换到群聊演示，私聊片段不会进入其列表、检索或关联扩散。
-7. 导入符合下方协议的 JSON 快照。非法文件会整体拒绝，原观测数据不变。
+7. 真实模式查看来源面板和原库观测值；演示模式可导入下方协议的 JSON 快照，非法文件会整体拒绝。
 
 大小表示重要度，亮度表示模拟可及度，固定圆环表示保留。虚线只表示共同主题推导的关联；
 实线表示快照来源标注的关联，并不自动等于经过验证的事实。节点距离是布局结果，不是语义距离。
@@ -51,7 +66,7 @@ python -B -m deploy.memory_observatory.server --port 8766
 
 ## 导入协议
 
-UI 的「导入记忆快照」可下载完整演示格式。最小示例：
+演示模式的「导入记忆快照」可下载完整格式。真实模式不开放此入口。最小示例：
 
 ```json
 {
@@ -82,7 +97,8 @@ UI 的「导入记忆快照」可下载完整演示格式。最小示例：
 
 - 必须提供 `schema / as_of / memories`；每条记录必须有 `id / scope / title / text / created_at`。
 - 时间必须带时区，创建与最后召回时间不得晚于快照；召回不得早于创建。
-- `kind` 只能是 `episode / preference / knowledge / method`。`importance` 和非空 `confidence` 范围 0–1。
+- `kind` 支持 `episode / preference / knowledge / method / document / plan / relation / unclassified`。
+  `importance` 和非空 `confidence` 范围 0–1。`plan` 是计划，不代表已经发生。
 - `half_life_days` 范围 1–3650。省略时采用类型默认值并标记假设；再次导入可保留布尔 `stability_assumed`。
 - `gist` 省略时采用标题；不会调用模型补写。`pinned` 默认 false。来源缺失会明确注明。
 - 最多 500 条、4 MB、每条正文 4,000 字符、8 个主题；未知元数据被丢弃，不透传任意 metadata。
@@ -94,19 +110,25 @@ UI 的「导入记忆快照」可下载完整演示格式。最小示例：
 
 ## 与现有 LivingMemory 的边界
 
-仓库里已有记忆写入工具、scope 语义、来源记录和 LivingMemory 接入说明，但不包含运行中 LivingMemory 的源码与版本。
-本次不推断它的私有数据库结构，不读取生产状态，不重新实现它的写入/删除/TTL 调度。
+适配依据是实际安装的 `2.7.0-beta.2` 源码与 SQLite 表结构，不接受任意版本原始导出。
+版本不同或列结构不匹配就拒绝读取，需要重新审计适配器。SSH 通过标准输入运行固定的标准库读取器，
+不在云端保存脚本、不导入插件代码、不读取 conversations.db、不调用测试召回或包含原始消息的导出接口。
 
-**本版不会直接接受任意 LivingMemory 原始导出。** 接入时需要针对实际安装版本，把只读导出转换到上面的明确协议。
-这一步尚未实现、尚未验证；不要把 v1 协议测试当作 LivingMemory 联调证据。
+- 使用 SQLite `mode=ro`、`query_only` 和 SQL authorizer，只读事务可见已经提交的 WAL 数据。
+- 读取活跃文档及其有效原子；排除 expired/forgotten/到期原子。文档必须有明确的 session_id 与 persona_id 字段；
+  原子必须与已载入父文档归属一致。空人格、显式 null 人格和命名人格分别隔离，缺键记录隔离排除。
+- 作用域以会话与人格的组合生成不透明标识。页面只显示当前作用域的内容、检索和关联；本机页面不是多用户授权系统。
+- 显示原库 TTL、过期时间、访问/强化次数；TTL 不充当模拟半衰期，缺失可信度保持「未评估」。
+  缺失访问时间会标记并从创建时间模拟；默认稳定度仍是假设值。
+- 星图中的实线表示真实文档到原子的来源归属；详情最多显示每篇文档的 5 条活跃实体关系。
+  这不是全量实体图谱展示，也不是事实核验；主题虚线仍为本地推导。
+- 整体上限 500 条，按文档优先、各表 ID 倒序选择；正文最多 4,000 字符，摘要 500 字符。
+  面板报告过滤、归属排除、无效及超量记录；截断正文单独标记。不会读取原始聊天消息或透传任意 metadata。
+- 只读快照保存在本地服务内存；不自动写文件，不记录正文、检索词、SSH 错误体或凭据。
+  服务只绑定回环地址，不应公开反向代理。关闭本地进程即可停止观测，无云端改动需要回滚。
 
-后续接入顺序：
-
-1. 核实安装版本、公开导出/API、scope 字段、保留与归档语义；用脱敏样本编写适配器契约测试。
-2. 接入真实只读快照与真实召回记录，UI 清楚区分观测数据和模拟参数。
-3. 由现有引擎独占生命周期管理；若采用新的遗忘策略，只替换一个明确的策略入口，避免双重衰减和双重巩固。
-4. 对比旧策略与候选策略的离线召回质量，确认独立事件才允许巩固、纠错保留来源、不跨 scope。
-5. 在备份与回滚机制具备之后，再单独实现 opt-in 写回。人格约束、审批权限、操作账本不纳入自然遗忘。
+真实召回事件流、向量检索、写回、删除与新的遗忘策略均未接入。本次不改变原引擎生命周期调度；
+后续策略实验需要独立的离线评估、备份和回滚设计，避免双重衰减与巩固。
 
 ## 文件
 
@@ -115,16 +137,19 @@ UI 的「导入记忆快照」可下载完整演示格式。最小示例：
 | `model.py` | 协议校验、纯函数衰减、作用域内检索与关联 |
 | `demo.py` | 固定时间、明确虚构的演示数据 |
 | `server.py` | 仅回环地址的标准库 HTTP 服务；原子内存导入 |
+| `livingmemory.py` | 固定 SSH 来源、超时与脱敏错误；快照归一化 |
+| `livingmemory_reader.py` | 版本约束、SQLite 只读事务、来源映射与过滤 |
 | `static/index.html` / `style.css` | 响应式页面、视图、帮助和导入说明 |
 | `static/graph.js` | 稳定位置的 Canvas 星图、选择、旋转、缩放和召回动画 |
 | `static/app.js` | 安全文本渲染、视图与实验状态、接口调用 |
 | `../../tests/test_memory_observatory.py` | 离线模型/协议/HTTP 回归 |
+| `../../tests/test_memory_livingmemory.py` | 合成原库、只读防护、隔离、同步与故障测试 |
 | `../../tests/memory_observatory_browser.mjs` | 无第三方测试依赖的 Chrome smoke，截图输出到系统临时目录 |
 
 ## 验证
 
 ```powershell
-python -B -m unittest discover -s tests -p test_memory_observatory.py -v
+python -B -m unittest discover -s tests -p 'test_memory_*.py' -v
 node --check deploy/memory_observatory/static/app.js
 node --check deploy/memory_observatory/static/graph.js
 # 先启动 8766 上的演示服务，然后运行；Node 22+ 和本机 Chrome
@@ -134,4 +159,12 @@ node tests/memory_observatory_browser.mjs
 浏览器测试会导入合成样本并恢复演示，使用独立临时 Chrome profile；不要对有待保留导入数据的服务运行。
 `MEMORY_TEST_URL` 可指定其他本机测试端口，`MEMORY_CHROME` 可指定 Chrome 可执行文件。
 
-具体已验证结果和未验证边界见 [VALIDATION.md](VALIDATION.md)。原有 B站插件、审批链、传输、人格和部署配置均未改动。
+已启动真实只读服务后，以下模式不会导入/重置/截取私人记忆截图，但会做一次真实只读同步：
+
+```powershell
+$env:MEMORY_TEST_URL = 'http://127.0.0.1:8767'
+node tests/memory_observatory_browser.mjs --live-readonly
+```
+
+本次实测见 [LIVINGMEMORY_V02.md](LIVINGMEMORY_V02.md)，v0.1 历史验收保留在 [VALIDATION.md](VALIDATION.md)。
+原有 B站插件、审批链、传输、人格和部署配置均未改动。
