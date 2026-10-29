@@ -57,7 +57,7 @@ docker restart astrbot
 
 ## 验证记录（2026-10-29）
 
-- 云端备份：`/opt/dafeiyu/backups/emotionai_separate_20261029_225640`
+- 云端备份：`/opt/dafeiyu/backups/emotionai_separate_20261029_225640`（首次改插件）、`/opt/dafeiyu/backups/emotionai_clean2_20261029_230628`（深度清理前）
 - 已从 conversation 2 / 5 / 6 删除旧伪造三连；全库扫描 `[PROTOCOL_ENFORCEMENT]`、`星绘`、`报告前辈`、精确假用户消息均零命中。
 - 另外清理了历史 assistant/system 消息里的空 `xml` 围栏和 `<thought>` 块（含一条只有 thought、没有可见正文的旧消息）；用户可见正文保留。
 - 历史正文里仍有一句正常的「被系统自检打断」叙述，不是伪造注入消息，未删除。
