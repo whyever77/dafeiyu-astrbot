@@ -14,6 +14,7 @@ from astrbot.api import logger
 from ...utils.time_utils import format_current_time
 from ..adapters.astrbot_event import dispatch_event_hook
 from ..adapters.astrbot_provider import build_provider_request, invoke_provider
+from .contact_bridge import preflight
 
 try:  # pragma: no cover - 取决于 AstrBot 版本
     from astrbot.core.star.star_handler import EventType
@@ -311,6 +312,8 @@ class LlmService:
     ) -> tuple[Any | None, str]:
         """统一 LLM 调用入口。"""
         plugin = self.plugin
+        if not preflight(plugin, session_id):
+            return None, ""
         motivation_template = session_config.get("proactive_prompt", "") or ""
         now_str = format_current_time(plugin.timezone)
         final_user_simulation_prompt = motivation_template.replace(

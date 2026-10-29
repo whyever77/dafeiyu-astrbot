@@ -29,6 +29,8 @@ from .transport import MCPClient, PhoneGate, QQDelivery, ScreenCapture, Transpor
 from .budget import Budget, BudgetExceeded
 from .agent_budget import instrument_runner
 from .planner import DEFAULTS as PLANNER_DEFAULTS, LifePlanner, validate_config as validate_planner
+from .contact import (DEFAULTS as CONTACT_DEFAULTS, BRIDGE as CONTACT_BRIDGE, ContactLedger,
+                      ContactAPI, content_hash, validate_config as validate_contact)
 from .interactions import (DEFAULTS as INTERACTION_DEFAULTS, Interactions,
                            InteractionBlocked, enabled as interaction_enabled,
                            validate_config as validate_interactions, safe_result,
@@ -41,6 +43,7 @@ DEFAULTS = {
     **INTERACTION_DEFAULTS,
     **REPLY_DEFAULTS,
     **PLANNER_DEFAULTS,
+    **CONTACT_DEFAULTS,
     "enabled": False, "periodic_enabled": False, "public_interactions": False,
     "collection_management": False, "screenshot_enabled": True,
     "owner_scope": "", "owner_id": "", "dnd_ranges": None,
@@ -400,6 +403,8 @@ class BiliActivity(Star):
         self.writing_runs = set()
         self.method_runs = set()
         self.decision_runs = set()
+        self.contact_api = ContactAPI(self)
+        setattr(self.context, CONTACT_BRIDGE, self.contact_api)
 
     def cfg(self):
         value = json.loads(self.control.read_text(encoding="utf-8"))
@@ -425,6 +430,7 @@ class BiliActivity(Star):
         validate_interactions(cfg)
         validate_replies(cfg)
         validate_planner(cfg)
+        validate_contact(cfg)
         return cfg
 
     def interactions(self):
@@ -761,6 +767,11 @@ class BiliActivity(Star):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        api = getattr(self, "contact_api", None)
+        if api:
+            api.active = False
+            if getattr(self.context, CONTACT_BRIDGE, None) is api:
+                delattr(self.context, CONTACT_BRIDGE)
         self.store.close()
 
     def phone(self):
@@ -867,10 +878,43 @@ class BiliActivity(Star):
             self.activity_budget().model_call(event.unified_msg_origin, event.get_extra("df_run_id"), cfg)
 
     def reserve_share(self, event, kind, key):
+        cfg = self.cfg()
+        if cfg["contact_coordination_enabled"] and event.get_extra("df_run_id"):
+            self.contact_ledger().check(event.unified_msg_origin, self.check_owner(event))
         if self.is_life_run(event) or self.is_reply_run(event):
             cfg = self.check_owner(event)
             self.activity_budget().share(event.unified_msg_origin, event.get_extra("df_run_id"), kind, cfg,
                                          reservation_key=key)
+
+    def contact_ledger(self):
+        if getattr(self, "_contact_store", None) is not self.store:
+            self._contacts = ContactLedger(self.store)
+            self._contact_store = self.store
+        return self._contacts
+
+    async def contact_send(self, event, text, kind, key, *, image_path=None, passive=False, image_fingerprint=None):
+        cfg = self.cfg()
+        scope = event.unified_msg_origin
+        ticket = None
+        if cfg["contact_coordination_enabled"] and event.get_extra("df_run_id") and not passive:
+            fingerprint = content_hash(text[:2000])
+            if image_fingerprint is not None:
+                fingerprint = digest([fingerprint, image_fingerprint])
+            ticket = self.contact_ledger().reserve(scope, "life", key, kind, fingerprint, self.check_owner(event))
+        try:
+            if ticket:
+                self.contact_ledger().dispatch(ticket, self.check_owner(event))
+            if image_path is None:
+                receipt = await self.sender().send(scope, text)
+            else:
+                receipt = await self.sender().send(scope, text, image_path=image_path)
+        except BaseException:
+            if ticket:
+                self.contact_ledger().finish(ticket, "uncertain")
+            raise
+        if ticket:
+            self.contact_ledger().finish(ticket, "sent", receipt.get("message_id") if isinstance(receipt, dict) else None)
+        return receipt
 
     def active_goal(self, event):
         gid = getattr(self, "run_goals", {}).get(event.get_extra("df_run_id"))
@@ -1352,6 +1396,9 @@ class BiliActivity(Star):
             return
         if event.get_extra("df_run_id"):
             return
+        if cfg["contact_coordination_enabled"]:
+            self.contact_ledger().owner_message(event.unified_msg_origin,
+                getattr(event.message_obj, "message_id", None))
         original = getattr(event.message_obj, "message_str", event.message_str).strip()
         if original.split(maxsplit=1)[0:1] == ["/bili互动"]:
             await self.interaction_command(event, original)
@@ -1650,7 +1697,11 @@ class BiliActivity(Star):
                 self.store.setting("goal_proposal:" + goal["id"], proposal["id"])
                 self.store.life.update_goal(event.unified_msg_origin, goal["id"], status="waiting_approval",
                                             run_id=event.get_extra("df_run_id"))
-            receipt = await self.sender().send(event.unified_msg_origin, text)
+            try:
+                receipt = await self.contact_send(event, text, "proposal", "proposal:" + proposal["id"])
+            except PermissionError:
+                self.store.db.execute("UPDATE proposals SET status='blocked' WHERE id=? AND status='draft'", (proposal["id"],))
+                raise
             self.store.offered(proposal["id"], receipt)
         return canonical({"proposal_id": proposal["id"], "status": "awaiting_user" if fresh else proposal["status"]})
 
@@ -1725,7 +1776,8 @@ class BiliActivity(Star):
         try:
             if not passive:
                 self.reserve_share(event, "screenshot", key)
-            receipt = await self.sender().send(scope, caption[:200], image_path=shot.path)
+            receipt = await self.contact_send(event, caption[:200], "screenshot", key, image_path=shot.path,
+                                              passive=passive, image_fingerprint=shot.fingerprint)
         except (BudgetExceeded, PermissionError):
             self.store.db.execute("UPDATE deliveries SET status='blocked' WHERE id=?", (key,))
             raise
@@ -1761,7 +1813,7 @@ class BiliActivity(Star):
             return "重复分享已抑制。"
         try:
             self.reserve_share(event, "thought", key)
-            receipt = await self.sender().send(scope, text[:1000])
+            receipt = await self.contact_send(event, text[:1000], "thought", key)
         except (BudgetExceeded, PermissionError):
             self.store.db.execute("UPDATE deliveries SET status='blocked' WHERE id=?", (key,))
             raise
@@ -1809,6 +1861,7 @@ class BiliActivity(Star):
                           "activity_enabled": cfg["enabled"], "periodic_enabled": cfg["periodic_enabled"],
                           "paused": self.store.get_setting("life_paused:" + event.unified_msg_origin, False),
                           "decisions": self.life_planner().recent(event.unified_msg_origin),
+                          "contacts": self.contact_ledger().status(event.unified_msg_origin, cfg) if cfg["contact_coordination_enabled"] else {"enabled": False},
                           "meaning": "生活安排是意图；实际进展以目标、经历和作品为准。"})
 
     @filter.llm_tool(name="df_goal")
@@ -2086,7 +2139,10 @@ class BiliActivity(Star):
         text = ((caption.strip() + "\n") if caption.strip() else "") + f"《{work['title']}》·第{work['revision']}版（摘录）\n"
         text += work["body"][:1600] + ("\n……（摘录结束）" if len(work["body"]) > 1600 else "")
         try:
-            receipt = await self.sender().send(scope, text)
+            receipt = await self.contact_send(event, text, "work", key)
+        except PermissionError:
+            self.store.db.execute("UPDATE deliveries SET status='blocked' WHERE id=? AND status='sending'", (key,))
+            raise
         except BaseException:
             self.store.delivered(key)
             raise

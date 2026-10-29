@@ -10,6 +10,8 @@
 
 未发布的[生活决策 v0.1](deploy/bili_activity/LIFE_DECISION_V01.md)：复用已有调度、目标与预算，根据自己的兴趣、未完成项目和近期尝试选择研究、写作、探索或休息，记录理由并支持主人查询。默认关闭，尚未部署；休息不调用模型、不发消息、不写入虚构经历。
 
+后续的[主动联系协调 v0.1](deploy/bili_activity/CONTACT_V01.md) 已完成本地实现：生活分享与 proactive_chat 共用联系额度、间隔和未回应记录，主人正在聊天时先让出时间。默认关闭，需配套社区补丁，真实 QQ 联动尚未验收。
+
 本分支新增[B站评论区互动 v0.5](deploy/bili_activity/INTERACT_V05.md)：在现有提议、主人批准、操作账本和回读链上扩展点赞/取消赞、投币、弹幕、互动配额与风控、回复监听和评论区观察。默认仍逐条审批，新增开关默认关闭；`verified` 与公开可见性分别报告。保留[研究方法复用](deploy/bili_activity/LIFE_V04.md)、[来源笔记与自主续写](deploy/bili_activity/LIFE_V03.md)及既有真实 smoke。v0.5 只完成本地代码和离线测试，未部署、未操作真实账号；开启、低配额建议、回滚和主人小号 smoke 见[互动文档](deploy/bili_activity/INTERACT_V05.md)。
 
 审查修复已按社区维护的 B站 Web API 文档校正点赞/弹幕参数、buvid3 和 WBI 请求；真实端点可用性仍待小号 smoke。新增主人 `/bili互动 清理不确定`，先查看账本再明确确认，释放未决提议但不重发原操作。弹幕 `accepted`（接口受理）、`verified`（回读核实）、`visibility`（公开可见性）分别报告。
