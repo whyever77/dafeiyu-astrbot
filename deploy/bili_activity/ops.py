@@ -34,6 +34,9 @@ DEFAULTS = {
     "life_enabled": False,
     "life_decision_enabled": False,
     "life_repeat_cooldown_minutes": 180,
+    "contact_coordination_enabled": False,
+    "contact_daily_limit": 3, "contact_cooldown_minutes": 90,
+    "contact_owner_quiet_minutes": 5, "contact_unanswered_limit": 2,
     "workshop_enabled": False,
     "methods_enabled": False,
     "workshop_revisions_per_run": 3,
@@ -73,6 +76,8 @@ NUMERIC_LIMITS = {
     "screenshots_per_run": (0, 10), "chat_cooldown_seconds": (0, 3600),
     "workshop_revisions_per_run": (1, 10), "workshop_max_characters": (500, 20000),
     "life_repeat_cooldown_minutes": (15, 1440),
+    "contact_daily_limit": (0, 50), "contact_cooldown_minutes": (1, 1440),
+    "contact_owner_quiet_minutes": (0, 1440), "contact_unanswered_limit": (1, 20),
 }
 
 
@@ -203,6 +208,12 @@ def read_life_decisions(folder, scope, limit=8):
         item["run_status"] = run[0]["status"] if run else "rested" if item["action"] == "rest" else "not_started"
         result.append(item)
     return result
+
+
+def read_contacts(folder, scope):
+    return read_rows(folder, "SELECT source,kind,day,created,dispatched,finished,status,message_id "
+                     "FROM contact_attempts WHERE scope=? ORDER BY created DESC,rowid DESC LIMIT 8",
+                     (scope,), optional_table="contact_attempts")
 
 
 def read_budget(folder, scope):
@@ -339,7 +350,7 @@ def main(argv=None):
     once = sub.add_parser("once")
     once.add_argument("--delay-seconds", type=int, default=180)
     switches = sub.add_parser("switch")
-    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "life_decision_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled", "auto_public"])
+    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "life_decision_enabled", "contact_coordination_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled", "auto_public"])
     switches.add_argument("value", choices=["on", "off"])
     accepted = sub.add_parser("accept-one-shot")
     accepted.add_argument("--evidence", type=Path, required=True,
@@ -351,6 +362,7 @@ def main(argv=None):
     goals.add_argument("--all", action="store_true", help="同时显示已完成或已取消目标")
     decisions = sub.add_parser("life-decisions", help="只读查看生活选择与理由；选择不等于执行成功")
     decisions.add_argument("--limit", type=int, default=8)
+    sub.add_parser("contacts", help="只读查看两种主动联系入口的最近记录")
     episodes = sub.add_parser("episodes", help="只读查看当前主人私聊的经历索引")
     episodes.add_argument("--limit", type=int, default=8)
     episodes.add_argument("--goal-id")
@@ -382,11 +394,18 @@ def main(argv=None):
                           "goals": read_goals(folder, control["owner_scope"]),
                           "episodes": read_episodes(folder, control["owner_scope"]),
                           "life_decisions": read_life_decisions(folder, control["owner_scope"]),
+                          "contacts": read_contacts(folder, control["owner_scope"]),
                           "budget": read_budget(folder, control["owner_scope"]),
                           "works": read_works(folder, control["owner_scope"]),
                           "methods": read_methods(folder, control["owner_scope"]),
                           "method_attempts": read_method_attempts(folder, control["owner_scope"])},
                          ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "contacts":
+        control = load_control(folder)
+        print(json.dumps({"enabled": control["contact_coordination_enabled"],
+                          "daily_limit": control["contact_daily_limit"],
+                          "recent": read_contacts(folder, control["owner_scope"])}, ensure_ascii=False, indent=2))
         return 0
     if args.command == "life-decisions":
         control = load_control(folder)
@@ -482,6 +501,8 @@ def main(argv=None):
         elif args.command == "disable-periodic":
             control["periodic_enabled"] = False
         elif args.command == "switch":
+            if args.name == "contact_coordination_enabled" and args.value == "on":
+                ready(control)
             if args.name == "life_decision_enabled" and args.value == "on":
                 ready(control)
                 if control["life_enabled"] is not True or control["one_shot_verified"] is not True:

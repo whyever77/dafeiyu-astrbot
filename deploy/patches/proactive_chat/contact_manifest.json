@@ -1,0 +1,8 @@
+{
+  "upstream_commit": "2dab58514e0a2055400ed3bf7b3907ae684c0c54",
+  "expected_base_sha256": {
+    "core/services/sender_service.py": "3e33be4bd19d4747d08cd4b6db66689a51d67b78923f003fb76af7e4c27c64bf",
+    "core/services/llm_service.py": "226f348f3a218bf7190b55866bd9861bd2166b1b2c1545a5ff345fb1931cd65c"
+  },
+  "required_provider_sha256": "3f8da40959c7f3ee249c3b454bf71ee0977206e0f9f33340ed82736c049bc599"
+}
