@@ -50,7 +50,7 @@ export class Constellation{
   this.selected=null;this.visibleKinds=new Set(ORDER);this.twoD=false;this.focusedKind=null;
   this.camera={yaw:.22,pitch:.13,distance:2.35,target:[-.02,0,0]};this.cameraTween=null;
   this.flat={scale:1,panX:0,panY:0};this.flatBase=520;this.focal=900;
-  this.width=0;this.height=0;this.time=0;this.last=0;this.drag=null;this.hover=null;this.categoryHits=[];
+  this.width=0;this.height=0;this.time=0;this.last=0;this.drag=null;this.hover=null;this.categoryHits=[];this.relatedIds=new Set();
   this.reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;this.paused=this.reduced;
   this.stars=makeStars();this.tooltip=document.querySelector('#graph-tooltip');
   // A small debug/test handle; the page already holds this in-memory view.
@@ -91,7 +91,7 @@ export class Constellation{
  }
 
  clearScope(){
-  this.nodes=[];this.groups=[];this.positions=[];this.selected=null;this.categoryHits=[];
+  this.nodes=[];this.groups=[];this.positions=[];this.selected=null;this.categoryHits=[];this.relatedIds=new Set();
   this.resetCamera(true);this.canvas.dataset.layout='starfields';
  }
 
@@ -246,12 +246,15 @@ export class Constellation{
    const r=(this.twoD?2.4+p.importance*3.2:2.2+p.importance*3.6)*clamp(scale,.55,1.45);
    p.r=r;
    const fade=this.twoD?1:clamp(1-(p.zc-1.65)/2.2*.55,.42,1);
-   const alpha=clamp((.20+.80*p.shownDetail)*fade*(p.id===this.selected?1:.9),.12,1);
+   const isSelected=p.id===this.selected,isRelated=this.relatedIds.has(p.id);
+   const emphasis=isSelected||isRelated?1:(this.selected?.72:.92);
+   const alpha=clamp((.20+.80*p.shownDetail)*fade*emphasis,.12,1);
    const halo=r*(2.0+3.8*p.shownDetail);
    const glow=c.createRadialGradient(p.x,p.y,0,p.x,p.y,halo);
    glow.addColorStop(0,rgba(color,.24*p.shownDetail*fade));glow.addColorStop(.55,rgba(color,.08*p.shownDetail*fade));glow.addColorStop(1,rgba(color,0));
    c.fillStyle=glow;c.beginPath();c.arc(p.x,p.y,halo,0,TAU);c.fill();
    this.shape(p,r,color,alpha);
+   if(isRelated&&!isSelected){c.strokeStyle=rgba(color,.72);c.lineWidth=1.3;c.beginPath();c.arc(p.x,p.y,r+5,0,TAU);c.stroke();}
    if(p.protected){c.strokeStyle=rgba('#d6bd8a',.58);c.lineWidth=1;c.beginPath();c.arc(p.x,p.y,r+4,0,TAU);c.stroke();}
   }
   const selected=placed.find(p=>p.id===this.selected);
@@ -289,7 +292,7 @@ export class Constellation{
  }
 
  drawLabels(placed){
-  const boxes=[];this.categoryHits=[];
+  const boxes=[];this.categoryHits=[];const byId=new Map(placed.map(p=>[p.id,p]));
   for(const group of this.groups){
    if(!this.visibleKinds.has(group.kind)||!group.count)continue;
    const points=placed.filter(p=>p.kind===group.kind);if(!points.length)continue;
@@ -300,15 +303,9 @@ export class Constellation{
   }
   const ids=[],seen=new Set();
   if(this.selected){ids.push(this.selected);seen.add(this.selected);}
-  for(const edge of this.data.edges){
-   if(ids.length>=4)break;
-   if(this.selected&&(edge.source===this.selected||edge.target===this.selected)){
-    const other=edge.source===this.selected?edge.target:edge.source;
-    if(!seen.has(other)){ids.push(other);seen.add(other);}
-   }
-  }
+  const related=[...this.relatedIds].map(id=>byId.get(id)).filter(Boolean).sort((a,b)=>b.importance-a.importance).slice(0,3);
+  for(const p of related){if(ids.length>=4)break;if(!seen.has(p.id)){ids.push(p.id);seen.add(p.id);}}
   for(const trace of this.data.trace||[]){if(ids.length>=4)break;if(!seen.has(trace.id)){ids.push(trace.id);seen.add(trace.id);}}
-  const byId=new Map(placed.map(p=>[p.id,p]));
   for(const id of ids){
    const p=byId.get(id);if(!p)continue;
    const selected=id===this.selected,title=String(p.title||'');
@@ -329,6 +326,12 @@ export class Constellation{
   const placed=[];
   for(const node of this.nodes){if(!this.visibleKinds.has(node.kind))continue;const p=this.projectNode(node);if(p)placed.push({...node,...p});}
   this.positions=placed;
+  this.relatedIds=new Set();
+  if(this.selected)for(const edge of this.data.edges){
+   if(edge.source===this.selected)this.relatedIds.add(edge.target);
+   else if(edge.target===this.selected)this.relatedIds.add(edge.source);
+  }
+  this.canvas.dataset.relatedNodes=String(this.relatedIds.size);
   this.drawHaze();
   this.drawEdges(placed);
   this.drawNodes(placed);
