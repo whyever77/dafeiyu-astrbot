@@ -10,9 +10,10 @@
 
 ## 运行
 
-Windows 桌面入口：**「记忆星海」鲸鱼图标**。双击后打开真实只读 LivingMemory；已有服务直接复用，
-未启动时用 `pythonw.exe` 隐藏启动，等待就绪后打开默认浏览器。连续点击串行检查启动状态，
-端口被其他服务或演示模式占用时提示，不覆盖、不结束现有进程，也不回退到虚构数据。
+Windows 桌面入口：**「记忆星海」鲸鱼图标**。双击后打开真实只读 LivingMemory，并带 `--life-ssh`
+同时只读连接活动账本；已有真实服务直接复用（不重复启动、不刷新），未启动时用 `pythonw.exe`
+隐藏启动，等待就绪后打开默认浏览器。连续点击串行检查启动状态，端口被其他服务或演示模式占用时提示，
+不覆盖、不结束现有进程，也不回退到虚构数据。
 
 在当前仓库中安装/更新桌面快捷方式（会保存当前仓库绝对路径，移动仓库后需重新运行）：
 
@@ -20,6 +21,7 @@ Windows 桌面入口：**「记忆星海」鲸鱼图标**。双击后打开真�
 & .\deploy\memory_observatory\install_shortcut.ps1 -Pythonw 'C:\Users\ACER\miniconda3\pythonw.exe'
 ```
 
+快捷方式参数为 `-B -m deploy.memory_observatory.launcher --life-ssh`；旧快捷方式重跑本脚本即可原地升级。
 图标原图与多尺寸 ICO 位于 `assets/memory-whale.png`、`static/memory-whale.ico`。
 删除桌面 `.lnk` 即可移除快捷方式；没有注册登录启动项或后台定时任务。
 关闭浏览器不会关闭本地观测服务。新服务提供不含记忆内容的 `/api/health` 供启动器检查；
