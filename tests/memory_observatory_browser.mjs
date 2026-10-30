@@ -242,6 +242,8 @@ try {
     await screenshot('room-rest.png',true);
     await click('[data-zone="desk"]');await until(()=>evaluate('document.querySelector("#room-character").dataset.action === "desk"'),'writing pose');
     await screenshot('room-desk.png',true);
+    await click('[data-zone="desk"]');await pause(30);
+    assert.equal(await evaluate('document.querySelector("#room-character").dataset.action'),'desk');
     const frame=await evaluate('document.querySelector("#room-character").dataset.frame');await pause(250);
     assert.notEqual(await evaluate('document.querySelector("#room-character").dataset.frame'),frame);
   });

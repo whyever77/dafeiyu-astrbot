@@ -54,7 +54,7 @@ function render(){
     box.append(node('p','entry-note','这里不模拟体力、情绪或亲密度；是否联系主人仍由原来的开关、免打扰和额度决定。'));
   }
 }
-for(const b of $$('button[data-zone]'))b.addEventListener('click',()=>{zone=b.dataset.zone;scene.go(zone);render();});
+for(const b of $$('button[data-zone]'))b.addEventListener('click',()=>{if(b.dataset.zone===zone)return;zone=b.dataset.zone;scene.go(zone);render();});
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');let motionOff=reduced.matches;
 function motion(){document.body.classList.toggle('motion-off',motionOff);scene.setPaused(motionOff);$('#room-motion').setAttribute('aria-pressed',String(motionOff));$('#room-motion').textContent=motionOff?'继续动画':'暂停动画';}
 $('#room-motion').addEventListener('click',()=>{motionOff=!motionOff;motion();});motion();reduced.addEventListener('change',e=>{motionOff=e.matches;motion();});
