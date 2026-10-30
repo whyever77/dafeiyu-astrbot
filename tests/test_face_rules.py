@@ -50,7 +50,7 @@ class _Filter:  # filter.xxx(...) 全都变成空装饰器
 
 
 logging.basicConfig(level=logging.CRITICAL)
-_stub(
+_aiohttp_stub = _stub(
     "aiohttp",
     ClientSession=object,
     ClientTimeout=lambda *a, **k: None,
@@ -78,6 +78,10 @@ _stub("astrbot.core.star.session_llm_manager", SessionServiceManager=object)
 spec = importlib.util.spec_from_file_location("face_plugin", MAIN)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
+# 插件模块已绑定所需的桩；不要把这个空壳 aiohttp 留给后续测试，
+# 否则 test_video_processing 的 `from aiohttp import web` 会在全量发现时失败。
+if sys.modules.get("aiohttp") is _aiohttp_stub:
+    del sys.modules["aiohttp"]
 
 failures = []
 
