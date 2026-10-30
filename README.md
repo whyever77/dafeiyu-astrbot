@@ -6,7 +6,7 @@
 大肥鱼是 DeepSeek 蓝鲸 logo 的**社区二创形象**（非官方），本项目把「让她住进 QQ 里」
 的全套实践开源出来：一个高完成度的 AstrBot 插件、一套完整人格、以及踩过所有坑的实录。
 
-[记忆星海 v0.2](deploy/memory_observatory/README.md)：本地浅蓝奶白风格记忆星图、时间线、遗忘模拟与来源检查。已接通运行中的 LivingMemory 2.7.0-beta.2，只读展示真实文档、记忆原子和来源关系，支持手动和每 60 秒自动同步；曲线与线索检索仍为本地模拟，不修改 QQ 中的记忆行为。使用已有运维 SSH 配置，在仓库根目录运行 `python -B -m deploy.memory_observatory.server --port 8767 --livingmemory-ssh`，打开 `http://127.0.0.1:8767`。不加 `--livingmemory-ssh` 则使用虚构演示数据。实测与边界见[接入验收](deploy/memory_observatory/LIVINGMEMORY_V02.md)。
+[记忆星海 v0.3](deploy/memory_observatory/README.md)：深蓝星域记忆星图、相机透视与环视、时间线、遗忘模拟和来源检查。已接通运行中的 LivingMemory 2.7.0-beta.2，只读展示真实文档、记忆原子和来源关系，支持手动和每 60 秒自动同步；曲线与线索检索仍为本地模拟，不修改 QQ 中的记忆行为。使用已有运维 SSH 配置，在仓库根目录运行 `python -B -m deploy.memory_observatory.server --port 8767 --livingmemory-ssh`，打开 `http://127.0.0.1:8767`。不加 `--livingmemory-ssh` 则使用虚构演示数据。实测与边界见[接入验收](deploy/memory_observatory/LIVINGMEMORY_V02.md)。
 
 [生活决策 v0.1](deploy/bili_activity/LIFE_DECISION_V01.md)：复用已有调度、目标与预算，根据自己的兴趣、未完成项目和近期尝试选择研究、写作、探索或休息，记录理由并支持主人查询。2026-10-29 已部署并开启，首轮真实决策为 writing；休息不调用模型、不发消息、不写入虚构经历。
 

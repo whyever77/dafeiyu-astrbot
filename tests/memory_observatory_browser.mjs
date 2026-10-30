@@ -113,12 +113,40 @@ try {
     await evaluate('[...document.querySelectorAll(".memory-card")].find(x=>x.querySelector("h3").textContent === "雨声里的晚安").click()');
     assert.equal(await evaluate('document.querySelector(".detail-title").textContent'),'雨声里的晚安');
   });
-  await check('kind islands separate types and selected edges are emphasized',async()=>{
-    const result=await evaluate(`(async()=>{const {layoutByKind}=await import('/graph.js');const d=await fetch('/api/snapshot').then(r=>r.json());const l=layoutByKind(d.memories,800,540);return {groups:l.groups,nodes:l.nodes.map(n=>({kind:n.kind,x:n.px,y:n.py}))};})()`);
-    assert.equal(result.groups.length,4);
-    for(const n of result.nodes){const g=result.groups.find(g=>g.kind===n.kind);assert.ok(n.x>g.x&&n.x<g.x+g.w&&n.y>g.y&&n.y<g.y+g.h);}
+  await check('starfields separate types and keep positions stable',async()=>{
+    const result=await evaluate(`(async()=>{const {layoutStarfields}=await import('/graph.js');const d=await fetch('/api/snapshot').then(r=>r.json());const a=layoutStarfields(d.memories),b=layoutStarfields(d.memories);const extra=[...d.memories,{...d.memories[0],id:'extra-test'}];const c=layoutStarfields(extra);return {groups:a.groups.filter(g=>g.count>0).length,stable:a.nodes.every((n,i)=>n.x===b.nodes[i].x&&n.y===b.nodes[i].y),local:a.nodes.every(n=>{const m=c.nodes.find(x=>x.id===n.id);return m&&m.x===n.x&&m.y===n.y;}),inside:a.nodes.every(n=>{const g=a.groups.find(g=>g.kind===n.kind);return Math.hypot(n.x-g.center[0],n.z-g.center[2])<=g.radius*1.3+1e-6;})};})()`);
+    assert.ok(result.groups>=1);
+    assert.equal(result.stable,true);
+    assert.equal(result.local,true);
+    assert.equal(result.inside,true);
     assert.ok(Number(await evaluate('document.querySelector("#constellation").dataset.highlightedEdges'))>0);
     assert.equal(await evaluate('document.querySelector("#selection-summary").textContent.includes("直接关联")'),true);
+  });
+  await check('clicking the selected node again clears the connection',async()=>{
+    const spot=await evaluate(`(()=>{const c=document.querySelector('#constellation'),g=c.__constellation;const p=g.positions.find(p=>p.id===g.selected);if(!p)return null;const r=c.getBoundingClientRect();return {x:r.left+p.x,y:r.top+p.y};})()`);
+    assert.ok(spot);
+    await evaluate('document.querySelector("#constellation").__constellation.categoryHits=[]');
+    await evaluate(`(()=>{const c=document.querySelector('#constellation');const o={bubbles:true,pointerId:7,pointerType:'mouse',clientX:${spot.x},clientY:${spot.y}};c.dispatchEvent(new PointerEvent('pointerdown',o));c.dispatchEvent(new PointerEvent('pointerup',o));return true;})()`);
+    await until(()=>evaluate('document.querySelector("#constellation").__constellation.selected === null'),'selection cleared');
+    assert.equal(await evaluate('document.querySelector("#memory-detail .empty-state") !== null'),true);
+    await evaluate('[...document.querySelectorAll(".memory-card")].find(x=>x.querySelector("h3").textContent === "雨声里的晚安").click()');
+  });
+  await check('camera survives a data refresh',async()=>{
+    await until(()=>evaluate('document.querySelector("#constellation").__constellation.cameraTween === null'),'camera settles');
+    const before=await evaluate('(()=>{const g=document.querySelector("#constellation").__constellation;return {yaw:g.camera.yaw,pitch:g.camera.pitch,distance:g.camera.distance}})()');
+    await evaluate('(()=>{const g=document.querySelector("#constellation").__constellation;g.setData(g.data,g.selected,g.visibleKinds);return true;})()');
+    const after=await evaluate('(()=>{const g=document.querySelector("#constellation").__constellation;return {yaw:g.camera.yaw,pitch:g.camera.pitch,distance:g.camera.distance}})()');
+    assert.deepEqual(after,before);
+  });
+  await check('clicking a starfield label focuses it',async()=>{
+    const info=await evaluate('(()=>{const g=document.querySelector("#constellation").__constellation;const b=g.categoryHits[0];return b?{kind:b.kind,x:b.x,y:b.y,w:b.w,h:b.h}:null;})()');
+    assert.ok(info);
+    await evaluate(`(()=>{const c=document.querySelector('#constellation');const r=c.getBoundingClientRect();const o={bubbles:true,pointerId:8,pointerType:'mouse',clientX:r.left+${info.x+info.w/2},clientY:r.top+${info.y+info.h/2}};c.dispatchEvent(new PointerEvent('pointerdown',o));c.dispatchEvent(new PointerEvent('pointerup',o));return true;})()`);
+    await until(()=>evaluate(`document.querySelector('#constellation').__constellation.focusedKind === ${JSON.stringify(info.kind)}`),'starfield focused');
+    await until(()=>evaluate('document.querySelector("#constellation").__constellation.cameraTween === null'),'camera focus settles');
+    const target=await evaluate(`(()=>{const g=document.querySelector('#constellation').__constellation;const grp=g.groups.find(x=>x.kind===${JSON.stringify(info.kind)});return {tx:g.camera.target[0],ty:g.camera.target[1],tz:g.camera.target[2],gx:grp.center[0],gy:grp.center[1],gz:grp.center[2]};})()`);
+    assert.ok(Math.hypot(target.tx-target.gx,target.ty-target.gy,target.tz-target.gz)<.02);
+    await evaluate('document.querySelector("#constellation").__constellation.recenter()');
   });
   await check('future simulation fades detail but preserves source confidence',async()=>{
     const before=await evaluate('[...document.querySelectorAll(".detail-score strong")].map(x=>x.textContent)');
