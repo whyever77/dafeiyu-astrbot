@@ -12,18 +12,20 @@ $icon = Join-Path $PSScriptRoot "static\memory-whale.ico"
 if (-not (Test-Path -LiteralPath $icon -PathType Leaf)) { throw "Whale icon is missing." }
 $desktop = [Environment]::GetFolderPath("Desktop")
 $destination = Join-Path $desktop "记忆星海.lnk"
+$arguments = "-B -m deploy.memory_observatory.launcher --life-ssh"
+$legacyArguments = "-B -m deploy.memory_observatory.launcher"
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($destination)
 if ((Test-Path -LiteralPath $destination) -and
-    ($shortcut.Arguments -ne "-B -m deploy.memory_observatory.launcher" -or
+    ($shortcut.Arguments -notin @($arguments, $legacyArguments) -or
      $shortcut.WorkingDirectory -ne $repoRoot)) {
     throw "An unrelated shortcut already exists at the destination; it was not overwritten."
 }
 $shortcut.TargetPath = $Pythonw
-$shortcut.Arguments = "-B -m deploy.memory_observatory.launcher"
+$shortcut.Arguments = $arguments
 $shortcut.WorkingDirectory = $repoRoot
 $shortcut.IconLocation = "$icon,0"
-$shortcut.Description = "记忆星海 · 大肥鱼的 LivingMemory 只读观测台"
+$shortcut.Description = "记忆星海 · 大肥鱼记忆与活动账本只读观测台"
 $shortcut.WindowStyle = 7
 $shortcut.Save()
 # Notify Explorer of this one shortcut, without restarting it or clearing caches.

@@ -1,4 +1,5 @@
 """Desktop entry tests use fake processes and synthetic local HTTP only."""
+from contextlib import nullcontext
 import json
 import threading
 import unittest
@@ -68,6 +69,23 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(kwargs["creationflags"], 0x08000000)
             sleep.assert_called_once()
             child.terminate.assert_not_called()
+
+    def test_starts_with_activity_ledger_when_requested(self):
+        child = Mock()
+        child.poll.return_value = None
+        with patch.object(launcher, "probe", side_effect=["absent", "real"]), \
+             patch.object(launcher.subprocess, "Popen", return_value=child) as spawn, \
+             patch.object(launcher.webbrowser, "open", return_value=True):
+            launcher.launch(life_ssh=True)
+            args, _ = spawn.call_args
+            self.assertEqual(args[0][-4:], ["--port", "8767", "--livingmemory-ssh", "--life-ssh"])
+
+    def test_main_forwards_life_ssh_flag(self):
+        with patch.object(launcher, "startup_lock", return_value=nullcontext()), \
+             patch.object(launcher, "launch") as launch, \
+             patch.object(launcher.sys, "argv", ["launcher", "--life-ssh"]):
+            self.assertEqual(launcher.main(), 0)
+            launch.assert_called_once_with(life_ssh=True)
 
     def test_failed_start_does_not_open_demo_or_browser(self):
         child = Mock()

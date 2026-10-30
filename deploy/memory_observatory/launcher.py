@@ -1,6 +1,7 @@
 """Windows desktop entry: reuse or start the local, real read-only observatory."""
 from __future__ import annotations
 
+import argparse
 from contextlib import contextmanager
 import ctypes
 import json
@@ -90,14 +91,17 @@ def startup_lock():
         kernel.CloseHandle(handle)
 
 
-def launch():
+def launch(life_ssh=False):
     state = probe()
     if state == "other":
         raise LaunchError("8767 端口已占用，或当前服务不是可识别的真实记忆星海。请检查现有服务；不会自动关闭它。")
     if state == "absent":
         flags = {"creationflags": 0x08000000} if os.name == "nt" else {}
-        child = subprocess.Popen([sys.executable, "-B", "-m", "deploy.memory_observatory.server",
-                                  "--port", "8767", "--livingmemory-ssh"], cwd=ROOT,
+        command = [sys.executable, "-B", "-m", "deploy.memory_observatory.server",
+                   "--port", "8767", "--livingmemory-ssh"]
+        if life_ssh:
+            command.append("--life-ssh")
+        child = subprocess.Popen(command, cwd=ROOT,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL, **flags)
         ready = False
@@ -121,9 +125,12 @@ def launch():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="大肥鱼 · 本地记忆星海桌面入口")
+    parser.add_argument("--life-ssh", action="store_true", help="同时只读连接活动账本")
+    args = parser.parse_args()
     try:
         with startup_lock():
-            launch()
+            launch(life_ssh=args.life_ssh)
         return 0
     except Exception as exc:
         message = str(exc) if isinstance(exc, LaunchError) else "启动遇到本机错误，请检查 Python 安装和记忆星海目录。"
