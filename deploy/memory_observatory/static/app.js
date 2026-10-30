@@ -2,7 +2,7 @@ import {Constellation, COLORS} from './graph.js';
 
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const KINDS={episode:'经历',preference:'偏好',knowledge:'知识',method:'方法',document:'文档',plan:'计划',relation:'关系',unclassified:'未分类'};
-const state={data:null,selected:null,view:'atlas',days:0,query:'',scope:null,rehearsed:new Set(),pinned:new Set(),kinds:new Set(Object.keys(KINDS)),autoSync:true};
+const state={data:null,selected:undefined,view:'atlas',days:0,query:'',scope:null,rehearsed:new Set(),pinned:new Set(),kinds:new Set(Object.keys(KINDS)),autoSync:true};
 let requestSerial=0,sliderTimer,toastTimer,autoSyncing=false;const AUTO_SYNC_MS=60000;
 const graph=new Constellation($('#constellation'),selectMemory);
 function el(tag,className,text){const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;}
@@ -13,7 +13,10 @@ function toast(message){$('#toast').textContent=message;$('#toast').hidden=false
 async function api(path,body){const response=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Observatory':'local'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw new Error(result.error||'请求失败');return result;}
 function install(data){
   state.data=data;state.scope=data.scope;
-  if(!data.memories.some(m=>m.id===state.selected))state.selected=data.memories[0]?.id||null;
+  // `undefined` means "pick the first memory"; null is a deliberate deselect
+  // from the star map and must survive 60-second refreshes.
+  if(state.selected===undefined)state.selected=data.memories[0]?.id||null;
+  else if(state.selected!==null&&!data.memories.some(m=>m.id===state.selected))state.selected=data.memories[0]?.id||null;
   $('#scope').replaceChildren(...data.scopes.map(scope=>{const option=el('option','',data.connection?.scopes?.[scope]?.label||scope);option.value=scope;option.selected=scope===data.scope;return option;}));
   render();
 }
@@ -125,7 +128,7 @@ function setView(view){
 function resetExperiment(){state.days=0;state.rehearsed.clear();state.pinned.clear();}
 for(const button of $$('.nav-item[data-view]'))button.addEventListener('click',()=>setView(button.dataset.view));
 $('#kind-filters').addEventListener('click',event=>{const button=event.target.closest('.kind-filter');if(!button)return;const kind=button.dataset.kind;if(state.kinds.has(kind))state.kinds.delete(kind);else state.kinds.add(kind);render();});
-$('#scope').addEventListener('change',()=>{state.scope=$('#scope').value;state.selected=null;resetExperiment();refresh();});
+$('#scope').addEventListener('change',()=>{state.scope=$('#scope').value;state.selected=undefined;graph.clearScope();resetExperiment();refresh();});
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();state.query=$('#query').value.trim();refresh();});
 $('#clear-query').addEventListener('click',()=>{state.query='';$('#query').value='';refresh();});
 $('#days').addEventListener('input',()=>{state.days=Number($('#days').value);$('#day-label').textContent=`向未来 ${state.days} 天`;$('#days').style.setProperty('--progress',`${state.days/365*100}%`);clearTimeout(sliderTimer);sliderTimer=setTimeout(refresh,70);});
@@ -138,10 +141,10 @@ $('#about-button').addEventListener('click',()=>$('#info-dialog').showModal());$
 for(const button of $$('.dialog-close, .dialog-dismiss'))button.addEventListener('click',()=>button.closest('dialog').close());
 $('#import-file').addEventListener('change',async()=>{
   const file=$('#import-file').files[0];if(!file)return;$('#import-error').textContent='';
-  try{if(file.size>4*1024*1024)throw new Error('文件超过 4 MB，请缩小导出范围。');const payload=JSON.parse(await file.text());const data=await api('/api/import',payload);++requestSerial;resetExperiment();state.query='';$('#query').value='';state.selected=null;state.kinds=new Set(Object.keys(KINDS));install(data);$('#import-dialog').close();toast('快照已载入本地内存。源文件与真实记忆均未修改。');}
+  try{if(file.size>4*1024*1024)throw new Error('文件超过 4 MB，请缩小导出范围。');const payload=JSON.parse(await file.text());const data=await api('/api/import',payload);++requestSerial;resetExperiment();state.query='';$('#query').value='';state.selected=undefined;state.kinds=new Set(Object.keys(KINDS));install(data);$('#import-dialog').close();toast('快照已载入本地内存。源文件与真实记忆均未修改。');}
   catch(error){$('#import-error').textContent=error instanceof SyntaxError?'文件不是有效的 JSON。':error.message;}
 });
-$('#reset-dataset').addEventListener('click',async()=>{try{const data=await api('/api/reset',{});++requestSerial;resetExperiment();state.query='';$('#query').value='';state.selected=null;state.kinds=new Set(Object.keys(KINDS));install(data);toast('已返回虚构演示数据。');}catch(error){toast(error.message);}});
+$('#reset-dataset').addEventListener('click',async()=>{try{const data=await api('/api/reset',{});++requestSerial;resetExperiment();state.query='';$('#query').value='';state.selected=undefined;state.kinds=new Set(Object.keys(KINDS));install(data);toast('已返回虚构演示数据。');}catch(error){toast(error.message);}});
 $('#sync-livingmemory').addEventListener('click',()=>syncLive(false));
 loadAutoSync();
 try{install(await api('/api/snapshot'));}catch(error){toast(`无法连接本地服务：${error.message}`);$('#memory-detail').append(el('p','empty-state','请确认本地 Python 服务仍在运行，然后刷新页面。'));}

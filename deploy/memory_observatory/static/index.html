@@ -63,11 +63,11 @@
       <section class="ocean-panel" aria-label="记忆可视化">
         <div class="ocean-toolbar"><div class="ocean-title"><span class="status-dot"></span><strong id="view-label">记忆星海</strong><span id="scope-count"></span></div><div class="view-options"><button id="dimension" class="chip" aria-label="切换二维阅读视图">3D 空间</button><button id="motion" class="icon-button" aria-label="暂停星海动画" title="暂停星海动画">Ⅱ</button></div></div>
         <form id="search-form" class="search"><svg class="icon"><use href="#i-search"/></svg><input id="query" placeholder="给她一个线索，例如「雨声」…" maxlength="200" aria-label="记忆召回线索"><button type="submit" aria-label="唤起相关记忆"><svg class="icon"><use href="#i-arrow"/></svg></button></form>
-        <div id="graph-stage" class="graph-stage"><canvas id="constellation" aria-label="可拖动、缩放的记忆星图；使用下方记忆列表选择节点"></canvas>
+        <div id="graph-stage" class="graph-stage"><canvas id="constellation" aria-label="可拖动环视、滚轮缩放的记忆星图；点击星域名靠近，再次点击同一记忆取消选中"></canvas>
           <div class="stage-caption"><span>按记忆的形状，收好每一段微光</span></div>
-          <div class="graph-controls"><button id="zoom-in" aria-label="放大星图">＋</button><button id="zoom-out" aria-label="缩小星图">−</button><button id="recenter" aria-label="重置星图视角">⌾</button></div>
+          <div class="graph-controls"><button id="zoom-in" aria-label="放大星图">＋</button><button id="zoom-out" aria-label="缩小星图">−</button><button id="recenter" aria-label="返回全景并重置视角" title="返回全景">⌾</button></div>
           <div id="graph-tooltip" role="tooltip" hidden></div>
-          <div class="graph-guide" id="selection-summary" aria-live="polite">选择一段记忆，点亮它的关联</div>
+          <div class="graph-guide" id="selection-summary" aria-live="polite">选择一段记忆，点亮它的关联；再次点击同一节点取消</div>
           <div class="graph-legend"><span><i class="legend-line"></i>来源关联</span><span><i class="legend-line dashed"></i>主题联想</span><span><i class="legend-ring"></i>保留记忆</span></div>
         </div>
         <div id="timeline-view" class="alternate-view" hidden><div class="section-kicker">MOMENTS THAT STAY</div><h2>时间走过，留下这些。</h2><p>按记忆创建时间排列。点击片段，看看细节与意义如何变化。</p><div id="timeline-list"></div></div>
