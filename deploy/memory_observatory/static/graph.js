@@ -95,6 +95,21 @@ export class Constellation{
   this.resetCamera(true);this.canvas.dataset.layout='starfields';
  }
 
+ previewDays(days){
+  // Track the slider locally while the debounced server projection is in flight;
+  // the server response replaces these targets with the same formula.
+  const asOf=Date.parse(this.data.as_of||'');if(!Number.isFinite(asOf))return;
+  const at=asOf+Number(days)*86400000;
+  for(const node of this.nodes){
+   if(node.protected){node.detail=1;node.gist_retention=1;continue;}
+   const recalled=Date.parse(node.last_recalled_at||node.created_at||'');if(!Number.isFinite(recalled))continue;
+   const age=Math.max(0,(at-recalled)/86400000);
+   const stability=Math.max(1,(node.half_life_days||30)*(node.simulated_rehearsal?1.6:1));
+   node.detail=Math.pow(2,-age/stability);
+   node.gist_retention=Math.pow(2,-age/(stability*3));
+  }
+ }
+
  projectPoint(x,y,z){
   if(this.twoD){
    const base=this.flatBase||520,scale=base*this.flat.scale;
@@ -231,8 +246,8 @@ export class Constellation{
    const r=(this.twoD?2.4+p.importance*3.2:2.2+p.importance*3.6)*clamp(scale,.55,1.45);
    p.r=r;
    const fade=this.twoD?1:clamp(1-(p.zc-1.65)/2.2*.55,.42,1);
-   const alpha=clamp((.26+.74*p.shownDetail)*fade*(p.id===this.selected?1:.9),.12,1);
-   const halo=r*(2.4+3.4*p.shownDetail);
+   const alpha=clamp((.20+.80*p.shownDetail)*fade*(p.id===this.selected?1:.9),.12,1);
+   const halo=r*(2.0+3.8*p.shownDetail);
    const glow=c.createRadialGradient(p.x,p.y,0,p.x,p.y,halo);
    glow.addColorStop(0,rgba(color,.24*p.shownDetail*fade));glow.addColorStop(.55,rgba(color,.08*p.shownDetail*fade));glow.addColorStop(1,rgba(color,0));
    c.fillStyle=glow;c.beginPath();c.arc(p.x,p.y,halo,0,TAU);c.fill();
@@ -360,7 +375,7 @@ export class Constellation{
  tick(now){
   const dt=Math.min(now-(this.last||now),50);this.last=now;
   if(!document.hidden&&this.width&&this.canvas.getBoundingClientRect().height){
-   const a=this.reduced?1:1-Math.exp(-dt/220);let changing=false;
+   const a=this.reduced?1:1-Math.exp(-dt/120);let changing=false;
    for(const node of this.nodes){
     const target=node.detail??1,gist=node.gist_retention??1;
     node.shownDetail+=(target-node.shownDetail)*a;node.shownGist+=(gist-node.shownGist)*a;

@@ -150,7 +150,8 @@ try {
   });
   await check('future simulation fades detail but preserves source confidence',async()=>{
     const before=await evaluate('[...document.querySelectorAll(".detail-score strong")].map(x=>x.textContent)');
-    await evaluate('document.querySelector("#days").value=180;document.querySelector("#days").dispatchEvent(new Event("input",{bubbles:true}))');
+    const immediate=await evaluate(`(()=>{const g=document.querySelector('#constellation').__constellation,s=document.querySelector('#days');const n=g.nodes.find(n=>!n.protected);const before=n.detail;s.value='180';s.dispatchEvent(new Event('input',{bubbles:true}));return {before,after:n.detail};})()`);
+    assert.ok(immediate.after < immediate.before);
     await until(()=>evaluate('document.querySelector("#constellation").dataset.transitioning === "true"'),'continuous fade begins');
     await evaluate('window.__fadeBefore=document.querySelector("#constellation").toDataURL();void 0');await pause(90);
     assert.equal(await evaluate('window.__fadeBefore !== document.querySelector("#constellation").toDataURL()'),true);

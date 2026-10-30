@@ -131,7 +131,7 @@ $('#kind-filters').addEventListener('click',event=>{const button=event.target.cl
 $('#scope').addEventListener('change',()=>{state.scope=$('#scope').value;state.selected=undefined;graph.clearScope();resetExperiment();refresh();});
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();state.query=$('#query').value.trim();refresh();});
 $('#clear-query').addEventListener('click',()=>{state.query='';$('#query').value='';refresh();});
-$('#days').addEventListener('input',()=>{state.days=Number($('#days').value);$('#day-label').textContent=`向未来 ${state.days} 天`;$('#days').style.setProperty('--progress',`${state.days/365*100}%`);clearTimeout(sliderTimer);sliderTimer=setTimeout(refresh,70);});
+$('#days').addEventListener('input',()=>{state.days=Number($('#days').value);$('#day-label').textContent=`向未来 ${state.days} 天`;$('#days').style.setProperty('--progress',`${state.days/365*100}%`);graph.previewDays(state.days);clearTimeout(sliderTimer);sliderTimer=setTimeout(refresh,70);});
 $('#reset-simulation').addEventListener('click',()=>{clearTimeout(sliderTimer);resetExperiment();refresh();});
 $('#dimension').addEventListener('click',()=>{graph.twoD=!graph.twoD;$('#dimension').textContent=graph.twoD?'2D 阅读':'3D 空间';$('#dimension').setAttribute('aria-label',graph.twoD?'切换三维空间视图':'切换二维阅读视图');graph.draw(performance.now());});
 function motionLabel(){const button=$('#motion');button.textContent=graph.paused?'▷':'Ⅱ';button.setAttribute('aria-label',graph.paused?'播放星海动画':'暂停星海动画');button.title=button.getAttribute('aria-label');}
