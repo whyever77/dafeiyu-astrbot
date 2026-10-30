@@ -59,7 +59,11 @@ def probe():
         if isinstance(exc, HTTPError):
             exc.close()
         reason = exc.reason
-        return "absent" if isinstance(reason, ConnectionRefusedError) or getattr(reason, "errno", None) in (61, 111, 10061) else "other"
+        # Windows may report a closed loopback port as a timeout instead of a
+        # refusal; both mean no service is answering, so a fresh start is safe.
+        if isinstance(reason, (ConnectionRefusedError, TimeoutError)):
+            return "absent"
+        return "absent" if getattr(reason, "errno", None) in (61, 10060, 10061, 111) else "other"
     except (OSError, ValueError, AttributeError, TypeError):
         return "other"
 

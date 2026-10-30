@@ -128,6 +128,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_connection_refusal_is_absent_but_invalid_response_is_occupied(self):
         for error, expected in ((URLError(ConnectionRefusedError()), "absent"),
+                                (URLError(TimeoutError()), "absent"),
                                 (ValueError("bad JSON"), "other"), (TimeoutError(), "other")):
             with self.subTest(expected=expected), patch.object(launcher, "fetch", side_effect=error):
                 self.assertEqual(launcher.probe(), expected)
