@@ -70,8 +70,8 @@ def check(name, cond, detail=""):
 
 
 plugin = object.__new__(mod.ScheduleAwarenessPlugin)
-UMO = "qq:FriendMessage:2725331494"
-OTHER = "qq:FriendMessage:2788410557"
+UMO = "qq:FriendMessage:10001"
+OTHER = "qq:FriendMessage:10002"
 
 jobs = [
     {

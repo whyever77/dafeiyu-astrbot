@@ -1,5 +1,5 @@
 param(
-    [string]$Server = "139.159.250.199",
+    [string]$Server = "",
     [string]$User = "root",
     [string]$Key = "$env:USERPROFILE\.ssh\ecs_dafeiyu",
     [int]$SshPort = 22,
@@ -8,6 +8,17 @@ param(
     [switch]$Remove
 )
 $ErrorActionPreference = "Stop"
+if (-not $Server) {
+    $SshHost = $env:DAFEIYU_SSH_HOST
+    $HostFile = Join-Path $HOME ".dafeiyu-admin\host"
+    if (-not $SshHost -and (Test-Path $HostFile)) {
+        $SshHost = (Get-Content $HostFile -TotalCount 1).Trim()
+    }
+    if ($SshHost) { $Server = $SshHost -replace '^[^@]+@', '' }
+}
+if (-not $Server) {
+    throw "Specify -Server <host>, or set DAFEIYU_SSH_HOST / ~/.dafeiyu-admin/host"
+}
 $startup = [Environment]::GetFolderPath("Startup")
 $target = Join-Path $startup "dafeiyu-bili.cmd"
 if ($Remove) {

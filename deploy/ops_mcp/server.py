@@ -189,8 +189,8 @@ print(json.dumps({
     "napcat_webui_base": f"http://__DAFEIYU_HOST__:{port}/webui",
     "napcat_port": port,
     "astrbot_panel": "http://__DAFEIYU_HOST__:6185",
-    "quick_account": "248093506",
-    "main_account": "2725331494",
+    "quick_account": os.environ.get("DAFEIYU_BOT_QQ", ""),
+    "main_account": os.environ.get("DAFEIYU_OWNER_QQ", ""),
     "token_note": "token is not returned; read it on the host only when needed.",
 }, ensure_ascii=False))
 '''

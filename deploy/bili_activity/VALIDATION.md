@@ -16,12 +16,12 @@
 | Linux `test_bili_*.py` | **215 项 OK，6 跳过** | 云主机临时目录；export/符号链接测试实际执行；ffmpeg 缺失跳过 |
 | AstrBot 插件加载 | 通过 | v4.29.0，`astrbot_plugin_bili_activity v0.3.0`，12 个 `df_*` 工具 |
 | SQLite 迁移 | 通过 | `user_version=1`，goals/episodes/activity_budget_* 存在 |
-| QQ / WS | 通过 | 小号 248093506 恢复；`aiocqhttp` 已连接 |
+| QQ / WS | 通过 | 小号 `<小号QQ>` 恢复；`aiocqhttp` 已连接 |
 
 真实 smoke 证据：
 
 - 失败 read `invalid_test`：只写 `read_failed`（`operation=invalid_test`），`read` episode 为 0；
-- 群聊 1105352914：无 `list_devices`，`df_screen` 被“仅主人私聊”拒绝；
+- 群聊 `<测试群>`：无 `list_devices`，`df_screen` 被“仅主人私聊”拒绝；
 - life run `122ca7125a7a4635be2b3fbaac4555fa`：completed；目标 `def033f00f824c4dabf67c3d650a8330`；2 条视频 + 弹幕/评论；截图回执 `message_id=1693155839`、`verified=true`、`image_readback=true`、`recipient_confirmed=false`；预算约 65 秒/12 次模型/1 分享/1 截图；episodes 10（read 2）；`video_verified=false`，未冒充手机正在播放；
 - workshop：work `f99232fccadb4d64998a3542822c31ff`，revision 1，4 个来源，三节结构，`passed=true`；
 - export：`works/f992.../r1.md`，19,117 字节，sha256 `6e055c193d626a234ca928db74b7fa57c5bbb89af88e3ec5fd2c934eee742806`；
@@ -128,14 +128,14 @@ python.exe -m unittest discover -s tests -p "test_bili_*.py"
 
 ## 2026-10-21 接手 Agent 实机部署进展
 
-部署位置：华为云 `139.159.250.199`（AstrBot 4.29.0 容器）+ 本机 Windows（雷电 emulator-5554），分支 `codex/bili-activity-20261021`。
+部署位置：华为云 `<云主机>`（AstrBot 4.29.0 容器）+ 本机 Windows（雷电 emulator-5554），分支 `codex/bili-activity-20261021`。
 
 已完成并验证：
 - 云端插件已落盘并加载成功：日志出现 `Loading plugin astrbot_plugin_bili_activity`、`Plugin ... (v0.1.0)`，8 个 `df_*` 工具注册；PhoneMCP 重连后 18 个工具可用。
 - 云 → Windows Bili MCP 真实往返成功：容器内 `streamablehttp_client(http://172.18.0.1:8011/mcp)` 列到 5 个工具，`bili_phone status` 返回 `online:true`，`current` 返回 `bilibili_not_focused`。
 - 本地 `status_bili_service.ps1`：MCP 握手、必需工具、emulator-5554 全部 OK。
 - PhoneMCP 已备份并应用 `phone_screenshot.patch`；真实截图返回 1 张 JPEG（720x1280，114 KB，非全黑）。
-- 云端 `deploy.sh` 已执行，备份 `/opt/dafeiyu/backups/bili-activity-20261021T124200.554744Z.tar.gz`；`control.json` 已按实际值配置：`owner_scope=qq:FriendMessage:2725331494`、`dnd_ranges=[["23:00","08:00"]]`（取自 proactive_chat 的 23-8），活动默认关闭。
+- 云端 `deploy.sh` 已执行，备份 `/opt/dafeiyu/backups/bili-activity-20261021T124200.554744Z.tar.gz`；`control.json` 已按实际值配置：`owner_scope=qq:FriendMessage:<主人QQ>`、`dnd_ranges=[["23:00","08:00"]]`（取自 proactive_chat 的 23-8），活动默认关闭。
 
 本轮修正（均由实机部署暴露）：
 - 端口冲突：云端 `172.18.0.1:8010` 已被 browser-use MCP 占用，Bili 服务全链路改为 **8011**。
@@ -153,8 +153,8 @@ python.exe -m unittest discover -s tests -p "test_bili_*.py"
 - `Executor` 改为每次操作独立 SQLite 连接，Windows 句柄可释放
 
 仍待用户参与/联调：
-- QQ 小号 248093506 于 2026-10-21 21:52 扫码恢复登录，当天群消息收发正常。
-- B 站账号于 2026-10-21 22:00 扫码登录成功：UID `1926697723`（做个亻），`bili_read status` 返回 `logged_in:true`，关注列表可读。
+- QQ 小号 `<小号QQ>` 于 2026-10-21 21:52 扫码恢复登录，当天群消息收发正常。
+- B 站账号于 2026-10-21 22:00 扫码登录成功：UID `<B站UID>`（`<昵称>`），`bili_read status` 返回 `logged_in:true`，关注列表可读。
 - 真实视频链路：`bili_prepare_video` 对 `BV1Jonu6mEYG`（cid 42839704376）取 0–8 秒，下载 21.8 MB，返回 2 帧 + 1 段音频，`covered_range` 与请求一致。
 - 仍待完成：被动“截图看看”QQ 收图、一次性自主活动、真实评论/收藏提议与回读、LivingMemory 保存、周期启用。
 

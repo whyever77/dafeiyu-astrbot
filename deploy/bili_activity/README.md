@@ -58,7 +58,7 @@ Bili 服务使用真正的 MCP Streamable HTTP；PhoneMCP 继续使用 SSE。云
    .\.venv\Scripts\python.exe .\preflight.py --adb D:\leidian\LDPlayer14\adb.exe --ffmpeg-dir D:\AI\BiliActivity\bin --port 8011
    ```
 
-   需要登录自启时，运行 `.\install_bili_autostart.ps1 -Server <主机>`（写入当前用户启动目录，不需要管理员；`-Remove` 卸载）。它只启动 Bili 服务与隧道，PhoneMCP 和模拟器仍需各自的启动方式。
+   需要登录自启时，运行 `.\install_bili_autostart.ps1 -Server <主机>`（写入当前用户启动目录，不需要管理员；`-Remove` 卸载）。不传 `-Server` 时读取 `DAFEIYU_SSH_HOST` 或 `~/.dafeiyu-admin/host`。它只启动 Bili 服务与隧道，PhoneMCP 和模拟器仍需各自的启动方式。
 
 4. 若没有可复用且验证有效的 B 站登录态，启动本地扫码。二维码只显示在本地，确认后凭证写入运行目录；不在聊天、日志或工具结果中返回 Cookie：
 

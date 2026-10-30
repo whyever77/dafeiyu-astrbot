@@ -249,7 +249,7 @@ AstrBot 的「未来任务」就是 `cron_jobs` 表里的 `active_agent` 任务�
 
 - 名称：`大肥鱼晚间逛B站`
 - Cron：`30 20 * * *`，时区 `Asia/Shanghai`
-- 会话：`qq:FriendMessage:2725331494`（主号私聊）
+- 会话：`qq:FriendMessage:<主人QQ>`（主号私聊）
 - 提示词要点：结合最近聊天和长期记忆选主题（别每天同一类）→ 手机打开 B 站搜索 →
   看前三个结果 → 挑一条打开看标题/UP/简介/页面数据 → 私聊汇报，只讲实际看到的 →
   能拿分享链接就拿，拿不到直说 → 发完用 `memorize_long_term_memory` 记活动摘要，

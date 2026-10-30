@@ -14,6 +14,8 @@ Claude Code ──stdio──> server.py ──ssh -i ~/.ssh/ecs_dafeiyu──> 
 - 或文件 `~/.dafeiyu-admin/host`，一行 `root@1.2.3.4`
 
 `register.ps1` 会把解析到的地址以 `-e DAFEIYU_SSH_HOST=...` 写进 Claude Code 的 MCP 注册项。
+两个 QQ 号也不写进仓库：可选设置 `DAFEIYU_OWNER_QQ` / `DAFEIYU_BOT_QQ`，
+只用于 `webui_info` 展示；不设置时返回空字符串。
 
 ## 工具
 
@@ -24,7 +26,7 @@ Claude Code ──stdio──> server.py ──ssh -i ~/.ssh/ecs_dafeiyu──> 
 | `qr` | 只读 | 拉最新 `qrcode.png` 到 `~/.dafeiyu-admin/qr.png`，内联返回图片 |
 | `plugins` | 只读 | 列出 AstrBot 插件 |
 | `cron_jobs` | 只读 | 只读 SQLite 查 `cron_jobs`（名称/表达式/时区/下次运行） |
-| `webui_info` | 只读 | NapCat WebUI 基础 URL、AstrBot 面板、两个 QQ 号；**不返回 token** |
+| `webui_info` | 只读 | NapCat WebUI 基础 URL、AstrBot 面板、两个 QQ 号（若配置了环境变量）；**不返回 token** |
 | `restart` | 写 | `docker restart <container>`，`confirm` 必须是 `RESTART` |
 | `heal_ws` | 写 | 跑 `/opt/dafeiyu/heal_ws.py`，`confirm` 必须是 `HEAL` |
 | `compose_up` | 写 | `docker compose up -d`，`confirm` 必须是 `UP` |
