@@ -5,6 +5,7 @@ import importlib
 import json
 from pathlib import Path
 import sqlite3
+import struct
 import sys
 import tempfile
 import threading
@@ -187,12 +188,24 @@ class RoomHTTPTests(unittest.TestCase):
 
     def test_assets_and_cached_views_do_not_refresh_or_change_memory(self):
         before=self.request("/api/snapshot")[2]
-        for path in ("/room","/room.js","/room.css","/api/room"):
+        for path in ("/room","/room.js","/room.css","/room-scene.js","/cozy.css",
+                     "/character-credits","/character-license","/api/room"):
             status,headers,body=self.request(path)
             self.assertEqual(status,200)
             self.assertEqual(headers["Cache-Control"],"no-store")
         self.assertEqual(self.source.load.call_count,1)
         self.assertEqual(before,self.request("/api/snapshot")[2])
+
+    def test_character_assets_are_explicit_and_do_not_expose_other_files(self):
+        for name in ("idle", "walk", "desk", "shelf", "window", "rest"):
+            status, headers, body = self.request(f"/character/{name}.png")
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["Content-Type"], "image/png")
+            self.assertTrue(body.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertEqual(struct.unpack(">II", body[16:24]), (1786, 894), name)
+        for path in ("/character/../server.py", "/character/cookies.json", "/character/unknown.png"):
+            self.assertEqual(self.request(path)[0], 404)
+        self.assertEqual(self.source.load.call_count, 1)
 
     def test_refresh_failure_marks_old_snapshot_stale_and_recovery_is_explicit(self):
         self.source.load.side_effect=ActivityError("private failure")
@@ -248,8 +261,17 @@ class RoomHTTPTests(unittest.TestCase):
         self.assertEqual(result,[200])
 
     def test_snapshot_age_marks_stale_without_upstream_io(self):
-        self.server.activity_snapshot["as_of"]=time.time()-181
-        self.assertEqual(json.loads(self.request("/api/room")[2])["connection"],"stale")
+        self.server.activity_loaded_at=time.monotonic()-181
+        stale=json.loads(self.request("/api/room")[2])
+        self.assertEqual(stale["connection"],"stale")
+        self.assertGreaterEqual(stale["age_seconds"],180)
+        self.assertEqual(self.source.load.call_count,1)
+
+    def test_remote_clock_skew_does_not_mark_fresh_snapshot_stale(self):
+        self.server.activity_snapshot["as_of"]=time.time()-3600
+        view=json.loads(self.request("/api/room")[2])
+        self.assertEqual(view["connection"],"ready")
+        self.assertLess(view["age_seconds"],180)
         self.assertEqual(self.source.load.call_count,1)
 
 

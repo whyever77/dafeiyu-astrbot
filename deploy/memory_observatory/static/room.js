@@ -1,8 +1,10 @@
+import {RoomScene} from './room-scene.js';
+const scene=new RoomScene();
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const ACTION={research:'研究',writing:'写作',explore:'探索',rest:'休息'};
 const STATUS={ready:'准备继续',running:'记录为进行中',paused:'暂存，待继续',waiting_approval:'等待主人点头',blocked:'暂时受阻',completed:'已完成',cancelled:'已取消',draft:'草稿',active:'进行中',write:'写作',research:'资料收集'};
 const STATE={disabled:'自主生活尚未开启',paused:'自主活动已暂停',recorded_running:'账本记录：这一轮进行中',unconfirmed:'进行中记录已过时，状态待确认',rest:'最近一次选择：先休息',ended:'最近一轮已结束',planned:'已有安排，尚未开始',interrupted:'最近一轮未正常结束',idle:'还没有新的生活安排',unknown:'暂时没有可确认的近况'};
-let snapshot=null,zone='desk',busy=false,toastTimer;
+let snapshot=null,zone='overview',busy=false,toastTimer,fetchedAt=0;
 function node(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=String(text);return n;}
 function date(t){return typeof t==='number'&&Number.isFinite(t)?new Date(t*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'时间未记录';}
 function toast(text){clearTimeout(toastTimer);$('#room-toast').textContent=text;$('#room-toast').hidden=false;toastTimer=setTimeout(()=>$('#room-toast').hidden=true,5000);}
@@ -12,22 +14,23 @@ function render(){
   if(!snapshot)return;
   const s=snapshot,stale=s.connection==='stale',demo=s.mode==='demo',unavailable=s.mode==='unavailable';
   document.body.dataset.source=s.connection;
-  const position={desk:'translate(0 0)',shelf:'translate(-135 -30)',window:'translate(95 -60)',rest:'translate(170 -5)'};
-  $('#room-whale-position').setAttribute('transform',position[s.zone]||position.desk);
-  $('#room-whale-position').setAttribute('opacity',stale||unavailable?'.45':'1');
   $('#room-source').textContent=demo?'虚构演示场景':stale?'旧快照 · 当前状态未知':unavailable?'活动来源未就绪':'真实活动账本 · 只读';
   $('#room-synced').textContent=s.as_of?`快照 ${date(s.as_of)} · 上海时间`:'未连接时，不补写虚构生活';
   $('#room-refresh').disabled=busy||demo||s.connection==='unconfigured';
   $('#room-goals').textContent=unavailable?'—':String(s.goals.length).padStart(2,'0');$('#room-works').textContent=unavailable?'—':String(s.works.length).padStart(2,'0');$('#room-pending').textContent=unavailable?'—':String(s.pending).padStart(2,'0');
   $('#room-notice').textContent=s.notice;$('#scene-status').textContent=stale?'旧记录，仅供回看':STATE[s.state]||STATE.unknown;
-  const titles={desk:'书桌上的下一页',shelf:'慢慢攒下的作品',window:'那些小小的足迹',rest:'安静，也是一种安排'};
+  const titles={overview:'今天的小天地',desk:'书桌上的下一页',shelf:'慢慢攒下的作品',window:'那些小小的足迹',rest:'安静，也是一种安排'};
   $('#journal-title').textContent=titles[zone];$('#journal-index').textContent=`0${['desk','shelf','window','rest'].indexOf(zone)+1} / 04`;
-  $$('[data-zone]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.zone===zone)));$$('[data-art]').forEach(g=>g.classList.toggle('selected',g.dataset.art===zone));
+  $$('button[data-zone]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.zone===zone)));$$('[data-art]').forEach(g=>g.classList.toggle('selected',g.dataset.art===zone));
   const box=$('#journal-content');box.replaceChildren();
   if(stale)box.append(node('p','state-warning','同步中断或快照已超过三分钟。下面是旧记录，不能据此判断她现在正在做什么。'));
   if(unavailable){box.append(node('p','empty','房间已经在这里，但还没有连接到她的活动账本。连接后，安排、作品和足迹才会在这里出现。'),node('p','entry-note','这是独立的生活观测空间，不会从记忆片段猜测她的当前状态。'));return;}
   const latest=s.decisions[0];
-  if(zone==='desk'){
+  if(zone==='overview'){
+    const hello=node('div','overview-note');hello.append(node('h3','','先在这里坐一会儿'),node('p','entry-text','去书桌写一点安排，去书架翻几页书，或是陪她看一会儿窗外。'),node('p','entry-note','点击下方的角落，镜头会带你走近。'));
+    box.append(hello,node('h3','entry-title',STATE[s.state]||STATE.unknown));
+    if(latest)box.append(node('p','entry-text',latest.reason||'这次选择没有附理由。'),node('p','entry-note',latest.run_status==='completed'?'该轮已返回，不等于目标完成。':'实际进展以活动记录为准。'),node('p','entry-time',date(latest.at)));
+  }else if(zone==='desk'){
     box.append(node('span','entry-label',demo?'FICTIONAL DEMO · 虚构演示':'ACTIVITY SNAPSHOT · 活动快照'));
     box.append(node('h3','entry-title',STATE[s.state]||STATE.unknown));
     if(latest){box.append(node('p','entry-text',latest.reason||'这次选择没有附理由。'),node('p','entry-note',`最近选择了${ACTION[latest.action]||'一项活动'}；${latest.run_status==='completed'?'该轮已返回，不等于目标完成。':latest.run_status==='rested'?'只记录休息，没有运行 Agent。':'执行结果以活动账本为准。'}`),node('p','entry-time',`${date(latest.at)} · 选择记录 ${latest.id}`));}
@@ -51,11 +54,12 @@ function render(){
     box.append(node('p','entry-note','这里不模拟体力、情绪或亲密度；是否联系主人仍由原来的开关、免打扰和额度决定。'));
   }
 }
-for(const b of $$('[data-zone]'))b.addEventListener('click',()=>{zone=b.dataset.zone;render();});
+for(const b of $$('button[data-zone]'))b.addEventListener('click',()=>{zone=b.dataset.zone;scene.go(zone);render();});
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');let motionOff=reduced.matches;
-function motion(){document.body.classList.toggle('motion-off',motionOff);$('#room-motion').setAttribute('aria-pressed',String(motionOff));$('#room-motion').textContent=motionOff?'微光已静止':'暂停微光';}
+function motion(){document.body.classList.toggle('motion-off',motionOff);scene.setPaused(motionOff);$('#room-motion').setAttribute('aria-pressed',String(motionOff));$('#room-motion').textContent=motionOff?'继续动画':'暂停动画';}
 $('#room-motion').addEventListener('click',()=>{motionOff=!motionOff;motion();});motion();reduced.addEventListener('change',e=>{motionOff=e.matches;motion();});
-$('#room-refresh').addEventListener('click',async()=>{if(busy)return;busy=true;render();try{snapshot=await request('/api/room/refresh',{});toast('已读取活动账本，没有改变她的活动。');}catch(e){try{snapshot=await request('/api/room');}catch{if(snapshot.mode==='activity')snapshot={...snapshot,connection:'stale'};}toast(e.message);}finally{busy=false;render();}});
-try{snapshot=await request('/api/room');render();}catch{snapshot={mode:'unavailable',connection:'unavailable',state:'unknown',as_of:null,notice:'暂时无法读取来源。房间布景不代表真实活动。'};render();}
+$('#room-refresh').addEventListener('click',async()=>{if(busy)return;busy=true;render();try{snapshot=await request('/api/room/refresh',{});fetchedAt=Date.now()/1000;toast('已读取活动账本，没有改变她的活动。');}catch(e){try{snapshot=await request('/api/room');fetchedAt=Date.now()/1000;}catch{if(snapshot.mode==='activity')snapshot={...snapshot,connection:'stale'};}toast(e.message);}finally{busy=false;render();}});
+try{snapshot=await request('/api/room');fetchedAt=Date.now()/1000;render();}catch{snapshot={mode:'unavailable',connection:'unavailable',state:'unknown',as_of:null,notice:'暂时无法读取来源。房间布景不代表真实活动。'};render();}
 // Age only the view. No automatic SSH polling, model call, or activity trigger.
-setInterval(()=>{if(snapshot?.mode==='activity'&&Date.now()/1000-snapshot.as_of>180&&snapshot.connection!=='stale'){snapshot={...snapshot,connection:'stale'};render();}},30000);
+// The server reports monotonic load age; add time since this page received it. Never compare the remote as_of clock with the browser clock.
+setInterval(()=>{if(snapshot?.mode==='activity'){const age=(snapshot.age_seconds||0)+Math.max(0,Date.now()/1000-fetchedAt);if(age>180&&snapshot.connection!=='stale'){snapshot={...snapshot,connection:'stale'};render();}}},30000);

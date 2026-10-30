@@ -1,74 +1,12 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#081820"><title>她的小小房间 · 大肥鱼</title><link rel="stylesheet" href="/room.css"><script type="module" src="/room.js"></script></head>
-<body>
-<header class="room-header"><a class="room-brand" href="/" aria-label="返回记忆星海"><span class="brand-whale"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 23c3 12 12 18 24 12 6-3 10-10 10-17l5-5-1 12-6 1C27 45 9 39 6 23Z" fill="currentColor"/><circle cx="17" cy="23" r="2" fill="currentColor"/><path d="M17 16q-3-7 0-9m3 8q1-5 5-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span>记忆星海<small>DAFEIYU’S LITTLE WORLD</small></span></a><nav aria-label="空间导航"><a href="/">记忆星海</a><a href="/room" aria-current="page">她的小小房间</a></nav><span class="local-badge"><i></i>本地观测 · 不回写</span></header>
-<main>
-  <section class="room-heading"><div><div class="eyebrow">A LIFE BETWEEN CONVERSATIONS</div><h1>你不在的时候，<br class="mobile-break">故事也可以慢慢继续<span>。</span></h1><p>一张书桌，一点好奇心，还有没有写完的下一页。</p></div><div class="observation"><span id="room-source">正在读取来源</span><small id="room-synced">等待活动记录</small><button id="room-refresh" type="button" disabled>↻ 同步近况</button></div></section>
-  <div class="room-layout">
-    <section class="room-scene" aria-label="虚拟房间布景"><div class="scene-top"><span>THE QUIET TIDE <i>01</i></span><button id="room-motion" aria-pressed="false">暂停微光</button></div>
-      <svg id="room-art" viewBox="0 0 960 680" role="img" aria-label="深海窗边的温暖小房间：书桌、书架、休息角和一只小鲸鱼。布景不是实时状态证明。">
-      <defs>
-        <linearGradient id="wall" x2="0" y2="1"><stop stop-color="#193746"/><stop offset="1" stop-color="#102633"/></linearGradient>
-        <linearGradient id="wallSide" x2="1" y2="1"><stop stop-color="#24404c"/><stop offset="1" stop-color="#152c36"/></linearGradient>
-        <linearGradient id="floor" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#51605b"/><stop offset=".5" stop-color="#344b4c"/><stop offset="1" stop-color="#1c343d"/></linearGradient>
-        <radialGradient id="sea"><stop stop-color="#285769"/><stop offset=".7" stop-color="#173746"/><stop offset="1" stop-color="#0d2533"/></radialGradient>
-        <linearGradient id="whale" x2=".4" y2="1"><stop stop-color="#b5e4db"/><stop offset=".5" stop-color="#70bcb6"/><stop offset="1" stop-color="#3a858e"/></linearGradient>
-        <linearGradient id="curtain"><stop stop-color="#537779"/><stop offset="1" stop-color="#254753"/></linearGradient>
-        <linearGradient id="light" x2="0" y2="1"><stop stop-color="#edcd8b" stop-opacity=".34"/><stop offset="1" stop-color="#edcd8b" stop-opacity="0"/></linearGradient>
-        <radialGradient id="warm"><stop stop-color="#f4d797" stop-opacity=".17"/><stop offset="1" stop-color="#f4d797" stop-opacity="0"/></radialGradient>
-        <radialGradient id="haze"><stop stop-color="#62c5bb" stop-opacity=".16"/><stop offset="1" stop-color="#62c5bb" stop-opacity="0"/></radialGradient>
-        <filter id="blur"><feGaussianBlur stdDeviation="12"/></filter>
-        <filter id="shadow"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#030e18" flood-opacity=".5"/></filter>
-        <clipPath id="windowClip"><path d="M533 148Q533 105 576 119L736 169Q770 180 770 216V350L533 271Z"/></clipPath>
-      </defs>
-      <ellipse cx="482" cy="565" rx="352" ry="74" fill="#020e17" opacity=".42" filter="url(#blur)"/>
-      <g filter="url(#shadow)">
-        <path d="M122 390V169L458 69V292Z" fill="url(#wallSide)"/><path d="M458 69L823 190V414L458 292Z" fill="url(#wall)"/>
-        <path d="M122 390L458 282L823 404L489 555Z" fill="url(#floor)"/>
-        <path d="M122 390L489 536L823 404V425L489 576L122 410Z" fill="#20383e"/><path d="M122 390L489 536L823 404" fill="none" stroke="#81908a" stroke-opacity=".35" stroke-width="2"/>
-        <path d="M458 73V285M126 390L458 282L819 403" stroke="#70908d" stroke-opacity=".25" stroke-width="3" fill="none"/>
-        <g stroke="#92a79a" stroke-opacity=".1"><path d="M173 375L540 517M231 356L596 493M289 338L653 470M345 320L708 447M402 301L765 424"/><path d="M173 410L508 299M230 432L564 318M288 455L621 338M346 478L679 358M404 501L737 378"/></g>
-      </g>
-      <!-- Porthole / the outside world -->
-      <g class="scene-zone" data-art="window"><path d="M521 145Q521 89 574 105L741 158Q782 172 782 216V365L521 278Z" fill="#3a5660" stroke="#63817f" stroke-width="2"/><path d="M533 148Q533 105 576 119L736 169Q770 180 770 216V350L533 271Z" fill="url(#sea)"/>
-        <g clip-path="url(#windowClip)"><circle cx="669" cy="179" r="27" fill="#c2d9c8" opacity=".7"/><circle cx="677" cy="171" r="26" fill="#244b5b"/><path d="M510 260Q600 205 683 252T800 281V360H510Z" fill="#37616b" opacity=".38"/><path d="M510 276Q612 228 700 284T800 292V370H510Z" fill="#426f70" opacity=".2"/>
-        <g fill="#b0d9d1" class="window-lights"><circle cx="562" cy="173" r="1.7"/><circle cx="611" cy="155" r="1.2"/><circle cx="707" cy="212" r="1.4"/><circle cx="579" cy="237" r="1"/><circle cx="739" cy="264" r="1.6"/><circle cx="633" cy="210" r="1.1"/></g><path d="M579 264q17-9 33 0l10-7v13l-10-6q-16 8-33 0M701 305q12-7 25 0l8-6v11l-8-5q-13 6-25 0" fill="#a3c2bd" opacity=".35"/>
-        </g><path d="M653 144V312M533 230L770 308" stroke="#57777d" stroke-width="5"/><path d="M509 100L536 110V287Q520 280 506 283Z" fill="url(#curtain)"/><path d="M766 174L798 184V376Q781 364 766 366Z" fill="url(#curtain)"/><path d="M514 280L790 373L780 382L508 290Z" fill="#597071"/>
-      </g>
-      <!-- Bookshelf -->
-      <g class="scene-zone" data-art="shelf"><path d="M176 210L347 157V355L176 409Z" fill="#122c35" stroke="#486467" stroke-width="6"/><path d="M184 273L339 225M184 333L339 285M184 396L339 348" stroke="#6a7c70" stroke-width="8"/>
-        <g stroke="#afba9d" stroke-opacity=".5" stroke-width="1"><path d="M194 223L206 219V267L194 271Z" fill="#9b8065"/><path d="M209 218L225 213V261L209 266Z" fill="#718e7c"/><path d="M229 216L242 212L251 252L237 256Z" fill="#b5a379"/><path d="M270 198L284 194V241L270 245Z" fill="#4f7f86"/><path d="M287 193L299 189V236L287 240Z" fill="#a38b6b"/>
-        <path d="M194 291L207 287V326L194 330Z" fill="#5f8790"/><path d="M211 284L229 279V320L211 325Z" fill="#ae9d76"/><path d="M234 280L246 276V315L234 319Z" fill="#777b97"/><path d="M286 270L299 266V298L286 302Z" fill="#aa8169"/><path d="M304 265L319 260V292L304 297Z" fill="#6e9292"/></g>
-        <path d="M212 365L267 349L285 365L231 382Z" fill="#9b9b82"/><path d="M215 355L269 340L284 351L230 367Z" fill="#425f6a"/><ellipse cx="308" cy="330" rx="12" ry="6" fill="#aec4b4"/><path d="M296 329q0 26 24 0" fill="#859c8c"/>
-      </g>
-      <!-- Rug and rest corner -->
-      <g class="scene-zone" data-art="rest"><path d="M484 403L637 356L772 413L617 475Z" fill="#6b8b87" opacity=".42"/><path d="M498 404L636 365L754 412L617 465Z" fill="none" stroke="#a7b8a2" stroke-opacity=".3"/>
-        <path d="M575 352q-1-43 46-33l99 34q30 8 26 46l-115 44-67-34Z" fill="#4b7279"/><path d="M574 371q30-9 55 4l99 29-100 36-65-30Z" fill="#719090"/><path d="M576 351q-15 1-16 19v40l17 9 3-61Z" fill="#83a29c"/><path d="M726 373q21-5 22 15l-1 20-18 7Z" fill="#8ba59d"/><path d="M601 350l29-9 26 17-28 11Z" fill="#c6b997"/><path d="M651 365l41-14 31 17-42 15Z" fill="#9ca8aa"/>
-        <path d="M681 403l-39 15 24 11 29-12Z" fill="#b5b39e"/><path d="M645 419l20 12v17l-20-12Z" fill="#969f8d"/>
-      </g>
-      <!-- Study table and warm lamp -->
-      <g class="scene-zone" data-art="desk"><ellipse cx="407" cy="360" rx="150" ry="100" fill="url(#warm)"/><path d="M290 375L430 331L537 373L397 425Z" fill="#152d35" opacity=".3"/>
-        <path d="M312 350V430l9 5v-83M481 359V439l9-4v-80M405 388V466l9 4v-84" fill="#5a6a61"/>
-        <path d="M293 330L412 293L511 331L395 374Z" fill="#adab88"/><path d="M293 330v10l102 43 116-43v-9l-116 43Z" fill="#6e8172"/>
-        <path d="M354 324l42-12 36 14-42 15Z" fill="#e3dcc1"/><path d="M390 341v-14l6-15" stroke="#998e72" fill="none"/><path d="M367 324l15-4m-10 9 13-4m14-5 17 5m-20 0 15 5" stroke="#a29d86" stroke-width="1"/>
-        <ellipse cx="457" cy="329" rx="13" ry="5" fill="#58716b"/><path d="M447 313v15q11 8 20-1v-14Z" fill="#8db1a4"/><ellipse cx="457" cy="313" rx="10" ry="4" fill="#c6d7bb"/><path d="M467 314q13 0 3 11" stroke="#8db1a4" stroke-width="4" fill="none"/>
-        <path d="M330 307l26 7 51-33-30-12Z" fill="url(#light)"/><ellipse cx="334" cy="318" rx="15" ry="5" fill="#5f7168"/><path d="M333 316V270l24-17" stroke="#b4b797" stroke-width="4" fill="none"/><path d="M348 246l21-8 20 19-33 12Z" fill="#bfbd8d"/><path d="M356 269l33-12" stroke="#f6df9c" stroke-width="3"/><circle class="lamp-glow" cx="369" cy="263" r="30" fill="url(#warm)"/>
-      </g>
-      <!-- Little plant -->
-      <g><path d="M745 401l34-10-7 31-18 6Z" fill="#a7a18a"/><ellipse cx="762" cy="395" rx="18" ry="7" fill="#c3b89c"/><path d="M760 397v-56m0 39 17-29m-16 16-18-22" stroke="#648f81" stroke-width="3" fill="none"/><path d="M760 357q-31-9-24-32 25 2 24 32M762 369q1-29 27-33 2 25-27 33M761 347q-14-27 2-42 15 18-2 42" fill="#6b9a89"/><path d="M763 384q15-23 33-14-5 19-33 14" fill="#85ac96"/></g>
-      <ellipse cx="477" cy="462" rx="72" ry="24" fill="url(#haze)"/>
-      <!-- The whale is a visual companion, not an online indicator. -->
-      <g id="room-whale-position"><g class="room-whale"><path d="M413 411q13-27 44-26 37 0 55 24 13 4 25-9l-1 24-20-2q-13 35-57 32-36-3-46-31Z" fill="url(#whale)" filter="url(#shadow)"/><path d="M422 431q47 17 84-10-11 30-47 29-23-1-37-19Z" fill="#d3e7ce" opacity=".8"/><path d="M465 431q-6 21 12 21l12-16" fill="#529d9d"/><circle cx="437" cy="414" r="3" fill="#143b46"/><circle cx="438" cy="413" r=".8" fill="#c8f0e1"/><path d="M427 423q6 6 13 1" stroke="#2c6570" stroke-width="1.5" fill="none" stroke-linecap="round"/><ellipse cx="431" cy="423" rx="6" ry="3" fill="#ddb4aa" opacity=".42"/><path d="M454 383q-2-10 4-13m-1 10q5-7 10-5" stroke="#8bd2c6" stroke-width="2" fill="none" stroke-linecap="round"/>
-      </g></g>
-      <g fill="#9fccc0" opacity=".5" class="drift"><circle cx="366" cy="414" r="1.3"/><circle cx="589" cy="471" r="1.8"/><circle cx="251" cy="409" r="1.3"/><circle cx="511" cy="278" r="1"/><circle cx="805" cy="318" r="1"/></g>
-      <text x="486" y="625" text-anchor="middle" fill="#7b9b9c" font-size="10" letter-spacing="5">SOMEWHERE, A SMALL STORY CONTINUES</text>
-      </svg>
-      <div class="zone-buttons" role="group" aria-label="看看房间的不同角落"><button data-zone="desk" aria-pressed="true"><span>01</span>书桌<small>这一轮的安排</small></button><button data-zone="shelf" aria-pressed="false"><span>02</span>书架<small>慢慢积累的作品</small></button><button data-zone="window" aria-pressed="false"><span>03</span>观景窗<small>留下来的足迹</small></button><button data-zone="rest" aria-pressed="false"><span>04</span>休息角<small>联系与留白</small></button></div>
-      <div class="scene-caption"><span id="scene-status">等待记录</span><small>虚拟布景 · 状态以右侧来源为准</small></div>
-    </section>
-    <aside class="room-journal" aria-label="房间对应的活动记录"><div class="journal-kicker">HER LITTLE JOURNAL <span id="journal-index">01 / 04</span></div><div class="journal-heading"><span class="thin-rule"></span><h2 id="journal-title">书桌上的下一页</h2></div><div id="journal-content" aria-live="polite"><p class="empty">正在读取活动记录…</p></div></aside>
-  </div>
-  <section class="life-strip" aria-label="活动快照概览"><div><span>留下的目标</span><strong id="room-goals">—</strong><small>最近最多 8 个</small></div><div><span>作品架</span><strong id="room-works">—</strong><small>最近最多 6 件</small></div><div><span>待处理提议</span><strong id="room-pending">—</strong><small>仍须原审批流程</small></div><div class="strip-note"><span>关于这间房间</span><p id="room-notice">没有来源的近况，不会被补写成她的生活。</p></div></section>
-  <footer><span>DAFEIYU · A ROOM OF HER OWN</span><span>灯光是布景，记录才是依据。</span><a href="/">回到记忆星海 ↗</a></footer>
-</main><div id="room-toast" role="status" hidden></div>
-</body></html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f4f6ff"><title>她的小小房间 · 大肥鱼</title><link rel="stylesheet" href="/room.css"><script type="module" src="/room.js"></script></head>
+<body><header class="room-header"><a class="room-brand" href="/"><span class="portrait" aria-hidden="true"></span><span>大肥鱼的小天地<small>A LITTLE ROOM, A LITTLE LIFE</small></span></a><nav aria-label="空间导航"><a href="/room" aria-current="page">小小房间</a><a href="/">记忆星海 ↗</a></nav><span class="local-badge">只读陪伴空间</span></header>
+<main><section class="room-heading"><div><div class="eyebrow">WELCOME HOME · 欢迎来坐坐</div><h1>嗯？你来啦<span>。</span></h1><p>去书架翻几页，或是在窗边发一会儿呆。今天也慢慢来。</p></div><div class="observation"><span id="room-source">正在读取来源</span><small id="room-synced">等待活动记录</small><button id="room-refresh" type="button" disabled>↻ 同步近况</button></div></section>
+<div class="room-layout"><section class="room-scene" aria-label="大肥鱼的房间"><div class="scene-top"><span><i class="sun-dot"></i><time id="room-clock"></time><small id="room-daypart"></small></span><button id="room-motion" aria-pressed="false">暂停动画</button></div>
+<div class="room-viewport"><svg id="room-art" viewBox="0 0 1200 760" role="img" aria-label="奶白与浅蓝的小房间，大肥鱼在书桌、书架、窗边和休息角之间活动。"></svg></div>
+<div class="zone-buttons" role="group" aria-label="看看房间的不同角落"><button data-zone="overview" aria-pressed="true"><span>⌂</span>总览<small>回到小天地</small></button><button data-zone="desk" aria-pressed="false"><span>✎</span>书桌<small>写一点安排</small></button><button data-zone="shelf" aria-pressed="false"><span>▤</span>书架<small>再读几页</small></button><button data-zone="window" aria-pressed="false"><span>☼</span>窗边<small>看看外面</small></button><button data-zone="rest" aria-pressed="false"><span>☾</span>休息角<small>小睡一会儿</small></button></div>
+<div class="scene-caption"><span id="character-action" aria-live="polite">大肥鱼在等你</span><small>角色活动为场景演出 · 近况以账本为准</small></div><p id="asset-notice" role="status" hidden>角色素材暂时未能加载，近况仍可查看。</p></section>
+<aside class="room-journal" aria-label="房间对应的活动记录"><div class="journal-kicker">她的生活手记 <span id="journal-index">00 / 04</span></div><div class="journal-heading"><span class="thin-rule"></span><h2 id="journal-title">今天的小天地</h2></div><div id="journal-content" aria-live="polite"><p class="empty">正在读取活动记录…</p></div><div class="journal-status" id="scene-status">等待记录</div></aside></div>
+<section class="life-strip" aria-label="活动快照概览"><div><span>留下的目标</span><strong id="room-goals">—</strong><small>最近最多 8 个</small></div><div><span>作品架</span><strong id="room-works">—</strong><small>最近最多 6 件</small></div><div><span>待处理提议</span><strong id="room-pending">—</strong><small>仍须原审批流程</small></div><div class="strip-note"><span>关于她的近况</span><p id="room-notice">没有来源的近况，不会被补写成她的生活。</p></div></section>
+<footer><span>大肥鱼 · 今天也慢慢来</span><a href="/">去记忆星海看看 ↗</a><a href="/character-credits" target="_blank" rel="noopener">角色：YunYueSama · 二创与素材说明</a></footer>
+</main><div id="room-toast" role="status" hidden></div></body></html>

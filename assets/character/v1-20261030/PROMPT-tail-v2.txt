@@ -1,0 +1,15 @@
+Use case: precise-object-edit / identity-preserve.
+Edit the provided DaFeiYu three-view sheet. Correct ONLY the anatomical design and rotation consistency of the whale tail in all three views, especially the rear view. Preserve the exact character identity, face, hair silhouette and colors, chibi proportions, outfit, shoes, poses, panel sizes, title, Chinese labels, border and palette. Do not redesign the girl or add views.
+
+THE ERROR TO FIX: the old rear tail appears attached to the rightmost lock of hair, with two separate pointed leaf-shaped fins and almost no intelligible tail stock. The front and rear tails are also drawn on the same screen side rather than rotating with the character.
+
+NEW TAIL DESIGN:
+Exactly ONE whale tail per figure. Its anatomical root is at the center of the pelvis / lower back, under the rear of the dress; NEVER at the head, side waist, hair tip, or thigh. Make the visible body connection and one continuous tail stock unmistakable. The stock should emerge from beneath the CENTER of the rear skirt hem, curve smoothly behind the figure, and taper naturally into one pair of broad flattened whale flukes. Dark blue upper surface, pale bluish underside, matching all three views. Whale flukes are one joined horizontal crescent-like silhouette, with gently swept outer tips and a small central V notch; smooth skin with minimal cel shading. Absolutely NO leaf veins, botanical lobes, paired vertical leaves, fish tail, mermaid legs, or separate extra fins.
+
+ROTATION MUST BE COHERENT:
+The relaxed tail curves toward the CHARACTER'S LEFT.
+- Front panel: its visible tip is on the VIEWER'S RIGHT behind the skirt. Keep it appropriately partially occluded, connected to the tail hidden behind her body.
+- Left-facing true profile panel: the tail stock is clearly visible emerging from behind the skirt at pelvis level, curving downward then behind her toward the VIEWER'S RIGHT, with foreshortened whale flukes; keep feet clear.
+- Rear panel: the visible thick root must begin at the CENTER REAR beneath the skirt, not from an outer hair strand. Show a continuous readable stock curving down and to the VIEWER'S LEFT, ending in broad horizontal whale flukes to the left of the skirt. Remove the OLD right-side tail completely. Keep distinct outlines and a little negative space between tail and hair so nobody can mistake it for hair. Anatomically the hidden root continues to the lower back. The tail must not originate on the calf or between the feet. It may overlap a small portion of the rear hem naturally, while remaining visibly continuous. No exposed skin or cutaway diagram.
+
+Keep the tail cute, proportional, and compact enough to fit each panel without overlapping another figure. Its fluke span is around half to two-thirds of the head width; maintain the SAME tail length, thickness, color, and shape in the three rotated views. Preserve the original beautiful crisp dark-blue linework and soft cel shading. Maintain the full 1536x1024 landscape three-view sheet, all character extremities in frame.
