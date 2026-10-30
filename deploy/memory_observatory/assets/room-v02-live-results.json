@@ -1,0 +1,14 @@
+{
+  "base": "http://127.0.0.1:49715",
+  "checks": [
+    "real source is labelled read-only with a nonempty scoped view",
+    "upstream evidence is separated from simulation controls",
+    "viewing and local projection keep the last sync time unchanged",
+    "manual synchronization succeeds without changing source mode",
+    "real source mobile layout has no horizontal overflow",
+    "real activity room stays read-only and loads the approved character",
+    "real source view has no uncaught browser JavaScript exceptions"
+  ],
+  "failures": [],
+  "errors": []
+}

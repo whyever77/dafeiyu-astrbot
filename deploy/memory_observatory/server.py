@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -12,6 +13,7 @@ from urllib.parse import urlsplit
 from .demo import demo_snapshot
 from .model import InvalidSnapshot, normalize, project
 from .livingmemory_reader import SourceError
+from .activity import ActivityError, demo_room, empty_room
 
 STATIC = Path(__file__).parent / "static"
 MAX_BODY = 4 * 1024 * 1024
@@ -19,12 +21,21 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/graph.js": ("graph.js", "text/javascript; charset=utf-8"),
           "/style.css": ("style.css", "text/css; charset=utf-8")}
+ASSETS.update({"/room": ("room.html", "text/html; charset=utf-8"),
+               "/room.js": ("room.js", "text/javascript; charset=utf-8"),
+               "/room-scene.js": ("room-scene.js", "text/javascript; charset=utf-8"),
+               "/cozy.css": ("cozy.css", "text/css; charset=utf-8"),
+               "/character-credits": ("character/credits.txt", "text/plain; charset=utf-8"),
+               "/character-license": ("character/LICENSE.txt", "text/plain; charset=utf-8"),
+               "/room.css": ("room.css", "text/css; charset=utf-8")})
+ASSETS.update({f"/character/{name}.png": (f"character/{name}.png", "image/png")
+               for name in ("idle", "walk", "desk", "shelf", "window", "rest")})
 
 
 class ObservatoryServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address=("127.0.0.1", 8766), *, source=None):
+    def __init__(self, address=("127.0.0.1", 8766), *, source=None, activity_source=None):
         if address[0] != "127.0.0.1":
             raise ValueError("Only 127.0.0.1 is supported")
         self.snapshot = demo_snapshot()
@@ -32,6 +43,18 @@ class ObservatoryServer(ThreadingHTTPServer):
         self.lock = threading.Lock()
         self.refresh_lock = threading.Lock()
         self.source, self.connection = source, None
+        self.activity_source = activity_source
+        self.activity_snapshot = None
+        self.activity_loaded_at = None
+        self.activity_state = "unconfigured"
+        self.activity_refresh_lock = threading.Lock()
+        if activity_source is not None:
+            try:
+                self.activity_snapshot = activity_source.load()
+                self.activity_loaded_at = time.monotonic()
+                self.activity_state = "ready"
+            except ActivityError:
+                self.activity_state = "unavailable"
         if source is not None:
             # Fail startup on first-read failure; never silently show fiction.
             self.snapshot, self.connection = source.load()
@@ -47,6 +70,17 @@ class ObservatoryServer(ThreadingHTTPServer):
         if self.connection is not None:
             view["connection"] = self.connection.copy()
         return view
+
+    def room_view(self):
+        if self.activity_snapshot is not None:
+            # Age is measured on the local monotonic clock since the last successful
+            # read; the snapshot's as_of comes from the remote host's clock.
+            age = 0.0 if self.activity_loaded_at is None else max(0.0, time.monotonic() - self.activity_loaded_at)
+            state = "stale" if age > 180 else self.activity_state
+            return {**self.activity_snapshot, "connection": state, "age_seconds": round(age, 1)}
+        if self.activity_source is None and self.demo:
+            return demo_room()
+        return empty_room(self.activity_state)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -73,12 +107,35 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def discard_body(self):
+        # Unread request bodies make Windows close the socket with RST, so drain
+        # rejected requests before answering; never read more than MAX_BODY.
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.close_connection = True
+            return
+        if length < 1:
+            return
+        if length > MAX_BODY:
+            self.close_connection = True
+            return
+        try:
+            self.rfile.read(length)
+        except OSError:
+            self.close_connection = True
+
     def local_request(self):
         port = self.server.server_port
         hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
         host = self.headers.get("Host", "")
         origin = self.headers.get("Origin")
         if host not in hosts or (origin and origin != f"http://{host}"):
+            if self.command == "POST":
+                self.discard_body()
             self.send(403, {"error": "仅允许本机同源请求"})
             return False
         return True
@@ -97,6 +154,10 @@ class Handler(BaseHTTPRequestHandler):
             with self.server.lock:
                 view = self.server.view()
             self.send(200, view)
+        elif path == "/api/room":
+            with self.server.lock:
+                view = self.server.room_view()
+            self.send(200, view)
         elif path == "/api/example":
             # Clean interchange data, never an export of someone's imported snapshot.
             demo = demo_snapshot()
@@ -108,11 +169,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self.local_request():
             return
         if self.headers.get("X-Observatory") != "local" or self.headers.get_content_type() != "application/json":
+            self.discard_body()
             self.send(403, {"error": "需要本机界面的 JSON 请求"})
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length < 1 or length > MAX_BODY or self.headers.get("Transfer-Encoding"):
+                self.close_connection = True
                 self.send(413, {"error": "文件不得超过 4 MB"})
                 return
             body = json.loads(self.rfile.read(length), parse_constant=lambda value: (_ for _ in ()).throw(ValueError("non-finite")))
@@ -122,7 +185,31 @@ class Handler(BaseHTTPRequestHandler):
             if self.server.source is not None and path in ("/api/import", "/api/reset"):
                 self.send(409, {"error": "当前连接真实只读源；请在另一个端口启动演示或导入模式。"})
                 return
-            if path == "/api/import":
+            if path == "/api/room/refresh":
+                if body:
+                    self.send(400, {"error": "活动来源只能在服务启动时配置"})
+                    return
+                if self.server.activity_source is None:
+                    self.send(409, {"error": "尚未配置活动账本只读源"})
+                    return
+                if not self.server.activity_refresh_lock.acquire(blocking=False):
+                    self.send(409, {"error": "正在同步活动记录"})
+                    return
+                try:
+                    snapshot = self.server.activity_source.load()
+                    with self.server.lock:
+                        self.server.activity_snapshot = snapshot
+                        self.server.activity_loaded_at = time.monotonic()
+                        self.server.activity_state = "ready"
+                        view = self.server.room_view()
+                except ActivityError:
+                    with self.server.lock:
+                        self.server.activity_state = "stale" if self.server.activity_snapshot else "unavailable"
+                    self.send(503, {"error": "活动同步失败；旧记录不能证明当前状态。"})
+                    return
+                finally:
+                    self.server.activity_refresh_lock.release()
+            elif path == "/api/import":
                 incoming = normalize(body)  # Complete validation before replacing any state.
                 with self.server.lock:
                     self.server.snapshot, self.server.demo = incoming, False
@@ -173,8 +260,21 @@ def main():
     parser = argparse.ArgumentParser(description="大肥鱼 · 本地记忆星海（演示或显式连接只读源）")
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--livingmemory-ssh", action="store_true", help="使用现有 SSH 配置只读连接 LivingMemory")
+    activity = parser.add_mutually_exclusive_group()
+    activity.add_argument("--life-data-dir", type=Path, help="只读活动账本目录（control.json + activity.sqlite3）")
+    activity.add_argument("--life-ssh", action="store_true", help="使用现有 SSH 配置只读连接固定活动账本")
     args = parser.parse_args()
     source = None
+    activity_source = None
+    if args.life_data_dir:
+        from .activity import LocalActivitySource
+        activity_source = LocalActivitySource(args.life_data_dir)
+    elif args.life_ssh:
+        from .activity import SSHActivitySource
+        try:
+            activity_source = SSHActivitySource()
+        except SourceError as exc:
+            parser.exit(1, str(exc) + "\n")
     if args.livingmemory_ssh:
         from .livingmemory import SSHMemorySource
         try:
@@ -182,7 +282,7 @@ def main():
         except SourceError as exc:
             parser.exit(1, str(exc) + "\n")
     try:
-        server = ObservatoryServer(("127.0.0.1", args.port), source=source)
+        server = ObservatoryServer(("127.0.0.1", args.port), source=source, activity_source=activity_source)
     except SourceError as exc:
         parser.exit(1, str(exc) + "\n")
     with server:

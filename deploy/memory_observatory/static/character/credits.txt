@@ -1,0 +1,18 @@
+大肥鱼 · 房间角色素材
+
+角色参考作者：YunYueSama
+仓库：https://github.com/YunYueSama/codex-deepseek-pet
+参考标准图：design/character-standard.png（2026-10-30 获取）
+
+本项目根据社区标准图，经内置 imagegen 重新生成三视图与动作序列；
+尾巴经过修订，用户于 2026-10-30 确认三视图形象。
+本站动画、排版与房间布景属于经过修改的二创内容，
+不代表原作者或 DeepSeek 官方认可或代言。
+
+完整上游许可可在本站 /character-license 查看；
+许可只涵盖上游作者有权授权的贡献，不扩大第三方参考作品的权利。
+来源说明：https://github.com/YunYueSama/codex-deepseek-pet/blob/main/ASSET_LICENSE.md
+
+待机、走路、写字、阅读、望窗、睡眠各使用 8 张完整角色图。
+连续镜头和角色移动由本机界面绘制，动作序列不是每秒 60 张独立原画。
+图中的活动是视觉演出，实际目标、作品与执行结果以活动账本为准。

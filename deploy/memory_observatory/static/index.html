@@ -2,10 +2,11 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#07141d">
+  <meta name="theme-color" content="#f5f7fd">
   <title>记忆星海 · 大肥鱼</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%230a2635'/%3E%3Cpath d='M12 32q8 18 27 8 8-4 10-15l6-4-1 12-7 1Q32 60 12 32' fill='%2384e5df'/%3E%3Ccircle cx='24' cy='31' r='2' fill='%2384e5df'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/cozy.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
@@ -29,12 +30,13 @@
 </header>
 <div class="shell">
   <aside class="sidebar">
-    <div class="companion"><div class="companion-orb">鲸</div><div><strong>大肥鱼</strong><span>一些微光，慢慢成为记忆</span></div></div>
-    <div class="nav-label">观测空间 <span>01 — 03</span></div>
+    <div class="companion"><div class="companion-orb" aria-hidden="true"></div><div><strong>大肥鱼</strong><span>把珍惜的，慢慢收好</span></div></div>
+    <div class="nav-label">观测空间 <span>01 — 04</span></div>
     <nav aria-label="观测视图">
       <button class="nav-item active" data-view="atlas" aria-pressed="true"><svg class="icon"><use href="#i-orbit"/></svg>记忆星海<span class="nav-arrow">↗</span></button>
       <button class="nav-item" data-view="timeline" aria-pressed="false"><svg class="icon"><use href="#i-clock"/></svg>共同经历</button>
       <button class="nav-item" data-view="lab" aria-pressed="false"><svg class="icon"><use href="#i-wave"/></svg>遗忘实验室</button>
+      <a class="nav-item" href="/room"><svg class="icon"><use href="#i-spark"/></svg>她的小小房间<span class="nav-arrow">↗</span></a>
     </nav>
     <div class="sidebar-section"><div class="nav-label">记忆的形状</div><div id="kind-filters" class="kind-filters">
       <button data-kind="episode" class="kind-filter" aria-pressed="true"><i class="dot episode"></i>经历<span></span></button>
@@ -62,10 +64,10 @@
         <div class="ocean-toolbar"><div class="ocean-title"><span class="status-dot"></span><strong id="view-label">记忆星海</strong><span id="scope-count"></span></div><div class="view-options"><button id="dimension" class="chip" aria-label="切换二维阅读视图">3D 空间</button><button id="motion" class="icon-button" aria-label="暂停星海动画" title="暂停星海动画">Ⅱ</button></div></div>
         <form id="search-form" class="search"><svg class="icon"><use href="#i-search"/></svg><input id="query" placeholder="给她一个线索，例如「雨声」…" maxlength="200" aria-label="记忆召回线索"><button type="submit" aria-label="唤起相关记忆"><svg class="icon"><use href="#i-arrow"/></svg></button></form>
         <div id="graph-stage" class="graph-stage"><canvas id="constellation" aria-label="可拖动、缩放的记忆星图；使用下方记忆列表选择节点"></canvas>
-          <div class="stage-caption"><span>DAFEIYU’S INNER OCEAN</span><h2>有些细节淡了，<br>意义还在。</h2><p>光的明暗，是此刻想起的难易。</p></div>
+          <div class="stage-caption"><span>按记忆的形状，收好每一段微光</span></div>
           <div class="graph-controls"><button id="zoom-in" aria-label="放大星图">＋</button><button id="zoom-out" aria-label="缩小星图">−</button><button id="recenter" aria-label="重置星图视角">⌾</button></div>
           <div id="graph-tooltip" role="tooltip" hidden></div>
-          <div class="graph-guide">拖动探索 · 滚轮缩放 · 点击微光</div>
+          <div class="graph-guide" id="selection-summary" aria-live="polite">选择一段记忆，点亮它的关联</div>
           <div class="graph-legend"><span><i class="legend-line"></i>来源关联</span><span><i class="legend-line dashed"></i>主题联想</span><span><i class="legend-ring"></i>保留记忆</span></div>
         </div>
         <div id="timeline-view" class="alternate-view" hidden><div class="section-kicker">MOMENTS THAT STAY</div><h2>时间走过，留下这些。</h2><p>按记忆创建时间排列。点击片段，看看细节与意义如何变化。</p><div id="timeline-list"></div></div>
@@ -77,6 +79,7 @@
     </div>
     <section class="memory-shelf"><div class="shelf-heading"><h2>浮出水面的片段 <span id="shelf-count"></span></h2><span>点击片段，沿着关联继续探索</span></div><div id="memory-list" class="memory-list"></div></section>
     <footer><span><i class="status-dot"></i><span id="footer-mode">虚构演示 · 不读取聊天记录</span></span><span id="snapshot-date"></span><span>亮度 ≠ 真实性 · 距离 ≠ 语义距离</span></footer>
+    <div class="character-credit"><a href="/character-credits" target="_blank" rel="noopener">角色参考：YunYueSama · 二创与素材说明</a></div>
   </main>
 </div>
 <dialog id="info-dialog"><button class="dialog-close" aria-label="关闭">×</button><div class="eyebrow">ABOUT THIS OCEAN</div><h2>让记忆可见，也让边界清楚。</h2><p>这是一座本地记忆观测台。光点代表有来源的记忆片段，连线代表来源标注或共同主题。它不展示模型的真实神经元。</p><dl class="about-grid"><dt>大小</dt><dd>记录中的重要程度</dd><dt>亮度</dt><dd>工程模型估计的细节可及度</dd><dt>虚线</dt><dd>共同主题推导的联想，不是事实</dd><dt>光环</dt><dd>当前选中或被本次检索唤起</dd><dt>固定圆环</dt><dd>原记录保留或实验中的模拟保留</dd></dl><p id="connection-about">当前未连接 LivingMemory。所有实验只作用于内存快照，浏览不增加访问计数，不巩固、不删除原记忆。页面刷新会清空实验；服务重启会清空导入。</p><p class="muted">半衰期是演示参数，可信度由来源提供，不随“想起次数”增长。此版本的召回是可解释的关键词与关联检索，未使用向量模型。</p><button class="primary-button dialog-dismiss">回到星海 <span>↗</span></button></dialog>

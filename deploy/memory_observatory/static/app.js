@@ -30,10 +30,11 @@ async function syncLive(auto=false){
   const button=$('#sync-livingmemory');
   if(!auto){button.disabled=true;button.textContent='正在只读同步…';}
   try{
-    const data=await api('/api/livingmemory/refresh',{scope:state.scope});
+    await api('/api/livingmemory/refresh',{scope:state.scope});
     ++requestSerial;
     if(!auto){resetExperiment();state.query='';$('#query').value='';}
-    install(data);
+    // Project once with the CURRENT scope and experiment after a slow read.
+    // Installing the refresh response first would flash day-zero / old scope.
     await refresh();
     if(!auto)toast('已重新读取 LivingMemory，原库内容与访问计数未由此操作更新。');
   }catch(error){
@@ -73,9 +74,9 @@ function scoreCell(label,value,color){const cell=el('div');cell.append(el('span'
 function curveSVG(memory){
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 240 82');svg.setAttribute('class','curve');svg.setAttribute('role','img');svg.setAttribute('aria-label','未来一年细节与意义可及度曲线');
   function line(tag,attrs){const n=document.createElementNS(svg.namespaceURI,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,String(v));svg.append(n);return n;}
-  for(const y of [9,39,69])line('line',{x1:0,y1:y,x2:240,y2:y,stroke:'#35525f','stroke-width':.5,'stroke-dasharray':'2 4'});
-  for(const [key,color,dash] of [['gist_retention','#bdac8b','3 3'],['detail','#8ce0d4','']]){const points=memory.curve.filter(p=>p.day<=370).map(p=>`${p.day/370*240},${69-p[key]*60}`).join(' ');line('polyline',{points,fill:'none',stroke:color,'stroke-width':1.4,'stroke-dasharray':dash});}
-  const x=state.days/370*240;line('line',{x1:x,y1:5,x2:x,y2:72,stroke:'#b5d9d2','stroke-width':.6,opacity:.6});line('circle',{cx:x,cy:69-memory.detail*60,r:2.7,fill:'#b4eade'});
+  for(const y of [9,39,69])line('line',{x1:0,y1:y,x2:240,y2:y,stroke:'#c2d0e4','stroke-width':.5,'stroke-dasharray':'2 4'});
+  for(const [key,color,dash] of [['gist_retention','#bdac8b','3 3'],['detail','#789abb','']]){const points=memory.curve.filter(p=>p.day<=370).map(p=>`${p.day/370*240},${69-p[key]*60}`).join(' ');line('polyline',{points,fill:'none',stroke:color,'stroke-width':1.4,'stroke-dasharray':dash});}
+  const x=state.days/370*240;line('line',{x1:x,y1:5,x2:x,y2:72,stroke:'#9bb3d5','stroke-width':.6,opacity:.6});line('circle',{cx:x,cy:69-memory.detail*60,r:2.7,fill:'#789abb'});
   return svg;
 }
 function renderDetail(){
@@ -116,13 +117,13 @@ function renderTrace(){
   if(state.query&&!state.data.trace.length)list.append(el('div','empty-state','没有找到相关片段。试试更具体的主题、人物或场景。'));
 }
 function setView(view){
-  state.view=view;for(const button of $$('.nav-item')){const active=button.dataset.view===view;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}
+  state.view=view;for(const button of $$('.nav-item[data-view]')){const active=button.dataset.view===view;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}
   $('#graph-stage').hidden=view!=='atlas';$('#timeline-view').hidden=view!=='timeline';$('#lab-view').hidden=view!=='lab';$('.view-options').hidden=view!=='atlas';
   const content={atlas:['每一次想起，都有回响','让经历连成星海，看见记忆如何沉淀，又被轻轻唤起。','记忆星海'],timeline:['走过的日子，都有微光','沿着时间，重新遇见那些留下意义的片段。','共同经历'],lab:['有些淡去，是为了留下','用时间、巩固与保留，观察记忆的不同轨迹。','遗忘实验室']}[view];
   $('#page-title').replaceChildren(document.createTextNode(content[0]),el('span','','。'));$('#page-description').textContent=content[1];$('#view-label').textContent=content[2];if(view==='atlas')requestAnimationFrame(()=>graph.resize());
 }
 function resetExperiment(){state.days=0;state.rehearsed.clear();state.pinned.clear();}
-for(const button of $$('.nav-item'))button.addEventListener('click',()=>setView(button.dataset.view));
+for(const button of $$('.nav-item[data-view]'))button.addEventListener('click',()=>setView(button.dataset.view));
 $('#kind-filters').addEventListener('click',event=>{const button=event.target.closest('.kind-filter');if(!button)return;const kind=button.dataset.kind;if(state.kinds.has(kind))state.kinds.delete(kind);else state.kinds.add(kind);render();});
 $('#scope').addEventListener('change',()=>{state.scope=$('#scope').value;state.selected=null;resetExperiment();refresh();});
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();state.query=$('#query').value.trim();refresh();});
