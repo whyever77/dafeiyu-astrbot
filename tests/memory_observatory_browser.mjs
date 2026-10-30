@@ -114,6 +114,10 @@ try {
     assert.equal(await evaluate('document.querySelector(".detail-title").textContent'),'雨声里的晚安');
     assert.ok(Number(await evaluate('document.querySelector("#constellation").dataset.relatedNodes'))>0);
   });
+  await check('star map zooms in far enough',async()=>{
+    const result=await evaluate(`(()=>{const g=document.querySelector('#constellation').__constellation;g.twoD=false;g.camera.distance=2.35;for(let i=0;i<30;i++)g.zoomBy(1.2);const d=g.camera.distance;g.twoD=true;g.flat={scale:1,panX:0,panY:0};for(let i=0;i<30;i++)g.zoomBy(1.2);const s=g.flat.scale;g.twoD=false;g.flat={scale:1,panX:0,panY:0};g.resetCamera(true);return {d,s};})()`);
+    assert.ok(result.d<=.66);assert.ok(result.s>=5.9);
+  });
   await check('starfields separate types and keep positions stable',async()=>{
     const result=await evaluate(`(async()=>{const {layoutStarfields}=await import('/graph.js');const d=await fetch('/api/snapshot').then(r=>r.json());const a=layoutStarfields(d.memories),b=layoutStarfields(d.memories);const extra=[...d.memories,{...d.memories[0],id:'extra-test'}];const c=layoutStarfields(extra);return {groups:a.groups.filter(g=>g.count>0).length,stable:a.nodes.every((n,i)=>n.x===b.nodes[i].x&&n.y===b.nodes[i].y),local:a.nodes.every(n=>{const m=c.nodes.find(x=>x.id===n.id);return m&&m.x===n.x&&m.y===n.y;}),inside:a.nodes.every(n=>{const g=a.groups.find(g=>g.kind===n.kind);return Math.hypot(n.x-g.center[0],n.z-g.center[2])<=g.radius*1.3+1e-6;})};})()`);
     assert.ok(result.groups>=1);

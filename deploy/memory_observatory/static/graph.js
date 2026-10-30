@@ -133,8 +133,8 @@ export class Constellation{
  }
 
  zoomBy(factor){
-  if(this.twoD)this.flat.scale=clamp(this.flat.scale*factor,.65,2.8);
-  else{this.camera.distance=clamp(this.camera.distance/factor,1.2,4.5);this.cameraTween=null;}
+  if(this.twoD)this.flat.scale=clamp(this.flat.scale*factor,.65,6);
+  else{this.camera.distance=clamp(this.camera.distance/factor,.65,5);this.cameraTween=null;}
   this.draw(performance.now());
  }
 
@@ -171,11 +171,11 @@ export class Constellation{
   if(this.focusedKind===kind){this.recenter();return;}
   this.focusedKind=kind;
   if(this.twoD){
-   const scale=clamp(1/(group.radius*2.6),1.1,2.2),base=this.flatBase||520;
+   const scale=clamp(1/(group.radius*1.6),1.2,5.5),base=this.flatBase||520;
    this.flat={scale,panX:-group.center[0]*base*scale,panY:group.center[1]*base*scale};
    this.draw(performance.now());return;
   }
-  this.tweenCamera({target:[...group.center],distance:clamp(group.radius*4.2,1.05,2.8)},900);
+  this.tweenCamera({target:[...group.center],distance:clamp(group.radius*2.4,.55,2.4)},900);
   this.draw(performance.now());
  }
 
