@@ -23,6 +23,7 @@ QQ 用户 ⇄ 腾讯服务器 ⇄ NapCat(Docker) ⇄ WebSocket(6199) ⇄ AstrBot
 ├── patches/            # 四个核心补丁（从旧机 core 提取 + 分泡/整段语音）
 ├── astrbot/data/       # 旧机 core/data（排除 temp / logs / *.bak_*）
 ├── napcat/config|qq/   # NapCat 配置与登录态
+├── napcat/machine-id   # 可选：固定的 machine-id（启用前手动创建）
 ├── backups/            # 每日滚动备份
 └── incoming/           # 迁移时的一次性上传暂存
 ```
@@ -44,6 +45,14 @@ QQ 用户 ⇄ 腾讯服务器 ⇄ NapCat(Docker) ⇄ WebSocket(6199) ⇄ AstrBot
 - **快速登录变量名**：Docker 入口脚本读的是 `ACCOUNT`（`qq --no-sandbox -q $ACCOUNT`），不是 `NAPCAT_ACCOUNT`；
   再配 `NAPCAT_QUICK_ACCOUNT` 让 Worker 重启后自动尝试快速登录。容器**重建**会丢快速登录记录（设备指纹变），
   改配置优先 `docker restart` 或 WebUI，别频繁 `up -d` 重建。
+- **设备名/指纹每次重扫都在变**：QQ 认设备靠「设备名 + 指纹」。容器重建时 hostname 默认变成新容器 ID，
+  `/etc/machine-id` 也会重新生成，QQ 会把这次登录当成新设备，风控加码、更容易再掉线。
+  compose 已固定 `hostname: dafeiyu-napcat`；想连 machine-id 一起固定（可选，社区经验）：
+  1. 先在宿主机执行 `cat /proc/sys/kernel/random/uuid > /opt/dafeiyu/napcat/machine-id`
+  2. 取消 compose 里 `machine-id:/etc/machine-id:ro` 那行注释
+  3. 重建一次容器并重扫一次码；之后设备名与指纹保持不变
+
+  **注意**：bind 源文件必须先存在，Docker 遇到不存在的源会建成目录，容器会起不来。
 - **QQ 登录态不可跨平台迁移**：Linux NapCat 必须重新扫码一次
 - **双登互踢**：旧机自启项（AstrBot Launcher / 启动大肥鱼QQ）务必停用
 - **升级覆盖补丁**：核心补丁不要改镜像，bind-mount 挂进去

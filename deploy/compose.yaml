@@ -27,11 +27,18 @@ services:
     image: mlikiowa/napcat-docker:v4.18.37
     container_name: napcat
     restart: unless-stopped
+    # 固定主机名：QQ 的设备名/指纹会带上 hostname。默认是随机容器 ID，
+    # 重建后会变成「新设备」，更容易触发风控、要求重新扫码。
+    hostname: dafeiyu-napcat
     ports:
       - "127.0.0.1:6099:6099"  # NapCat WebUI（默认仅本机；SSH 隧道访问，公网改法同上）
     volumes:
       - /opt/dafeiyu/napcat/config:/app/napcat/config
       - /opt/dafeiyu/napcat/qq:/app/.config/QQ
+      # 可选：连 machine-id 一起固定（社区经验，非官方机制）。
+      # 启用前先在宿主机创建文件，否则 Docker 会把它建成目录、容器起不来：
+      #   cat /proc/sys/kernel/random/uuid > /opt/dafeiyu/napcat/machine-id
+      # - /opt/dafeiyu/napcat/machine-id:/etc/machine-id:ro
     environment:
       - TZ=Asia/Shanghai
       - ACCOUNT=your_qq_account            # Docker 入口脚本用 -q 快速登录（不是 NAPCAT_ACCOUNT）
