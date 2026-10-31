@@ -1,7 +1,7 @@
 name: astrbot_plugin_face_convert
 display_name: QQ表情文字转换
 desc: 将LLM回复中的 [流泪][doge] 等文字表情自动转换为真实QQ表情段
-version: v1.3.0
+version: v1.3.1
 author: dafeiyu-tools
 support_platforms:
   - aiocqhttp

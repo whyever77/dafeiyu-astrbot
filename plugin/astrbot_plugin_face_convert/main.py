@@ -15,6 +15,7 @@ import re
 import tempfile
 import time
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -254,15 +255,67 @@ class FaceConvertPlugin(Star):
             f"（{key_source}，模型 {self.asr_model}/{self.vl_model}）"
         )
 
+    @staticmethod
+    def _existing_audio(rec) -> str | None:
+        """AstrBot 预处理阶段已把语音落成本地 WAV；返回可用的本地路径。"""
+        for attr in ("path", "file"):
+            raw = getattr(rec, attr, None)
+            if not raw:
+                continue
+            try:
+                path = file_uri_to_path(str(raw))
+            except Exception:
+                continue
+            if path and os.path.isfile(path) and path.lower().endswith(
+                (".wav", ".mp3", ".m4a", ".ogg", ".flac")
+            ):
+                return path
+        return None
+
     async def _transcribe_voice(self, event: AstrMessageEvent, rec) -> str | None:
-        """语音消息 -> 文字：NapCat 转 mp3 -> 百炼 qwen3-asr-flash"""
+        """语音消息 -> 文字：本地 WAV -> 直链下载 -> NapCat 转码 -> 百炼 ASR"""
         if not self.asr_key:
             return None
         try:
+            # 1) AstrBot PreProcessStage 已用 ensure_wav 转好标准 WAV，
+            #    rec.path / rec.file 就是本地文件。直接读，既省一次 NapCat 往返，
+            #    也避开新版 NapCat get_record 的 PayloadSchema 校验（retcode 1400）。
+            local = self._existing_audio(rec)
+            if local:
+                return await self._asr_file(local)
+
             file_ref = getattr(rec, "file", None) or getattr(rec, "url", None) or getattr(rec, "path", None)
             if not file_ref:
                 return None
-            # 1) 让 NapCat 把语音转成 mp3（它自带 silk 解码）
+
+            # 2) 本地没有可用文件时，先试语音直链
+            url = getattr(rec, "url", None)
+            if url and str(url).startswith(("http://", "https://")):
+                async with aiohttp.ClientSession() as sess:
+                    body = await download_capped(
+                        sess,
+                        str(url),
+                        max_bytes=int(self.cfg.get("max_media_mb", 20)) * 1024 * 1024,
+                        timeout_total=30,
+                    )
+                if body:
+                    suffix = os.path.splitext(urlparse(str(url)).path)[1].lower()
+                    if suffix not in (".wav", ".mp3", ".m4a", ".ogg", ".flac"):
+                        suffix = ".mp3"
+                    tmp = os.path.join(
+                        tempfile.gettempdir(), f"asr_{int(time.time() * 1000)}{suffix}"
+                    )
+                    with open(tmp, "wb") as f:
+                        f.write(body)
+                    try:
+                        return await self._asr_file(tmp)
+                    finally:
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+
+            # 3) 兜底：让 NapCat 转码（旧版本或本地文件缺失时）
             try:
                 resp = await event.bot.get_record(file=file_ref, out_format="mp3")
             except Exception:
@@ -272,7 +325,7 @@ class FaceConvertPlugin(Star):
                 mp3 = (resp.get("data") or {}).get("file") or resp.get("file")
             if not mp3:
                 return None
-            # 2) 解析到本地文件
+            # 解析到本地文件
             path = file_uri_to_path(mp3)
             tmp_owned = False  # 自己下载的临时文件，用完负责清理
             if path.startswith("http"):
@@ -293,7 +346,7 @@ class FaceConvertPlugin(Star):
                 tmp_owned = True
             else:
                 tmp = path
-            # 3) 转写
+            # 转写
             try:
                 return await self._asr_file(tmp)
             finally:
