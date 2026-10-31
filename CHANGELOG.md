@@ -2,11 +2,13 @@
 
 > 每一次值得说的进化都会记在这里。
 
-## 2026-10-31 · face_convert v1.3.1：语音转写优先本地 WAV（修复 NapCat retcode 1400，issue #16）
+## 2026-10-31 · face_convert v1.3.1 / v2.9.1：语音转写优先本地 WAV（修复 NapCat retcode 1400，issue #16）
 
 - `_transcribe_voice` 优先级改为：AstrBot PreProcessStage 已生成的本地 WAV（`rec.path` / `rec.file`）→ 语音直链下载 → 最后才调 NapCat `get_record`。
 - 新版 NapCat 的 `get_record` 加强 PayloadSchema 校验，会返回 retcode 1400；本地文件优先后不再触发，同时省去一次 NapCat 转码往返。
 - 新增 3 项语音优先级回归测试（本地 WAV / 直链 / get_record 兜底）；视频+语音测试 11 通过、5 跳过（本机无 ffmpeg）。
+- 记忆星海房间：点击她当前所在的区域不再重播走动/切换动画，只有真正切换区域才响应。
+- 隐私清理：tracked files 中的真实 QQ 号、云主机 IP、B站 UID 改为占位符。
 
 ## 2026-10-30 · 记忆星海 v0.3 / v2.9.0（插件 v0.5.0 / v1.3.0 / v1.0.0 未变）
 
