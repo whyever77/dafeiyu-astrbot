@@ -7,7 +7,15 @@
 - 既有生活决策增加默认关闭的上海作息：晨间优先续篇、睡前仅整理已有作品、睡眠时段和近期活动较多时留白；不新增定时器、模型或数据库表。
 - 依据同一会话已结束运行的经过时间累计，重叠去重、跨日不清零；未知/未来记录不冒充已完成活动。运行时长受原预算和节律截止时间共同约束，准备耗时跨过边界后不再启动工作。
 - `df_life_status`、原决策账本和房间总览/休息角展示节律理由。保持日期和只读边界，不把工程指标说成体力/情绪，不生成休息经历。
-- 新增22项节律离线测试；开启节律前复用配置范围/睡眠窗口校验，坏配置不能通过 switch 开启；配置与启停、完整回归、现场验收及回滚见 [LIFE_RHYTHM_V01.md](deploy/bili_activity/LIFE_RHYTHM_V01.md)。未 push、未部署或开启真实配置。
+- 新增22项节律离线测试；开启节律前复用配置范围/睡眠窗口校验，坏配置不能通过 switch 开启；配置与启停、完整回归、现场验收及回滚见 [LIFE_RHYTHM_V01.md](deploy/bili_activity/LIFE_RHYTHM_V01.md)。未部署或开启真实配置。
+
+## 2026-10-31 · face_convert v1.3.1 / v2.9.1：语音转写优先本地 WAV（修复 NapCat retcode 1400，issue #16）
+
+- `_transcribe_voice` 优先级改为：AstrBot PreProcessStage 已生成的本地 WAV（`rec.path` / `rec.file`）→ 语音直链下载 → 最后才调 NapCat `get_record`。
+- 新版 NapCat 的 `get_record` 加强 PayloadSchema 校验，会返回 retcode 1400；本地文件优先后不再触发，同时省去一次 NapCat 转码往返。
+- 新增 3 项语音优先级回归测试（本地 WAV / 直链 / get_record 兜底）；视频+语音测试 11 通过、5 跳过（本机无 ffmpeg）。
+- 记忆星海房间：点击她当前所在的区域不再重播走动/切换动画，只有真正切换区域才响应。
+- 隐私清理：tracked files 中的真实 QQ 号、云主机 IP、B站 UID 改为占位符。
 
 ## 2026-10-30 · 记忆星海 v0.3 / v2.9.0（插件 v0.5.0 / v1.3.0 / v1.0.0 未变）
 

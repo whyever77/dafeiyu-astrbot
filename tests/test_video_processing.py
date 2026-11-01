@@ -397,5 +397,55 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(Path(folder, "in.mp4").exists())
 
 
+class VoiceTranscriptionTests(unittest.IsolatedAsyncioTestCase):
+    """语音转写优先级：本地 WAV -> 直链 -> NapCat get_record。"""
+
+    async def test_local_wav_beats_napcat(self):
+        inst = plugin()
+        inst._asr_file = AsyncMock(return_value="本地")
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(b"RIFF")
+            path = f.name
+        self.addCleanup(lambda: Path(path).unlink(missing_ok=True))
+        rec = types.SimpleNamespace(
+            path=path, file="bare.amr", url="http://example.com/a.amr"
+        )
+        bot = types.SimpleNamespace(get_record=AsyncMock())
+        event = types.SimpleNamespace(bot=bot)
+
+        self.assertEqual(await inst._transcribe_voice(event, rec), "本地")
+        inst._asr_file.assert_awaited_once_with(path)
+        bot.get_record.assert_not_awaited()
+
+    async def test_url_download_beats_napcat(self):
+        inst = plugin()
+        inst._asr_file = AsyncMock(return_value="直链")
+        rec = types.SimpleNamespace(
+            path=None, file=None, url="http://example.com/a.wav"
+        )
+        bot = types.SimpleNamespace(get_record=AsyncMock())
+        event = types.SimpleNamespace(bot=bot)
+
+        async def fake_download(session, url, **kwargs):
+            return b"RIFF"
+
+        with patch.object(mod, "download_capped", fake_download):
+            self.assertEqual(await inst._transcribe_voice(event, rec), "直链")
+        bot.get_record.assert_not_awaited()
+        self.assertTrue(inst._asr_file.await_args.args[0].endswith(".wav"))
+
+    async def test_get_record_fallback_still_works(self):
+        inst = plugin()
+        inst._asr_file = AsyncMock(return_value="兜底")
+        rec = types.SimpleNamespace(path=None, file="abc.amr", url=None)
+        bot = types.SimpleNamespace(
+            get_record=AsyncMock(return_value={"data": {"file": "/tmp/x.mp3"}})
+        )
+        event = types.SimpleNamespace(bot=bot)
+
+        self.assertEqual(await inst._transcribe_voice(event, rec), "兜底")
+        bot.get_record.assert_awaited()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
