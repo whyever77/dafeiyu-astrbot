@@ -10,11 +10,13 @@ import json
 import time
 
 from .life import observed_read_evidence
+from .rhythm import DEFAULTS as RHYTHM_DEFAULTS, snapshot as rhythm_snapshot, validate_config as validate_rhythm
 
-DEFAULTS = {"life_decision_enabled": False, "life_repeat_cooldown_minutes": 180}
+DEFAULTS = {**RHYTHM_DEFAULTS, "life_decision_enabled": False, "life_repeat_cooldown_minutes": 180}
 
 
 def validate_config(cfg):
+    validate_rhythm(cfg)
     if not isinstance(cfg["life_decision_enabled"], bool):
         raise ValueError("life_decision_enabled 必须是布尔开关")
     value = cfg["life_repeat_cooldown_minutes"]
@@ -30,6 +32,9 @@ def fingerprint(value):
 class LifePlanner:
     def __init__(self, store):
         self.store, self.db = store, store.db
+
+    def rhythm(self, scope, cfg, *, now=None):
+        return rhythm_snapshot(self.db, scope, cfg, now=now)
 
     def recent(self, scope, limit=8, *, include_rest=True):
         kinds = "('life_decision','life_rest')" if include_rest else "('life_decision')"
@@ -49,6 +54,7 @@ class LifePlanner:
     def choose(self, scope, cfg, *, phone_busy=False, now=None):
         validate_config(cfg)
         now = time.time() if now is None else now
+        rhythm = self.rhythm(scope, cfg, now=now)
         goals = self.store.life.goals(scope)
         works = {}
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='creative_works'").fetchone():
@@ -65,6 +71,13 @@ class LifePlanner:
         candidates, excluded = [], []
 
         def add(action, key, signature, reason, score, factors, **fields):
+            if rhythm["enabled"]:
+                if not rhythm["allow_activity"] or (rhythm["writing_only"] and action != "writing"):
+                    excluded.append({"key": key, "reason": "rhythm_" + rhythm["phase"]})
+                    return
+                if rhythm["phase"] == "morning" and action in {"research", "writing"}:
+                    factors.append({"reason": "rhythm_continue_in_morning", "points": 6})
+                    score += 6
             attempts = [h for h in history if h["key"] == key and h["fingerprint"] == signature]
             bad = {"failed", "timeout", "interrupted", "cancelled", "budget_exhausted", "running", "not_started"}
             if attempts and (attempts[0]["run_status"] in bad or len(attempts) >= 2):
@@ -164,7 +177,10 @@ class LifePlanner:
             "action": "rest", "key": "rest", "fingerprint": "", "goal_id": None,
             "work_id": None, "topic": "", "score": 0, "factors": [], "evidence_ids": [],
             "reason": "这轮先休息：现有事情暂时无法推进，或近期已尝试过，等有新进展或冷却结束再看。"}
-        return {**chosen, "at": now, "policy_version": 1, "decision_only": True,
+        if rhythm["enabled"] and chosen["action"] == "rest" and (not rhythm["allow_activity"] or rhythm["writing_only"]):
+            chosen["reason"] = rhythm["reason"] + ("暂无适合整理的已有作品，先休息。" if rhythm["writing_only"] and rhythm["allow_activity"] else "")
+        return {**chosen, **({"rhythm": rhythm} if rhythm["enabled"] else {}),
+                "at": now, "policy_version": 2 if rhythm["enabled"] else 1, "decision_only": True,
                 "alternatives": [{k: c[k] for k in ("action", "key", "score")} for c in ranked[1:]],
                 "excluded": excluded}
 

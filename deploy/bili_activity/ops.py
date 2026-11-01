@@ -34,6 +34,9 @@ DEFAULTS = {
     "life_enabled": False,
     "life_decision_enabled": False,
     "life_repeat_cooldown_minutes": 180,
+    "life_rhythm_enabled": False,
+    "life_sleep_hour": 23, "life_wake_hour": 8, "life_wind_down_minutes": 60,
+    "life_activity_window_minutes": 120, "life_activity_limit_minutes": 20,
     "contact_coordination_enabled": False,
     "contact_daily_limit": 3, "contact_cooldown_minutes": 90,
     "contact_owner_quiet_minutes": 5, "contact_unanswered_limit": 2,
@@ -76,6 +79,9 @@ NUMERIC_LIMITS = {
     "screenshots_per_run": (0, 10), "chat_cooldown_seconds": (0, 3600),
     "workshop_revisions_per_run": (1, 10), "workshop_max_characters": (500, 20000),
     "life_repeat_cooldown_minutes": (15, 1440),
+    "life_sleep_hour": (0, 23), "life_wake_hour": (0, 23),
+    "life_wind_down_minutes": (0, 180), "life_activity_window_minutes": (30, 720),
+    "life_activity_limit_minutes": (1, 120),
     "contact_daily_limit": (0, 50), "contact_cooldown_minutes": (1, 1440),
     "contact_owner_quiet_minutes": (0, 1440), "contact_unanswered_limit": (1, 20),
 }
@@ -109,6 +115,20 @@ def validate_url(value):
     url = urlsplit(value)
     if url.scheme not in {"http", "https"} or not url.hostname or url.username or url.password:
         raise ValueError("MCP 地址必须是无凭证的 HTTP/HTTPS URL；不要把凭证放入配置或日志")
+
+
+def validate_rhythm_settings(control):
+    for key in ("life_sleep_hour", "life_wake_hour", "life_wind_down_minutes",
+                "life_activity_window_minutes", "life_activity_limit_minutes"):
+        value = control.get(key)
+        low, high = NUMERIC_LIMITS[key]
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError(f"{key} 必须为 {low}–{high} 的整数")
+    awake = (control["life_sleep_hour"] - control["life_wake_hour"]) % 24 * 60
+    if not awake or control["life_wind_down_minutes"] >= awake:
+        raise ValueError("睡眠与起床时间须不同，睡前整理时段须短于清醒时段")
+    if control["life_activity_limit_minutes"] > control["life_activity_window_minutes"]:
+        raise ValueError("活动时长阈值不能大于观察窗口")
 
 
 def validate_dnd(ranges):
@@ -350,7 +370,7 @@ def main(argv=None):
     once = sub.add_parser("once")
     once.add_argument("--delay-seconds", type=int, default=180)
     switches = sub.add_parser("switch")
-    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "life_decision_enabled", "contact_coordination_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled", "auto_public"])
+    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "life_decision_enabled", "life_rhythm_enabled", "contact_coordination_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled", "auto_public"])
     switches.add_argument("value", choices=["on", "off"])
     accepted = sub.add_parser("accept-one-shot")
     accepted.add_argument("--evidence", type=Path, required=True,
@@ -485,6 +505,7 @@ def main(argv=None):
                 ranges = json.loads(args.dnd_ranges)
                 validate_dnd(ranges)
                 control["dnd_ranges"] = ranges
+            validate_rhythm_settings(control)
         elif args.command in {"start", "once", "enable-periodic"}:
             ready(control)
             control["enabled"] = True
@@ -501,6 +522,11 @@ def main(argv=None):
         elif args.command == "disable-periodic":
             control["periodic_enabled"] = False
         elif args.command == "switch":
+            if args.name == "life_rhythm_enabled" and args.value == "on":
+                ready(control)
+                if any(control[key] is not True for key in ("life_enabled", "life_decision_enabled", "one_shot_verified")):
+                    raise ValueError("先完成一次性活动验收并开启生活功能和生活决策，再开启节律")
+                validate_rhythm_settings(control)
             if args.name == "contact_coordination_enabled" and args.value == "on":
                 ready(control)
             if args.name == "life_decision_enabled" and args.value == "on":

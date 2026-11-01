@@ -1172,6 +1172,11 @@ class BiliActivity(Star):
                 return
             writing = self.workshop_store().get(scope, choice["work_id"]) if choice["action"] == "writing" else None
         duration = cfg["max_minutes"] * 60
+        if choice and choice.get("rhythm", {}).get("enabled"):
+            rhythm = choice["rhythm"]
+            duration = min(duration, rhythm["max_seconds"], rhythm["active_until"] - time.time())
+            if duration <= 0:
+                return
         if life_mode:
             if not hasattr(self, "life_runs"):
                 self.life_runs, self.run_goals = set(), {}
@@ -1209,6 +1214,14 @@ class BiliActivity(Star):
                                                          "work_id": writing["id"] if writing else None})
                 method_resume = self.resume_method(event)
             async with (nullcontext() if writing else self.gate.lease(run_id)):
+                if choice and choice.get("rhythm", {}).get("enabled"):
+                    # Preparing the event or waiting for the device consumes the
+                    # same deadline; do not start a fresh timer after that wait.
+                    rhythm = choice["rhythm"]
+                    duration = min(duration, rhythm["active_until"] - time.time(),
+                                   choice["at"] + rhythm["max_seconds"] - time.time())
+                    if duration <= 0:
+                        raise BudgetExceeded("本轮节律时间已结束，保留进度，下次再继续")
                 async with asyncio.timeout(duration):
                     if not writing:
                         online = await self.bili().json_call("bili_phone", {"operation": "status", "args": {}})
@@ -1861,6 +1874,7 @@ class BiliActivity(Star):
                           "activity_enabled": cfg["enabled"], "periodic_enabled": cfg["periodic_enabled"],
                           "paused": self.store.get_setting("life_paused:" + event.unified_msg_origin, False),
                           "decisions": self.life_planner().recent(event.unified_msg_origin),
+                          "rhythm": self.life_planner().rhythm(event.unified_msg_origin, cfg),
                           "contacts": self.contact_ledger().status(event.unified_msg_origin, cfg) if cfg["contact_coordination_enabled"] else {"enabled": False},
                           "meaning": "生活安排是意图；实际进展以目标、经历和作品为准。"})
 

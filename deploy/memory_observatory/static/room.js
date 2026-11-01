@@ -10,6 +10,17 @@ function date(t){return typeof t==='number'&&Number.isFinite(t)?new Date(t*1000)
 function toast(text){clearTimeout(toastTimer);$('#room-toast').textContent=text;$('#room-toast').hidden=false;toastTimer=setTimeout(()=>$('#room-toast').hidden=true,5000);}
 async function request(path,body){const r=await fetch(path,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json','X-Observatory':'local'},body:JSON.stringify(body)});const v=await r.json();if(!r.ok)throw new Error(v.error||'无法读取活动记录');return v;}
 function row(title,status,text,at){const item=node('article','journal-item'),top=node('div','item-top');top.append(node('h3','',title));if(status)top.append(node('span','tag',status));item.append(top);if(text)item.append(node('p','entry-text',text));if(at)item.append(node('div','entry-time',date(at)));return item;}
+function rhythmNote(s){
+  const box=node('div','next-page rhythm-note'),r=s.decisions[0]?.rhythm;
+  box.append(node('span','entry-label','生活节律'));
+  if(!r){box.append(node('p','entry-note',s.flags?.life_rhythm_enabled?'还没有新的节律选择记录。':'节律策略尚未开启，继续沿用原有生活安排。'));return box;}
+  const phase={morning:'晨间续篇',day:'白日探索',wind_down:'睡前整理',sleep:'留给休息',rest_after_activity:'活动后的留白'};
+  box.append(node('h3','entry-title',phase[r.phase]||'上次的节律'),node('p','entry-text',r.reason),node('p','entry-time',`选择当时 · ${date(r.at)}`));
+  if(Number.isFinite(r.recent_activity_minutes)&&Number.isFinite(r.window_minutes))box.append(node('p','entry-note',`当时近 ${r.window_minutes} 分钟内，记录到 ${r.recent_activity_minutes} 分钟活动。`));
+  if(r.next_eligible_at)box.append(node('p','entry-note',`当时预计 ${date(r.next_eligible_at)} 后可再考虑，仍须满足原有活动条件。`));
+  if(!s.flags?.life_rhythm_enabled)box.append(node('p','entry-note','节律策略现已关闭，上方保留历史选择。'));
+  return box;
+}
 function render(){
   if(!snapshot)return;
   const s=snapshot,stale=s.connection==='stale',demo=s.mode==='demo',unavailable=s.mode==='unavailable';
@@ -26,6 +37,7 @@ function render(){
   if(stale)box.append(node('p','state-warning','同步中断或快照已超过三分钟。下面是旧记录，不能据此判断她现在正在做什么。'));
   if(unavailable){box.append(node('p','empty','房间已经在这里，但还没有连接到她的活动账本。连接后，安排、作品和足迹才会在这里出现。'),node('p','entry-note','这是独立的生活观测空间，不会从记忆片段猜测她的当前状态。'));return;}
   const latest=s.decisions[0];
+  if(zone==='overview'||zone==='rest')box.append(rhythmNote(s));
   if(zone==='overview'){
     const hello=node('div','overview-note');hello.append(node('h3','','先在这里坐一会儿'),node('p','entry-text','去书桌写一点安排，去书架翻几页书，或是陪她看一会儿窗外。'),node('p','entry-note','点击下方的角落，镜头会带你走近。'));
     box.append(hello,node('h3','entry-title',STATE[s.state]||STATE.unknown));

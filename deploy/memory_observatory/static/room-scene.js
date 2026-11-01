@@ -11,6 +11,9 @@ const ease=t=>t*t*(3-2*t),mix=(a,b,t)=>a+(b-a)*t;
 // Sheets are normalized to 444px integer cells with 2px transparent gutters
 // (deploy/memory_observatory/tools/normalize_character_atlas.py).
 const ATLAS={cols:4,rows:2,cell:444,gap:2,pad:2,width:1786,height:894};
+// Register the sleeping frames to a shared horizontal centre and cushion baseline.
+// Offsets are in source pixels; the illustration itself remains unchanged.
+const REST_FRAME_OFFSETS=[[-25.5,0],[-20.5,0],[-15.5,0],[-13.5,-1],[-25,25],[-22,23],[-17,23],[-9.5,18]];
 export function dayPhase(date=new Date()){
  const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(date);
  const h=Number(parts.find(p=>p.type==='hour').value),m=Number(parts.find(p=>p.type==='minute').value);
@@ -83,6 +86,10 @@ export class RoomScene{
   const c=this.ctx,w=this.canvas.width,h=this.canvas.height,sw=ATLAS.cell,sh=ATLAS.cell,
         sx=ATLAS.pad+(frame%4)*(ATLAS.cell+ATLAS.gap),sy=ATLAS.pad+Math.floor(frame/4)*(ATLAS.cell+ATLAS.gap);
   c.clearRect(0,0,w,h);c.save();if(this.action==='walk'&&this.direction<0){c.translate(w,0);c.scale(-1,1);}const breath=this.off||this.action==='walk'?0:Math.sin(this.elapsed/850)*1.2;
-  c.drawImage(img,sx,sy,sw,sh,0,breath,w,h-breath);c.restore();
+  // The repaired window sheet has its foot baseline at source row 423.
+  // Align that baseline to the actor's floor anchor without changing the art.
+  const footOffset=this.action==='window'?(ATLAS.cell-423)*h/ATLAS.cell:0;
+  const [dx,dy]=this.action==='rest'?REST_FRAME_OFFSETS[frame]:[0,0];
+  c.drawImage(img,sx,sy,sw,sh,dx*w/ATLAS.cell,breath+footOffset+dy*h/ATLAS.cell,w,h-breath);c.restore();
  }
 }

@@ -141,6 +141,32 @@ class ReaderTests(unittest.TestCase):
         self.assertNotIn("FOREIGN-WORK",json.dumps(result))
         self.assertNotIn("PRIVATE-PAYLOAD",json.dumps(result))
 
+    def test_rhythm_projects_recorded_fields_without_mutation_or_private_metadata(self):
+        self.cfg["life_rhythm_enabled"] = True
+        self.write_config()
+        self.store.event(SCOPE, "life_rest", {"action": "rest", "run_id": "no-run", "reason": "先休息",
+            "rhythm": {"enabled": True, "phase": "sleep", "at": self.now-10, "reason": "到了休息时段",
+                       "recent_activity_minutes": 12, "window_minutes": 120, "limit_minutes": 20,
+                       "next_eligible_at": self.now+3600, "source_run_ids": ["SECRET-ID"], "token": "SECRET"}})
+        self.store.db.execute("UPDATE events SET time=? WHERE seq=last_insert_rowid()", (self.now-10,))
+        before = self.store.db.total_changes
+        snapshot = self.read()
+        r = snapshot["decisions"][0]["rhythm"]
+        self.assertEqual((r["phase"], r["recent_activity_minutes"]), ("sleep", 12))
+        self.assertTrue(snapshot["flags"]["life_rhythm_enabled"])
+        self.assertNotIn("SECRET", json.dumps(snapshot))
+        self.assertEqual(self.store.db.total_changes, before)
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM runs").fetchone()[0], 0)
+
+    def test_old_or_future_rhythm_does_not_invent_current_state(self):
+        self.decision(status="completed")
+        self.assertIsNone(self.read()["decisions"][0]["rhythm"])
+        raw = {"action": "research", "run_id": "run-"+SCOPE,
+               "rhythm": {"enabled": True, "phase": "sleep", "at": self.now+1}}
+        self.store.db.execute("UPDATE events SET details=?", (json.dumps(raw),))
+        self.assertIsNone(self.read()["decisions"][0]["rhythm"])
+        self.assertEqual(self.read()["state"], "ended")
+
     def test_bad_config_missing_db_and_future_schema_fail_closed(self):
         self.cfg["owner_scope"] = "qq:GroupMessage:12345"
         self.write_config()

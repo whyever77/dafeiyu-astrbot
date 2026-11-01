@@ -229,6 +229,16 @@ try {
     await click('[data-zone="desk"]');assert.equal(await evaluate('document.querySelectorAll("[data-zone][aria-pressed=true]").length'),1);
     assert.equal(await evaluate('document.querySelector("#room-character").dataset.action'),'desk');
   });
+  await check('room shows rhythm as a dated decision without starting activity',async()=>{
+    const before=await evaluate('fetch("/api/room").then(r=>r.json())');
+    await click('[data-zone="overview"]');
+    assert.ok(await evaluate('document.querySelector(".rhythm-note").textContent.includes("选择当时")'));
+    await click('[data-zone="rest"]');
+    assert.ok(await evaluate('document.querySelector(".rhythm-note").textContent.includes("12 分钟活动")'));
+    const after=await evaluate('fetch("/api/room").then(r=>r.json())');
+    assert.deepEqual(after,before);
+    await click('[data-zone="desk"]');
+  });
   await check('camera and character move continuously and rapid navigation ends at latest zone',async()=>{
     await click('#room-motion');
     const before=await evaluate('document.querySelector("#room-camera").getAttribute("transform")');
@@ -256,6 +266,36 @@ try {
     await evaluate(`import('/room-scene.js').then(m=>m.RoomScene.prototype.clock(new Date('2026-10-30T14:00:00Z')))`);
     assert.equal(await evaluate('getComputedStyle(document.querySelector("#sky-sun")).display'),'none');
     await screenshot('room-window-night.png',true);
+  });
+  await check('window animation renders every one of its eight frames',async()=>{
+    const result=await evaluate(`(async()=>{const canvas=document.querySelector('#room-character'),ctx=canvas.getContext('2d'),seen=new Map(),end=performance.now()+7000;
+      while(performance.now()<end&&seen.size<8){const frame=Number(canvas.dataset.frame);if(!seen.has(frame)){const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;let opaque=0,hash=2166136261,bottom=0;for(let i=3;i<pixels.length;i+=4){if(pixels[i]>128){opaque++;bottom=Math.floor(i/4/canvas.width);}hash=Math.imul(hash^pixels[i],16777619);}seen.set(frame,{opaque,hash,bottom,ready:canvas.dataset.assetReady});}await new Promise(r=>setTimeout(r,80));}
+      return [...seen].sort((a,b)=>a[0]-b[0]);})()`);
+    assert.deepEqual(result.map(([frame])=>frame),[0,1,2,3,4,5,6,7]);
+    assert.ok(result.every(([,r])=>r.opaque>1000&&r.ready==='true'));
+    assert.ok(result.every(([,r])=>r.bottom>=590),'feet must reach the actor floor anchor');
+    assert.ok(new Set(result.map(([,r])=>r.hash)).size>1);
+  });
+  await check('sleep animation renders eight complete frames and pauses without flicker',async()=>{
+    await click('[data-zone="rest"]');
+    await until(()=>evaluate('document.querySelector("#room-character").dataset.action === "rest"'),'sleep pose');
+    const result=await evaluate(`(async()=>{const canvas=document.querySelector('#room-character'),ctx=canvas.getContext('2d'),seen=new Map(),end=performance.now()+6500;
+      while(performance.now()<end&&seen.size<8){const frame=Number(canvas.dataset.frame);if(!seen.has(frame)){const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;let opaque=0,edge=0,hash=2166136261,left=canvas.width,right=0,bottom=0;for(let i=0;i<pixels.length;i+=4){const x=i/4%canvas.width,y=Math.floor(i/4/canvas.width);if(pixels[i+3]>128){opaque++;left=Math.min(left,x);right=Math.max(right,x);bottom=y;if(x===0||x===canvas.width-1||y===0||y===canvas.height-1)edge++;}for(let k=0;k<4;k++)hash=Math.imul(hash^pixels[i+k],16777619);}seen.set(frame,{opaque,edge,hash,bottom,centre:(left+right)/2,ready:canvas.dataset.assetReady});}await new Promise(r=>setTimeout(r,80));}
+      return [...seen].sort((a,b)=>a[0]-b[0]);})()`);
+    assert.deepEqual(result.map(([frame])=>frame),[0,1,2,3,4,5,6,7]);
+    assert.ok(result.every(([,r])=>r.opaque>1000&&r.ready==='true'));
+    assert.ok(result.every(([,r])=>r.edge===0),'pillow, hair and tail must not be clipped by the animation canvas');
+    assert.equal(new Set(result.map(([,r])=>r.hash)).size,8);
+    const bottoms=result.map(([,r])=>r.bottom),centres=result.map(([,r])=>r.centre);
+    assert.ok(Math.max(...bottoms)-Math.min(...bottoms)<=3,'sleeping frames must stay on the same cushion baseline');
+    assert.ok(Math.max(...centres)-Math.min(...centres)<=3,'sleeping frames must not drift sideways');
+    await click('#room-motion');await pause(80);
+    const still=await evaluate('document.querySelector("#room-character").toDataURL()');
+    await pause(750);
+    assert.equal(await evaluate('document.querySelector("#room-character").dataset.frame'),'0');
+    assert.equal(await evaluate('document.querySelector("#room-character").toDataURL()'),still);
+    await screenshot('room-rest.png',true);
+    await click('#room-motion');
   });
   await check('room keeps malicious record text literal and marks stale data',async()=>{
     const original=await evaluate('fetch("/api/room").then(r=>r.json())');

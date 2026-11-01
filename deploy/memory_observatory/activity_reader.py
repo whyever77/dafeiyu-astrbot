@@ -33,6 +33,20 @@ def obj(value):
     return parsed
 
 
+def rhythm_summary(value, at):
+    # Project only the recorded decision, never infer live feelings or run policy.
+    if not isinstance(value, dict) or value.get("enabled") is not True:
+        return None
+    if value.get("phase") not in {"morning", "day", "wind_down", "sleep", "rest_after_activity"}:
+        return None
+    stamp = number(value.get("at"))
+    if stamp is None or stamp > at:
+        return None
+    return {"phase": value["phase"], "at": stamp, "reason": clean(value.get("reason")),
+            **{key: number(value.get(key)) for key in
+               ("recent_activity_minutes", "window_minutes", "limit_minutes", "next_eligible_at")}}
+
+
 def read_activity(folder, *, now=None):
     at = time.time() if now is None else number(now)
     if at is None:
@@ -79,6 +93,7 @@ def read_activity(folder, *, now=None):
                     "reason": clean(raw.get("reason")), "goal_id": clean(raw.get("goal_id"), 100),
                     "topic": clean(raw.get("topic"), 80), "run_status": clean(run["status"], 30) if run else "rested" if raw["action"] == "rest" else "not_started",
                     "started": number(run["started"]) if run else None, "ended": number(run["ended"]) if run else None})
+                decisions[-1]["rhythm"] = rhythm_summary(raw.get("rhythm"), at)
             paused = db.execute("SELECT value FROM settings WHERE key=?", ("life_paused:" + scope,)).fetchone()
             paused = json.loads(paused[0]) is True if paused else False
             works = []
@@ -97,7 +112,7 @@ def read_activity(folder, *, now=None):
                     for field in ("source", "kind", "status"):
                         item[field] = clean(item[field], 30)
                     item["created"] = number(item["created"])
-            flags = {key: cfg.get(key) is True for key in ("enabled", "life_enabled", "life_decision_enabled", "periodic_enabled")}
+            flags = {key: cfg.get(key) is True for key in ("enabled", "life_enabled", "life_decision_enabled", "periodic_enabled", "life_rhythm_enabled")}
             state, zone = "idle", "window"
             latest = decisions[0] if decisions else None
             if not flags["enabled"] or not flags["life_enabled"]:

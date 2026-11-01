@@ -1,0 +1,31 @@
+{
+  "base": "http://127.0.0.1:65165",
+  "checks": [
+    "desktop loads 32 scoped memories with no horizontal overflow",
+    "memory selection and 2D controls update the actual view",
+    "star map zooms in far enough",
+    "starfields separate types and keep positions stable",
+    "clicking the selected node again clears the connection",
+    "camera survives a data refresh",
+    "clicking a starfield label focuses it",
+    "future simulation fades detail but preserves source confidence",
+    "simulated pin and reset are reversible",
+    "cue retrieval explains seed and one-hop associations",
+    "timeline and lab navigation work",
+    "group scope never exposes private matches or cards",
+    "JSON upload renders malicious-looking content literally",
+    "mobile layout fits 390px with usable controls",
+    "room opens from the atlas and labels fiction independently",
+    "room corners show actual snapshot records and keep controls read-only",
+    "camera and character move continuously and rapid navigation ends at latest zone",
+    "window uses Shanghai real time and supports day / dusk / night",
+    "window animation renders every one of its eight frames",
+    "sleep animation renders eight complete frames and pauses without flicker",
+    "room keeps malicious record text literal and marks stale data",
+    "room mobile layout and reduced motion remain usable",
+    "60-second LivingMemory sync preserves view and scope, skips hidden and disabled pages",
+    "no uncaught browser JavaScript exceptions"
+  ],
+  "failures": [],
+  "errors": []
+}
