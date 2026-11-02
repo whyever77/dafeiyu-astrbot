@@ -1,0 +1,437 @@
+"""Offline self-expression provenance, boundaries and native request hook."""
+import importlib
+import json
+import sys
+import tempfile
+import types
+import unittest
+from unittest.mock import AsyncMock, patch
+
+import test_bili_activity as fixtures
+import test_bili_life_integration as life_tests
+import test_bili_life_ops as ops_tests
+import test_bili_memory_policy as memory_tests
+import test_bili_planner as planner_tests
+
+main, core = fixtures.main, fixtures.core
+SCOPE, OTHER = fixtures.SCOPE, fixtures.OTHER_SCOPE
+expression = importlib.import_module("bili_activity_test.self_expression")
+Workshop = importlib.import_module("bili_activity_test.workshop").Workshop
+episode, interest = memory_tests.episode, memory_tests.interest
+DAY = 86400
+
+
+class ExpressionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.clock = patch.object(expression, "_clock", side_effect=lambda now: 1800000000 if now is None else memory_tests.policy._clock(now))
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
+        self.time = patch.object(memory_tests.time, "time", return_value=1800000000)
+        self.time.start()
+        self.addCleanup(self.time.stop)
+        self.store = core.Store(self.temp.name)
+        self.view = expression.SelfExpression(self.store)
+        self.cfg = main.DEFAULTS | {"life_enabled": True, "self_expression_enabled": True}
+
+    def tearDown(self):
+        self.store.close()
+        self.temp.cleanup()
+
+    def snapshot(self, **kw):
+        return self.view.snapshot(SCOPE, self.cfg, **kw)
+
+    def goal(self, key="goal", scope=SCOPE):
+        return self.store.life.create_goal(scope, "合作建造", "想查清限制", "接着核对资料", key)
+
+    def test_empty_history_is_unknown_and_creates_nothing(self):
+        before = list(self.store.db.iterdump())
+        value = self.snapshot()
+        for key in ("focus", "completed_goals", "interests", "interruptions"):
+            self.assertEqual(value[key], [])
+        self.assertIn("未知", value["meaning"])
+        self.assertEqual(list(self.store.db.iterdump()), before)
+
+    def test_disabled_and_old_config_have_no_new_context(self):
+        for cfg in (main.DEFAULTS, self.cfg | {"self_expression_enabled": False}, self.cfg | {"life_enabled": False}):
+            with patch.object(self.view.memory, "observed_interests", side_effect=AssertionError("must not scan")):
+                self.assertEqual(self.view.context(SCOPE, cfg), "")
+                self.assertEqual(self.view.snapshot(SCOPE, cfg), {"enabled": False})
+
+    def test_single_observation_cannot_be_a_personality_or_change(self):
+        interest(self.store, "BVold1", age=20, polarity=-1)
+        interest(self.store, "BVold2", age=21, polarity=-1)
+        interest(self.store, "BVnew", age=1)
+        value = self.snapshot()["interests"][0]
+        self.assertEqual(value["state"], "tentative")
+        self.assertIsNone(value["recent_direction"])
+        self.assertEqual(value["previous_direction"], -1)
+
+    def test_independent_evidence_in_both_windows_supports_change(self):
+        for bvid, age, polarity in (("BV1", 20, -1), ("BV2", 21, -1), ("BV3", 1, 1), ("BV4", 2, 1)):
+            interest(self.store, bvid, age=age, polarity=polarity)
+        row = self.snapshot()["interests"][0]
+        self.assertEqual(row["state"], "changed_between_windows")
+        self.assertEqual((row["previous_direction"], row["recent_direction"]), (-1, 1))
+        self.assertEqual((row["previous_origin_count"], row["recent_origin_count"]), (2, 2))
+        self.assertTrue(all(v["source_episode_id"] for v in row["recent_sources"] + row["previous_sources"]))
+
+    def test_repeated_direction_is_not_relabelled_as_change(self):
+        for i, age in enumerate((20, 21, 1, 2)):
+            interest(self.store, "BV"+str(i), age=age)
+        self.assertEqual(self.snapshot()["interests"][0]["state"], "consistent_between_windows")
+
+    def test_repeated_video_and_other_parts_cannot_manufacture_change(self):
+        interest(self.store, "BV1", age=20, polarity=-1)
+        interest(self.store, "BV2", age=21, polarity=-1)
+        for _ in range(4):
+            interest(self.store, "BV1", age=1)
+        source = episode(self.store, kind="video", age=1, evidence={"bvid": "BV1", "cid": 2, "subtitles": ["摘录"]})
+        episode(self.store, kind="interest", age=1, evidence={"episode_id": source["id"], "bvid": "BV1", "cid": 2},
+                interpretation={"interest": {"topic": "海洋", "polarity": 1}})
+        row = self.snapshot()["interests"][0]
+        self.assertEqual((row["state"], row["recent_origin_count"], row["previous_origin_count"]), ("tentative", 1, 1))
+
+    def test_conflicting_current_evidence_remains_mixed(self):
+        interest(self.store, "BV1", polarity=1)
+        interest(self.store, "BV2", polarity=-1)
+        row = self.snapshot()["interests"][0]
+        self.assertEqual(row["state"], "mixed")
+        self.assertIsNone(row["recent_direction"])
+
+    def test_no_recent_evidence_does_not_mean_interest_lost(self):
+        interest(self.store, "BV1", age=20)
+        interest(self.store, "BV2", age=21)
+        self.assertEqual(self.snapshot()["interests"], [])
+
+    def test_invalid_source_foreign_user_and_summaries_are_not_self_evidence(self):
+        self.store.life.record_user_preference(SCOPE, "12345", "m1", "我喜欢海洋")
+        interest(self.store, "BVempty", observed=False)
+        _, other = interest(self.store, "BVother", scope=OTHER)
+        interest(self.store, "BVother", source=other)
+        episode(self.store, kind="run_end", interpretation={"summary": "我完成了所有事情，还变得喜欢海洋"})
+        self.assertEqual(self.snapshot()["interests"], [])
+        self.assertEqual(self.snapshot()["completed_goals"], [])
+
+    def test_corrected_and_future_sources_do_not_support_interests(self):
+        _, source = interest(self.store, "BV1")
+        episode(self.store, kind="video", supersedes_id=source["id"])
+        interest(self.store, "BVfuture", age=-1)
+        self.assertEqual(self.snapshot()["interests"], [])
+
+    def test_period_boundary_uses_actual_timestamps_and_shanghai_labels(self):
+        for i, age in enumerate((14, 1, 14.001, 28, 28.001)):
+            interest(self.store, "BV"+str(i), age=age)
+        value = self.snapshot()
+        row = value["interests"][0]
+        self.assertEqual((row["recent_origin_count"], row["previous_origin_count"]), (2, 2))
+        self.assertTrue(value["as_of"].endswith("+08:00"))
+
+    def test_focus_is_intent_and_reading_does_not_claim_goal(self):
+        goal = self.goal()
+        before = list(self.store.db.iterdump())
+        value = self.snapshot()
+        self.assertEqual(value["focus"][0]["status"], "ready")
+        self.assertTrue(value["focus"][0]["intent_only"])
+        self.assertEqual(value["completed_goals"], [])
+        self.assertEqual(self.store.life.get_goal(SCOPE, goal["id"])["status"], "ready")
+        self.assertEqual(list(self.store.db.iterdump()), before)
+
+    def test_goal_completion_requires_current_observed_source(self):
+        goal = self.goal()
+        source = episode(self.store, goal_id=goal["id"])
+        self.store.life.update_goal(SCOPE, goal["id"], status="completed")
+        row = self.snapshot()["completed_goals"][0]
+        self.assertEqual(row["basis"], "goal_record_with_observations")
+        self.assertEqual(row["source_ids"], [source["id"]])
+        episode(self.store, goal_id=goal["id"], supersedes_id=source["id"], evidence={"operation": "info", "result_excerpt": '{"ok":false}'})
+        self.assertEqual(self.snapshot()["completed_goals"][0]["basis"], "needs_recheck")
+
+    def checked_work(self):
+        goal = self.goal()
+        source = episode(self.store, goal_id=goal["id"])
+        workshop = Workshop(self.store)
+        work = workshop.create(SCOPE, goal["id"], "小笔记", "w1")
+        body = f"## 资料观察\n来源描述。[E:{source['id']}]\n## 我的想法\n先记下想法。\n## 待核实\n还需要别的来源。"
+        work = workshop.revise(SCOPE, work["id"], body, [source["id"]], 0, "r1")
+        check = episode(self.store, kind="work_checked", goal_id=goal["id"], evidence={"work_id": work["id"],
+            "revision": 1, "body_hash": work["body_hash"], "source_ids": work["source_ids"], "checks_passed": True})
+        self.store.life.update_goal(SCOPE, goal["id"], status="completed")
+        return source, work, check
+
+    def test_work_check_is_readonly_and_requires_current_revision(self):
+        source, work, check = self.checked_work()
+        before = list(self.store.db.iterdump())
+        row = self.snapshot()["completed_goals"][0]
+        self.assertEqual((row["basis"], row["check_episode_id"]), ("checked_work_record", check["id"]))
+        self.assertEqual(list(self.store.db.iterdump()), before)
+        self.store.db.execute("UPDATE creative_works SET revision=2 WHERE id=?", (work["id"],))
+        self.assertEqual(self.snapshot()["completed_goals"][0]["basis"], "needs_recheck")
+
+    def test_work_source_correction_and_invalid_receipt_block_completion_claim(self):
+        source, work, check = self.checked_work()
+        self.store.db.execute("UPDATE episodes SET evidence_json=? WHERE id=?", (json.dumps({"checks_passed": False}), check["id"]))
+        self.assertEqual(self.snapshot()["completed_goals"][0]["basis"], "needs_recheck")
+        episode(self.store, supersedes_id=source["id"])
+        self.assertEqual(self.snapshot()["completed_goals"][0]["source_ids"], [])
+
+    def test_stops_report_known_boundaries_not_model_summary_or_emotions(self):
+        for i, status in enumerate(expression.STOP_REASONS):
+            self.store.db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?)",
+                (str(i), SCOPE, 1799999000+i, 1799999100+i, status, "RAW SECRET: 主人讨厌我，所以我生气了"))
+        value = self.snapshot()
+        self.assertEqual(len(value["interruptions"]), 3)
+        self.assertNotIn("RAW SECRET", core.canonical(value))
+        self.assertNotIn("emotion_score", value)
+        self.assertEqual(value["completed_goals"], [])
+        for row in value["interruptions"]:
+            self.assertEqual(row["known_reason"], expression.STOP_REASONS[row["status"]])
+
+    def test_complete_run_not_goal_completion_and_foreign_future_runs_ignored(self):
+        for name, scope, ended, status in (("done", SCOPE, 1799999990, "completed"),
+                 ("foreign", OTHER, 1799999990, "failed"), ("future", SCOPE, 1800000100, "timeout")):
+            self.store.db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?)", (name, scope, ended-1, ended, status, "secret"))
+        self.assertEqual(self.snapshot()["completed_goals"], [])
+        self.assertEqual(self.snapshot()["interruptions"], [])
+
+    def test_scope_isolation_for_goals_and_no_outside_window_completion(self):
+        self.goal(scope=OTHER)
+        self.assertEqual(self.snapshot()["focus"], [])
+        goal = self.goal()
+        episode(self.store, goal_id=goal["id"])
+        self.store.life.update_goal(SCOPE, goal["id"], status="completed")
+        self.store.db.execute("UPDATE goals SET updated_at=? WHERE id=?", (1800000000-15*DAY, goal["id"]))
+        self.assertEqual(self.snapshot()["completed_goals"], [])
+
+    def test_repeated_review_is_stable_and_not_a_new_memory(self):
+        interest(self.store, "BV1")
+        interest(self.store, "BV2")
+        before = list(self.store.db.iterdump())
+        first = self.snapshot()
+        for _ in range(5):
+            self.assertEqual(self.snapshot(), first)
+        self.assertEqual(list(self.store.db.iterdump()), before)
+
+    def test_bounded_scan_reports_incomplete_history(self):
+        for _ in range(501):
+            episode(self.store)
+        for i in range(5):
+            self.goal(str(i))
+        value = self.snapshot()
+        self.assertTrue(value["coverage"]["episode_history_truncated"])
+        self.assertEqual(len(value["focus"]), 3)
+
+    def test_invalid_config_and_clock_are_rejected(self):
+        for change in ({"self_expression_enabled": "false"}, {"self_expression_window_days": True},
+                       {"self_expression_window_days": 6}, {"self_expression_window_days": 91}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.view.snapshot(SCOPE, self.cfg | change)
+        for now in (-1, True, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                self.snapshot(now=now)
+
+
+class ExpressionIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp = life_tests.LifeIntegrationTests.asyncSetUp
+    asyncTearDown = life_tests.LifeIntegrationTests.asyncTearDown
+    save_config = life_tests.LifeIntegrationTests.save_config
+
+    def enable(self):
+        self.config["self_expression_enabled"] = True
+        self.save_config()
+
+    @staticmethod
+    def request():
+        return types.SimpleNamespace(system_prompt="原有人格\nEmotionAI 原有上下文", contexts=[],
+            func_tool=fixtures.ToolSet([fixtures.FunctionTool(name=expression.TOOL, active=True)]))
+
+    async def test_old_config_default_off_and_optional_tool_removed(self):
+        for key in expression.DEFAULTS:
+            self.config.pop(key)
+        self.save_config()
+        self.assertFalse(self.plugin.cfg()["self_expression_enabled"])
+        req = self.request()
+        await self.plugin.guard_phone(fixtures.FakeEvent(), req)
+        self.assertNotIn(expression.TOOL, req.func_tool.names())
+        self.assertNotIn(expression.MARKER, req.system_prompt)
+        with self.assertRaises(PermissionError):
+            await self.plugin.self_reflect(fixtures.FakeEvent())
+
+    async def test_hook_preserves_persona_and_emotion_and_adds_only_scoped_data(self):
+        self.enable()
+        req = self.request()
+        await self.plugin.guard_phone(fixtures.FakeEvent(), req)
+        self.assertTrue(req.system_prompt.startswith("原有人格\nEmotionAI 原有上下文"))
+        self.assertEqual(req.system_prompt.count(expression.MARKER), 1)
+        self.assertIn("只读回顾", req.system_prompt)
+        self.assertIn(expression.TOOL, req.func_tool.names())
+        for event in (fixtures.FakeEvent(scope=OTHER), fixtures.FakeEvent(user="98765")):
+            req = self.request()
+            await self.plugin.guard_phone(event, req)
+            self.assertNotIn(expression.MARKER, req.system_prompt)
+            self.assertNotIn(expression.TOOL, req.func_tool.names())
+
+    async def test_tool_owner_checks_foreground_and_background(self):
+        self.enable()
+        for event in (fixtures.FakeEvent(scope=OTHER), fixtures.FakeEvent(user="98765"),
+                      fixtures.FakeEvent(user="98765", run_id="run")):
+            with self.assertRaises(PermissionError):
+                await self.plugin.self_reflect(event)
+        self.assertEqual(self.calls, [])
+        self.delivery.send.assert_not_called()
+
+    async def test_review_reads_without_memory_calls_sends_or_permission_changes(self):
+        self.enable()
+        before_cfg = self.plugin.control.read_bytes()
+        before = list(self.plugin.store.db.iterdump())
+        value = json.loads(await self.plugin.self_reflect(fixtures.FakeEvent()))
+        self.assertTrue(value["enabled"])
+        self.assertEqual(list(self.plugin.store.db.iterdump()), before)
+        self.assertEqual(self.plugin.control.read_bytes(), before_cfg)
+        self.assertEqual(self.calls, [])
+        self.plugin.flush_memory.assert_not_called()
+        self.delivery.send.assert_not_called()
+
+    async def test_public_reply_watcher_does_not_receive_private_self_review(self):
+        self.enable()
+        self.config.update(reply_watch_enabled=True, public_interactions=True)
+        self.save_config()
+        self.plugin.reply_runs = {"reply": {}}
+        event = fixtures.FakeEvent(run_id="reply")
+        req = self.request()
+        await self.plugin.guard_phone(event, req)
+        self.assertNotIn(expression.MARKER, req.system_prompt)
+        self.assertNotIn(expression.TOOL, req.func_tool.names())
+        with self.assertRaises(PermissionError):
+            await self.plugin.self_reflect(event)
+
+    async def test_disable_restores_prompt_and_tool_boundaries(self):
+        self.enable()
+        await self.plugin.self_reflect(fixtures.FakeEvent())
+        self.config["self_expression_enabled"] = False
+        self.save_config()
+        req = self.request()
+        await self.plugin.guard_phone(fixtures.FakeEvent(), req)
+        self.assertNotIn(expression.MARKER, req.system_prompt)
+        with self.assertRaises(PermissionError):
+            await self.plugin.self_reflect(fixtures.FakeEvent())
+
+    async def test_background_pause_and_dnd_still_reject_tool(self):
+        self.enable()
+        self.plugin.life_runs.add("run")
+        event = fixtures.FakeEvent(run_id="run")
+        with patch.object(main, "quiet_now", return_value=True), self.assertRaises(PermissionError):
+            await self.plugin.self_reflect(event)
+        self.plugin.store.setting("life_paused:"+SCOPE, True)
+        with self.assertRaises(PermissionError):
+            await self.plugin.self_reflect(event)
+
+    async def test_life_status_exposes_view_without_writes(self):
+        self.enable()
+        before = list(self.plugin.store.db.iterdump())
+        value = json.loads(await self.plugin.life_status(fixtures.FakeEvent()))
+        self.assertTrue(value["self_expression"]["enabled"])
+        self.assertEqual(list(self.plugin.store.db.iterdump()), before)
+
+    async def test_native_agent_hook_supplies_context_before_runner_reset(self):
+        self.enable()
+        observed = {}
+        tool = fixtures.FunctionTool(name=expression.TOOL, active=True)
+        self.plugin.context = types.SimpleNamespace(get_config=lambda **kw: {})
+
+        class Runner:
+            state = "done"
+
+            async def step_until_done(self, steps):
+                yield None
+
+            def get_final_llm_resp(self):
+                return types.SimpleNamespace(completion_text="离线回顾")
+
+        async def build(**kwargs):
+            req = kwargs["req"]
+            req.system_prompt = "原人格和情绪"
+            req.func_tool = fixtures.ToolSet([tool])
+
+            async def reset():
+                observed["prompt"], observed["tools"] = req.system_prompt, req.func_tool.names()
+
+            return types.SimpleNamespace(agent_runner=Runner(), reset_coro=reset())
+
+        async def hook(event, name, *args):
+            if args:
+                await self.plugin.guard_phone(event, args[0])
+
+        attrs = {
+            "astrbot.core.astr_main_agent": {"MainAgentBuildConfig": lambda **kw: types.SimpleNamespace(**kw),
+                "_get_session_conv": AsyncMock(return_value=types.SimpleNamespace(history="[]")), "build_main_agent": build},
+            "astrbot.core.pipeline.context_utils": {"call_event_hook": hook},
+            "astrbot.core.star.star_handler": {"EventType": types.SimpleNamespace(OnWaitingLLMRequestEvent="waiting", OnLLMRequestEvent="request")},
+            "astrbot.core.agent.runners.base": {"AgentState": types.SimpleNamespace(ERROR="error")},
+        }
+        modules = {name: types.ModuleType(name) for name in attrs}
+        for name, values in attrs.items():
+            vars(modules[name]).update(values)
+        with patch.dict(sys.modules, modules), patch.object(main, "ProviderRequest", lambda **kw: types.SimpleNamespace(**kw)):
+            result = await self.plugin.agent(fixtures.FakeEvent(), "近况", {expression.TOOL})
+        self.assertEqual(result, "离线回顾")
+        self.assertTrue(observed["prompt"].startswith("原人格和情绪"))
+        self.assertIn(expression.MARKER, observed["prompt"])
+        self.assertEqual(observed["tools"], [expression.TOOL])
+
+
+class ExpressionRunTests(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp = planner_tests.PlannerIntegrationTests.asyncSetUp
+    asyncTearDown = planner_tests.PlannerIntegrationTests.asyncTearDown
+    save_config = planner_tests.PlannerIntegrationTests.save_config
+
+    async def test_disabled_tool_not_required_by_background_and_enabled_tool_is_available(self):
+        await self.plugin.run_activity("once")
+        self.assertNotIn(expression.TOOL, self.plugin.agent.await_args.args[2])
+        self.config["self_expression_enabled"] = True
+        self.config["life_decision_enabled"] = False
+        self.save_config()
+        await self.plugin.run_activity("once")
+        self.assertIn(expression.TOOL, self.plugin.agent.await_args.args[2])
+
+
+class ExpressionOpsTests(unittest.TestCase):
+    setUp = ops_tests.LifeOpsTests.setUp
+    tearDown = ops_tests.LifeOpsTests.tearDown
+    config = ops_tests.LifeOpsTests.config
+    run_ops = ops_tests.LifeOpsTests.run_ops
+
+    def test_enable_rollback_defaults_and_existing_permissions_preserved(self):
+        for key, value in expression.DEFAULTS.items():
+            self.assertEqual(main.DEFAULTS[key], value)
+            self.assertEqual(ops_tests.ops.DEFAULTS[key], value)
+        path = self.config(custom="keep")
+        with self.assertRaises(ValueError):
+            self.run_ops("switch", "self_expression_enabled", "on")
+        path = self.config(life_enabled=True, custom="keep")
+        self.run_ops("switch", "self_expression_enabled", "on")
+        cfg = json.loads(path.read_text())
+        self.assertEqual(cfg["custom"], "keep")
+        self.assertTrue(cfg["self_expression_enabled"])
+        for key in ("enabled", "periodic_enabled", "public_interactions", "engagement_actions", "collection_management"):
+            self.assertFalse(cfg[key])
+        self.run_ops("switch", "self_expression_enabled", "off")
+        self.assertFalse(json.loads(path.read_text())["self_expression_enabled"])
+
+    def test_window_config_and_switch_validation_preserve_invalid_file(self):
+        path = self.config(life_enabled=True)
+        before = path.read_bytes()
+        with self.assertRaises(ValueError):
+            self.run_ops("configure", "--self-expression-window-days", "6")
+        self.assertEqual(path.read_bytes(), before)
+        self.run_ops("configure", "--self-expression-window-days", "30")
+        self.assertEqual(json.loads(path.read_text())["self_expression_window_days"], 30)
+        path = self.config(life_enabled=True, self_expression_window_days=True)
+        before = path.read_bytes()
+        with self.assertRaises(ValueError):
+            self.run_ops("switch", "self_expression_enabled", "on")
+        self.assertEqual(path.read_bytes(), before)
+
+
+if __name__ == "__main__":
+    unittest.main()

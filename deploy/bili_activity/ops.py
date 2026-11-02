@@ -35,6 +35,11 @@ DEFAULTS = {
     "life_decision_enabled": False,
     "life_repeat_cooldown_minutes": 180,
     "life_rhythm_enabled": False,
+    "life_memory_enabled": False,
+    "life_memory_detail_days": 7, "life_memory_dormant_days": 60,
+    "self_expression_enabled": False, "self_expression_window_days": 14,
+    "life_projects_enabled": False, "project_active_limit": 2,
+    "project_max_stages": 3, "project_review_delay_hours": 24,
     "life_sleep_hour": 23, "life_wake_hour": 8, "life_wind_down_minutes": 60,
     "life_activity_window_minutes": 120, "life_activity_limit_minutes": 20,
     "contact_coordination_enabled": False,
@@ -82,6 +87,9 @@ NUMERIC_LIMITS = {
     "life_sleep_hour": (0, 23), "life_wake_hour": (0, 23),
     "life_wind_down_minutes": (0, 180), "life_activity_window_minutes": (30, 720),
     "life_activity_limit_minutes": (1, 120),
+    "life_memory_detail_days": (1, 90), "life_memory_dormant_days": (1, 365),
+    "self_expression_window_days": (7, 90),
+    "project_active_limit": (1, 4), "project_max_stages": (1, 6), "project_review_delay_hours": (1, 168),
     "contact_daily_limit": (0, 50), "contact_cooldown_minutes": (1, 1440),
     "contact_owner_quiet_minutes": (0, 1440), "contact_unanswered_limit": (1, 20),
 }
@@ -143,6 +151,15 @@ def validate_dnd(ranges):
             hour, minute = map(int, item.split(":"))
             if not (0 <= hour < 24 and 0 <= minute < 60):
                 raise ValueError("免打扰时间超出范围")
+
+
+def validate_memory_settings(control):
+    for key in ("life_memory_detail_days", "life_memory_dormant_days"):
+        low, high = NUMERIC_LIMITS[key]
+        if type(control[key]) is not int or not low <= control[key] <= high:
+            raise ValueError(f"{key} 必须是 {low}–{high} 的整数")
+    if control["life_memory_detail_days"] >= control["life_memory_dormant_days"]:
+        raise ValueError("记忆细节保留期必须短于淡出期")
 
 
 @contextmanager
@@ -370,7 +387,7 @@ def main(argv=None):
     once = sub.add_parser("once")
     once.add_argument("--delay-seconds", type=int, default=180)
     switches = sub.add_parser("switch")
-    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "life_decision_enabled", "life_rhythm_enabled", "contact_coordination_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled", "auto_public"])
+    switches.add_argument("name", choices=["public_interactions", "engagement_actions", "collection_management", "screenshot_enabled", "life_enabled", "life_decision_enabled", "life_rhythm_enabled", "life_memory_enabled", "self_expression_enabled", "life_projects_enabled", "contact_coordination_enabled", "workshop_enabled", "methods_enabled", "reply_watch_enabled", "comment_learning_enabled", "auto_public"])
     switches.add_argument("value", choices=["on", "off"])
     accepted = sub.add_parser("accept-one-shot")
     accepted.add_argument("--evidence", type=Path, required=True,
@@ -506,6 +523,7 @@ def main(argv=None):
                 validate_dnd(ranges)
                 control["dnd_ranges"] = ranges
             validate_rhythm_settings(control)
+            validate_memory_settings(control)
         elif args.command in {"start", "once", "enable-periodic"}:
             ready(control)
             control["enabled"] = True
@@ -522,6 +540,26 @@ def main(argv=None):
         elif args.command == "disable-periodic":
             control["periodic_enabled"] = False
         elif args.command == "switch":
+            if args.name == "life_projects_enabled" and args.value == "on":
+                ready(control)
+                if any(control[k] is not True for k in ("life_enabled", "workshop_enabled", "life_decision_enabled", "one_shot_verified")):
+                    raise ValueError("先验收生活功能并开启创作和生活决策，再开启项目")
+                for key in ("project_active_limit", "project_max_stages", "project_review_delay_hours"):
+                    low, high = NUMERIC_LIMITS[key]
+                    if type(control[key]) is not int or not low <= control[key] <= high:
+                        raise ValueError(f"{key} 必须是 {low}–{high} 的整数")
+            if args.name == "self_expression_enabled" and args.value == "on":
+                ready(control)
+                if control["life_enabled"] is not True:
+                    raise ValueError("先开启生活功能，再开启近况回顾")
+                days = control["self_expression_window_days"]
+                if type(days) is not int or not 7 <= days <= 90:
+                    raise ValueError("self_expression_window_days 必须是 7–90 的整数")
+            if args.name == "life_memory_enabled" and args.value == "on":
+                ready(control)
+                if control["life_enabled"] is not True or control["one_shot_verified"] is not True:
+                    raise ValueError("先完成一次性活动验收并开启生活功能，再开启经历记忆策略")
+                validate_memory_settings(control)
             if args.name == "life_rhythm_enabled" and args.value == "on":
                 ready(control)
                 if any(control[key] is not True for key in ("life_enabled", "life_decision_enabled", "one_shot_verified")):

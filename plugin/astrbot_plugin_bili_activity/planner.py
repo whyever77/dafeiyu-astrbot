@@ -11,6 +11,7 @@ import time
 
 from .life import observed_read_evidence
 from .rhythm import DEFAULTS as RHYTHM_DEFAULTS, snapshot as rhythm_snapshot, validate_config as validate_rhythm
+from .projects import Projects
 
 DEFAULTS = {**RHYTHM_DEFAULTS, "life_decision_enabled": False, "life_repeat_cooldown_minutes": 180}
 
@@ -69,10 +70,11 @@ class LifePlanner:
         # cannot push an unresolved/unchanged attempt out of the cooldown window.
         recent = history[:3]
         candidates, excluded = [], []
+        projects = Projects(self.store)
 
         def add(action, key, signature, reason, score, factors, **fields):
             if rhythm["enabled"]:
-                if not rhythm["allow_activity"] or (rhythm["writing_only"] and action != "writing"):
+                if not rhythm["allow_activity"] or (rhythm["writing_only"] and action not in {"writing", "project_review"}):
                     excluded.append({"key": key, "reason": "rhythm_" + rhythm["phase"]})
                     return
                 if rhythm["phase"] == "morning" and action in {"research", "writing"}:
@@ -93,6 +95,10 @@ class LifePlanner:
 
         for goal in goals:
             gid = goal["id"]
+            gate = projects.goal_gate(scope, gid, cfg)
+            if gate and not gate["allowed"]:
+                excluded.append({"key": "goal:" + gid, "reason": gate["reason"]})
+                continue
             if goal["status"] not in {"ready", "paused"}:
                 excluded.append({"key": "goal:" + gid, "reason": "goal_" + goal["status"]})
                 continue
@@ -149,6 +155,13 @@ class LifePlanner:
                 ("继续整理已有作品：" if action == "writing" else "继续弄清未完成的问题：") + goal["title"][:100],
                 60 + age + (8 if topics else 0), factors, goal_id=gid,
                 work_id=work["id"] if work else None, evidence_ids=evidence, topic=topics[0] if topics else "")
+
+        for review in projects.due(scope, cfg, now=now):
+            add("project_review", "project:"+review["project_id"], fingerprint(review),
+                "回看已完成阶段，再决定是否继续："+review["title"][:100], 74,
+                [{"reason": "completed_project_review_due", "points": 74}],
+                project_id=review["project_id"], project_stage=review["position"],
+                review_task=review["task"], evidence_ids=review["work"]["source_ids"])
 
         if not phone_busy and len(goals) < 8:
             # All exploration shares one cooldown, even when topics change.
