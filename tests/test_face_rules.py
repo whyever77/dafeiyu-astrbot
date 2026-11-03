@@ -205,6 +205,33 @@ for src in (
     asyncio.run(plugin.scrub_drafts(_Event(), resp))
     check("protect-meta-content: " + src, resp.completion_text == src, repr(resp.completion_text))
 
+# 9) 消息数组壳：模型把回复写成 ['第一句。', '第二句。']
+UNWRAP = mod.FaceConvertPlugin._unwrap_message_shell
+for src, want in (
+    (
+        "['嗯？就这么一个字呀。行吧，那我就当你已经放下了，躺着不动了。', '晚安，别眯着眼睛又玩手机。']",
+        "嗯？就这么一个字呀。行吧，那我就当你已经放下了，躺着不动了。\n晚安，别眯着眼睛又玩手机。",
+    ),
+    ('["第一句。", "第二句。"]', "第一句。\n第二句。"),
+    (
+        '[{"type": "text", "text": "第一句。"}, {"type": "text", "text": "第二句。"}]',
+        "第一句。\n第二句。",
+    ),
+    ("['只有一句。']", "只有一句。"),
+    ("结果是 ['苹果', '香蕉'] 这样", "结果是 ['苹果', '香蕉'] 这样"),
+    ("```python\n['a', 'b']\n```", "```python\n['a', 'b']\n```"),
+    ("['苹果', '香蕉']", "['苹果', '香蕉']"),
+    ("普通回复，没有数组。", "普通回复，没有数组。"),
+):
+    got = UNWRAP(src)
+    check("unwrap: " + src, got == want, repr(got))
+
+# 10) scrub_drafts 走完清洗后不应再把数组壳发给分段器
+resp = _Resp("['嗯？就这么一个字呀。', '晚安，别眯着眼睛又玩手机。']")
+asyncio.run(plugin.scrub_drafts(_Event(), resp))
+want = "嗯？就这么一个字呀。\n晚安，别眯着眼睛又玩手机。"
+check("scrub-drafts-unwrap", resp.completion_text == want, repr(resp.completion_text))
+
 print()
 if failures:
     print("结果：%d 项失败" % len(failures))

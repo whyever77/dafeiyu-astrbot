@@ -6,6 +6,7 @@
 字典来源：NapCat 内置 qface 表 + 社区 315 条 sysface 快照合并（414 条）。
 """
 
+import ast
 import asyncio
 import base64
 import json
@@ -157,7 +158,7 @@ async def run_bounded(
     "astrbot_plugin_face_convert",
     "dafeiyu-tools",
     "把 LLM 回复中的 [流泪][doge] 等文字表情自动转换为真实 QQ 表情段",
-    "1.3.0",
+    "1.3.2",
 )
 class FaceConvertPlugin(Star):
     # 静默暗号只在“整条回复就是它”时生效；正常解释这个标记时不能吞整条。
@@ -843,6 +844,67 @@ class FaceConvertPlugin(Star):
             segments[i] = fix(segments[i])
         return "```".join(segments)
 
+    _LIST_SENTENCE_END = ("。", "！", "？", "!", "?", "…", "~", "～")
+
+    @staticmethod
+    def _unwrap_message_shell(text: str) -> str:
+        """拆掉模型误发的“消息数组”外壳。
+
+        DeepSeek 用过 send_message_to_user 之后，偶尔会把正常回复写成
+        `['第一句。', '第二句。']` 或 `[{"type": "text", "text": "..."}]`。
+        这不是人话，直接发出去会被分段成带方括号和引号的碎片。只在整条回复
+        就是一个数组、且元素确实像聊天文本时拆壳；普通正文/代码块原样返回。
+        """
+        s = (text or "").strip()
+        if len(s) < 2 or len(s) > 8000:
+            return text
+        if s[0] not in "[(" or s[-1] not in "])":
+            return text
+
+        data = None
+        try:
+            data = json.loads(s)
+        except (ValueError, TypeError):
+            try:
+                data = ast.literal_eval(s)
+            except (ValueError, SyntaxError, TypeError, MemoryError):
+                return text
+        if not isinstance(data, (list, tuple)) or not data:
+            return text
+
+        parts: list[str] = []
+        string_only = True
+        for item in data:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            string_only = False
+            if (
+                isinstance(item, dict)
+                and str(item.get("type", "")).lower() in {"plain", "text"}
+                and isinstance(item.get("text"), str)
+            ):
+                parts.append(item["text"])
+            else:
+                # 不认识的数组结构不要半拆，避免误伤用户要的数据/代码。
+                return text
+        if not parts:
+            return text
+
+        # 纯字符串数组只有在像“聊天句子”时才拆，避免把 [\'苹果\', \'香蕉\']
+        # 这类用户要的数据列表改成普通文本。
+        if string_only:
+            if not any(re.search(r"[一-鿿]", part) for part in parts):
+                return text
+            if not any(
+                part.rstrip().endswith(FaceConvertPlugin._LIST_SENTENCE_END)
+                for part in parts
+            ):
+                return text
+
+        cleaned = "\n".join(part.strip() for part in parts if part.strip())
+        return cleaned if cleaned.strip() else text
+
     def _scrub_meta_sentences(self, text: str, event: AstrMessageEvent) -> str:
         """按句丢弃 meta 口癖；代码块原样保留，避免误伤用户要的代码/数据。"""
         kw = self.META_KW_GROUP if event.get_group_id() else self.META_KW
@@ -889,6 +951,10 @@ class FaceConvertPlugin(Star):
                 return
             cleaned = text
             # 第〇道：格式壳拆包（被注入带偏时，她会把回复套进程序结构里出壳）
+            unwrapped = self._unwrap_message_shell(cleaned)
+            if unwrapped != cleaned:
+                cleaned = unwrapped
+                logger.info("[face_convert] 已拆消息数组壳")
             if ("'type'" in cleaned and "'text'" in cleaned) or (
                 '"type"' in cleaned and '"text"' in cleaned
             ):
@@ -940,6 +1006,17 @@ class FaceConvertPlugin(Star):
         result = event.get_result()
         if result is None or not result.is_llm_result():
             return
+
+        # 结果关口再防一次消息数组壳：工具循环/流式的最终回复可能绕过
+        # on_llm_response，只在全是 Plain 时整链还原，避免误碰图片/引用段。
+        if result.chain and all(isinstance(c, Plain) for c in result.chain):
+            joined = "".join(c.text or "" for c in result.chain)
+            unwrapped = self._unwrap_message_shell(joined)
+            if unwrapped != joined:
+                result.chain = [Plain(p) for p in unwrapped.split("\n") if p.strip()]
+                logger.info("[face_convert] 已拆消息数组壳（结果关口）")
+                if not result.chain:
+                    return
 
         # 思维链防漏：EmotionAI 的 <thought> 块偶尔会漏进消息（甚至被 TTS 念出来）。
         # 在"出门关口"再查一遍，不影响 EmotionAI 自己的情绪提取。
