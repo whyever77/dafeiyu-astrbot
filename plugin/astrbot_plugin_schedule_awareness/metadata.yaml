@@ -1,7 +1,7 @@
 name: astrbot_plugin_schedule_awareness
 display_name: 大肥鱼的日程觉醒
 desc: 把当前会话名下的定时任务实时注入系统提示词，让她知道自己的日程
-version: v1.0.0
+version: v1.0.1
 author: dafeiyu-tools
 support_platforms:
   - aiocqhttp
