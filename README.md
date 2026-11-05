@@ -18,7 +18,13 @@
 
 [近况回顾与自我表达 v0.1](deploy/bili_activity/SELF_EXPRESSION_V01.md)（本地、默认关闭）：结合当前目标、有来源的兴趣变化、完成记录和已知中断原因，为相关话题提供自然表达的依据；保留现有人格与情绪上下文。`df_self_reflect` 只读查看，不生成情绪分数或新经历，不进入公开回复监听。518项离线回归通过（11 skip），真实模型/QQ表达尚未验证。
 
-[跨日自主项目 v0.1](deploy/bili_activity/PROJECTS_V01.md)（本地、默认关闭）：将已有目标和作品组织成有限项目，完成阶段后默认隔24小时回看，留下收获、局限与可选的新问题；下一阶段等原调度器再选择。默认最多两个项目、每个三阶段，保留作品版本、来源与中断恢复。`df_project` 管理，`df_life_status` 查看索引；网页作品集尚未接入。551项离线回归通过（11 skip），真实长期运行未验证。
+[跨日自主项目 v0.1](deploy/bili_activity/PROJECTS_V01.md)（本地、默认关闭）：将已有目标和作品组织成有限项目，完成阶段后默认隔24小时回看，留下收获、局限与可选的新问题；下一阶段等原调度器再选择。默认最多两个项目、每个三阶段，保留作品版本、来源与中断恢复。`df_project` 管理，`df_life_status` 查看索引；[房间项目书架](deploy/memory_observatory/PROJECT_SHELF_V01.md)现已增加只读展示。书架阶段Windows/WSL各98项、浏览器27项通过；真实项目联动与长期运行未验证。
+
+[跨日生活联查](deploy/bili_activity/LIFE_JOURNEY_V01.md)：模拟三日期串联研究、作品、重开账本、隔日回看、下一阶段、房间项目册与记忆队列；修复最终回看保存后整轮误报失败，保留停止边界。Windows生活模块558项通过（11 skip），房间/记忆Windows与WSL各98项通过；真实模型主动延续、LivingMemory远端召回和QQ仍待隔离会话验收。
+
+[生活观察报告](deploy/bili_activity/LIFE_OBSERVATION_V01.md)：从显式指定的隔离目录只读汇总一个项目的跨日记录、阶段作品、回看和作品记忆队列，支持Markdown/JSON，不启动活动、不写状态；[模拟示例](deploy/bili_activity/examples/life-observation.demo.md)可预览。新增16项，Windows B站模块574项通过（11 skip），WSL报告16项通过；真实生活与远端召回仍待现场验证。
+
+[本机隔离试运行](deploy/bili_activity/PILOT_V01.md)：经主人授权，已在 WSL Ubuntu 中安装 Docker 并启动独立 AstrBot 4.29.0；本机面板 `http://127.0.0.1:16185`、插件加载、依赖及启停核对通过。[测试模型与LivingMemory](deploy/bili_activity/PILOT_MEMORY_V01.md)已预填并安装，缺少密钥、记忆引擎尚未就绪。`.life-pilot/v01/` 被Git忽略，数据独立、活动全关、QQ未启动；真实生活联动未验证。
 
 [她的小小房间 v0.2](deploy/memory_observatory/ROOM_V02.md) 使用已确认的大肥鱼鲸鱼娘女仆形象：总览待机、平滑走向书桌写字、书架阅读、窗边看景、休息角睡觉，窗景随上海时间变化。房间与星海统一浅蓝奶白风格；记忆按形状/类型分区、关联高亮、遗忘动画连续变化。真实 LivingMemory 与活动账本只读联调通过；角色表演与实际记录分开，不改变生活或记忆策略。
 

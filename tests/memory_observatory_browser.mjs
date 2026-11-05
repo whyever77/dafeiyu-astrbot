@@ -229,6 +229,154 @@ try {
     await click('[data-zone="desk"]');assert.equal(await evaluate('document.querySelectorAll("[data-zone][aria-pressed=true]").length'),1);
     assert.equal(await evaluate('document.querySelector("#room-character").dataset.action'),'desk');
   });
+  await check('project shelf opens books and stages without changing source records',async()=>{
+    const before=await evaluate('fetch("/api/room").then(r=>r.json())');
+    await click('[data-zone="shelf"]');
+    assert.equal(await evaluate('document.querySelector("#project-library").hidden'),false);
+    await waitText('#project-library','收集海里的光');
+    assert.equal(await evaluate('document.querySelectorAll(".project-book").length'),2);
+    await click('.project-stage summary');
+    await waitText('.review-leaf','还缺少独立资料和反例');
+    assert.equal(await evaluate('document.querySelector(".work-leaf").textContent.includes("第 2 版")'),true);
+    assert.equal(await evaluate('document.querySelector("#project-source-note").textContent.includes("虚构演示")'),true);
+    await screenshot('room-projects-desktop.png',true);
+    await evaluate('document.querySelector("[data-project=demo-project-rain]").focus()');
+    await click('[data-project="demo-project-rain"]');
+    await waitText('#project-reading','这个项目已经收尾');
+    assert.equal(await evaluate('document.activeElement.dataset.project'),'demo-project-rain');
+    await evaluate('document.querySelector(".project-stage summary").focus()');
+    await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13});
+    await cdp('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+    assert.equal(await evaluate('document.querySelector(".project-stage").open'),false,'Enter must collapse the stage');
+    await click('[data-zone="desk"]');assert.equal(await evaluate('document.querySelector("#project-library").hidden'),true);
+    await click('[data-zone="shelf"]');
+    assert.equal(await evaluate('document.querySelector(".project-book[aria-pressed=true]").dataset.project'),'demo-project-rain');
+    assert.equal(await evaluate('document.querySelector(".project-stage").open'),false,'Changing room zones must preserve the closed stage');
+    assert.deepEqual(await evaluate('fetch("/api/room").then(r=>r.json())'),before);
+  });
+  await check('project refresh keeps the selected book and expansion; legacy and unsupported are explicit',async()=>{
+    const original=await evaluate('fetch("/api/room").then(r=>r.json())');
+    let data={...original,mode:'activity',connection:'ready'},refreshes=0;
+    await cdp('Fetch.enable',{patterns:[{urlPattern:'*/api/room*',requestStage:'Request'}]});
+    const handler=async event=>{const msg=JSON.parse(event.data);if(msg.method==='Fetch.requestPaused'){if(msg.params.request.url.endsWith('/refresh'))refreshes++;await cdp('Fetch.fulfillRequest',{requestId:msg.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'application/json'}],body:Buffer.from(JSON.stringify(data)).toString('base64')});}};
+    socket.addEventListener('message',handler);
+    try{
+      await cdp('Page.reload');await waitText('#room-source','真实活动账本');await click('#room-motion');await click('[data-zone="shelf"]');
+      await click('[data-project="demo-project-rain"]');await click('.project-stage summary');await pause(80);
+      const camera=await evaluate('document.querySelector("#room-character").dataset.action');
+      data={...data,projects:{...data.projects,enabled:false}};
+      await click('#room-refresh');await waitText('.project-disabled','目前关闭');
+      assert.equal(refreshes,1);
+      assert.equal(await evaluate('document.querySelector(".project-book[aria-pressed=true]").dataset.project'),'demo-project-rain');
+      assert.equal(await evaluate('document.querySelector(".project-stage").open'),false);
+      assert.equal(await evaluate('document.querySelector("#room-character").dataset.action'),camera);
+      data={...data,projects:{state:'unsupported',items:[],enabled:false,total:0}};
+      await click('#room-refresh');await waitText('#project-books','暂不兼容');
+      assert.equal(await evaluate('document.querySelectorAll(".project-book").length'),0);
+      delete data.projects;await click('#room-refresh');await waitText('#project-books','还没有项目册');
+      assert.equal(await evaluate('document.querySelector("#journal-content").textContent.includes("深海来信")'),true);
+    }finally{await cdp('Fetch.disable');socket.removeEventListener('message',handler);await cdp('Page.reload');await waitText('#room-source','虚构演示');await click('#room-motion');}
+  });
+  // Exercise the real room module with synthetic HTTP receipts and a controllable
+  // monotonic clock; no source, model, bot, or real database is contacted.
+  async function withRoomSync(run,initial={}){
+    const original=await(await fetch(base+'/api/room')).json();
+    const state={data:{...original,mode:'activity',connection:'ready',age_seconds:0,...initial},posts:0,fail:false,requests:[]};
+    const injection=await cdp('Page.addScriptToEvaluateOnNewDocument',{source:`
+      const interval=window.setInterval,now=performance.now.bind(performance);window.__roomElapsed=0;
+      performance.now=()=>now()+window.__roomElapsed;
+      window.setInterval=function(fn,ms,...args){if(ms===60000)window.__roomSyncTick=fn;return interval(fn,ms,...args);};
+      Object.defineProperty(document,'hidden',{configurable:true,get:()=>document.visibilityState==='hidden'});
+    `});
+    await cdp('Fetch.enable',{patterns:[{urlPattern:'*/api/*',requestStage:'Request'}]});
+    const handler=async event=>{
+      const msg=JSON.parse(event.data);if(msg.method!=='Fetch.requestPaused')return;
+      const p=msg.params,url=new URL(p.request.url).pathname;state.requests.push([p.request.method,url,p.request.postData]);
+      const refresh=url==='/api/room/refresh',allowed=(url==='/api/room'&&p.request.method==='GET')||(refresh&&p.request.method==='POST'&&p.request.postData==='{}');
+      if(refresh){state.posts++;await pause(160);}
+      const failed=refresh&&state.fail;
+      await cdp('Fetch.fulfillRequest',{requestId:p.requestId,responseCode:!allowed?403:failed?503:200,responseHeaders:[{name:'Content-Type',value:'application/json'}],body:Buffer.from(JSON.stringify(!allowed||failed?{error:'synthetic unavailable'}:state.data)).toString('base64')});
+    };
+    socket.addEventListener('message',handler);
+    const tick=async()=>{await evaluate('window.__roomElapsed+=60001;window.__roomSyncTick();void 0');};
+    const settled=async()=>until(()=>evaluate('document.querySelector("#room-refresh").textContent.includes("同步近况")'),'room refresh settled');
+    try{
+      await evaluate('localStorage.removeItem("observatory-room-auto-sync")');
+      await cdp('Page.reload');await until(()=>evaluate('typeof window.__roomSyncTick === "function"'),'room timer installed');
+      await click('#room-motion');await run(state,tick,settled);
+      assert.ok(state.requests.every(([method,url,body])=>(method==='GET'&&url==='/api/room')||(method==='POST'&&url==='/api/room/refresh'&&body==='{}')),'Only the existing read-only room boundary may be used');
+    }finally{
+      await cdp('Fetch.disable');socket.removeEventListener('message',handler);
+      await cdp('Page.removeScriptToEvaluateOnNewDocument',{identifier:injection.identifier});
+      await evaluate('localStorage.removeItem("observatory-room-auto-sync")');
+      await cdp('Page.reload');await waitText('#room-source','虚构演示');await click('#room-motion');
+    }
+  }
+  await check('room auto sync preserves book, chapter, focus, reading anchor and camera',async()=>{
+    await withRoomSync(async(state,tick,settled)=>{
+      assert.equal(state.posts,0,'Loading the cached view does not read upstream again');
+      await click('[data-zone="shelf"]');await click('.project-book[data-project="demo-project-rain"]');await click('.project-stage summary');
+      const before=await evaluate(`(()=>{const s=document.querySelector('.project-stage summary');s.focus({preventScroll:true});window.scrollTo({top:scrollY+s.getBoundingClientRect().top-130,behavior:'instant'});return {top:s.getBoundingClientRect().top,key:s.parentElement.dataset.stageKey,camera:document.querySelector('#room-camera').getAttribute('transform'),action:document.querySelector('#room-character').dataset.action};})()`);
+      state.data.projects.enabled=false;await tick();await settled();await waitText('.project-disabled','目前关闭');
+      const after=await evaluate(`({top:document.querySelector('.project-stage summary').getBoundingClientRect().top,key:document.activeElement.parentElement.dataset.stageKey,camera:document.querySelector('#room-camera').getAttribute('transform'),action:document.querySelector('#room-character').dataset.action,book:document.querySelector('.project-book[aria-pressed=true]').dataset.project,open:document.querySelector('.project-stage').open})`);
+      assert.ok(Math.abs(after.top-before.top)<2,'The visible chapter must stay at its reading offset');
+      assert.equal(after.key,before.key);assert.equal(after.camera,before.camera);assert.equal(after.action,before.action);
+      assert.equal(after.book,'demo-project-rain');assert.equal(after.open,false);
+      // Same content with a new receipt keeps actual DOM and native selection.
+      await evaluate(`window.__roomStage=document.querySelector('.project-stage');const range=document.createRange();range.selectNodeContents(document.querySelector('.project-intro h3'));getSelection().removeAllRanges();getSelection().addRange(range);window.__roomSelectedText=getSelection().toString();`);
+      state.data.as_of+=60;await tick();await settled();
+      assert.equal(await evaluate('window.__roomStage === document.querySelector(".project-stage") && getSelection().toString() === window.__roomSelectedText'),true);
+      // The user can navigate while a receipt is in flight; its old zone cannot win.
+      await tick();await click('[data-zone="window"]');await settled();
+      assert.equal(await evaluate('document.querySelector("button[data-zone=window]").getAttribute("aria-pressed")'),'true');
+      assert.equal(await evaluate('document.querySelector("#room-character").dataset.action'),'window');
+      assert.equal(state.posts,3);
+      await screenshot('room-sync-desktop.png',true);
+    });
+  });
+  await check('room auto sync pauses hidden pages, coalesces reads and persists manual mode',async()=>{
+    await withRoomSync(async(state,tick,settled)=>{
+      await evaluate('Object.defineProperty(document,"visibilityState",{configurable:true,get:()=>"hidden"});document.dispatchEvent(new Event("visibilitychange"))');
+      await tick();await pause(200);assert.equal(state.posts,0);await waitText('#room-sync-state','暂停');
+      await evaluate('delete document.visibilityState;document.dispatchEvent(new Event("visibilitychange"));window.__roomSyncTick();document.querySelector("#room-refresh").click();void 0');
+      await settled();assert.equal(state.posts,1,'Return to the page, timer, and manual click share one in-flight read');
+      await evaluate('document.dispatchEvent(new Event("visibilitychange"));window.__roomSyncTick();void 0');await pause(200);assert.equal(state.posts,1,'Rapid tab changes must not start extra reads');
+      await click('#room-auto-sync');await tick();await pause(200);assert.equal(state.posts,1);
+      await cdp('Page.reload');await waitText('#room-sync-state','手动同步');
+      assert.equal(await evaluate('document.querySelector("#room-auto-sync").checked'),false);
+      await tick();await pause(200);assert.equal(state.posts,1);
+      await click('#room-refresh');await settled();assert.equal(state.posts,2,'Manual refresh remains available when auto sync is off');
+      await click('#room-auto-sync');await tick();await settled();assert.equal(state.posts,3);
+      await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+      assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
+      await screenshot('room-sync-mobile.png',true);
+      await cdp('Emulation.setDeviceMetricsOverride',{width:1600,height:1150,deviceScaleFactor:1,mobile:false});
+    });
+  });
+  await check('room sync failure keeps old records and receipts, then recovers without fiction',async()=>{
+    await withRoomSync(async(state,tick,settled)=>{
+      await click('[data-zone="shelf"]');await click('.project-book[data-project="demo-project-rain"]');
+      const before=await evaluate('({title:document.querySelector(".project-intro h3").textContent,stamp:document.querySelector("#room-synced").textContent})');
+      state.fail=true;await tick();await settled();await waitText('#room-source','旧快照');await waitText('#project-source-note','只供回看');
+      assert.deepEqual(await evaluate('({title:document.querySelector(".project-intro h3").textContent,stamp:document.querySelector("#room-synced").textContent})'),before);
+      assert.equal(await evaluate('document.querySelector("#room-toast").hidden'),true,'Automatic failures must not repeatedly toast over the reader');
+      state.fail=false;state.data.projects.items.find(p=>p.id==='demo-project-rain').title='雨声笔记 · 新的摘页';await tick();await settled();
+      await waitText('#room-source','真实活动');await waitText('.project-intro h3','新的摘页');
+      // A configured but initially unavailable source may recover automatically.
+      const ready=state.data;state.data={...ready,mode:'unavailable',connection:'unavailable'};
+      await cdp('Page.reload');await waitText('#room-source','未就绪');
+      state.data=ready;await tick();await settled();await waitText('#room-source','真实活动');
+    });
+  });
+  await check('demo and unconfigured rooms never poll a source',async()=>{
+    for(const initial of [{mode:'demo',connection:'demo'},{mode:'unavailable',connection:'unconfigured'}]){
+      await withRoomSync(async(state,tick)=>{
+        assert.equal(await evaluate('document.querySelector("#room-auto-sync").disabled'),true);
+        await tick();await evaluate('document.dispatchEvent(new Event("visibilitychange"));document.querySelector("#room-refresh").click();void 0');
+        await pause(200);assert.equal(state.posts,0);
+      },initial);
+    }
+  });
   await check('room shows rhythm as a dated decision without starting activity',async()=>{
     const before=await evaluate('fetch("/api/room").then(r=>r.json())');
     await click('[data-zone="overview"]');
@@ -300,12 +448,19 @@ try {
   await check('room keeps malicious record text literal and marks stale data',async()=>{
     const original=await evaluate('fetch("/api/room").then(r=>r.json())');
     const hostile={...original,mode:'activity',connection:'stale',goals:[],decisions:[{...original.decisions[0],reason:'<img src=x onerror="window.ROOM_INJECTED=1">'}]};
+    hostile.projects.items[0].title='<img src=x onerror="window.ROOM_INJECTED=1">';
+    hostile.projects.items[0].stages[0].review.reflection='<svg onload="window.ROOM_INJECTED=1">';
+    hostile.projects.items[0].stages[0].review_state='needs_recheck';
     await cdp('Fetch.enable',{patterns:[{urlPattern:'*/api/room',requestStage:'Request'}]});
     const handler=async event=>{const msg=JSON.parse(event.data);if(msg.method==='Fetch.requestPaused')await cdp('Fetch.fulfillRequest',{requestId:msg.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'application/json'}],body:Buffer.from(JSON.stringify(hostile)).toString('base64')});};
     socket.addEventListener('message',handler);
     await cdp('Page.reload');await waitText('#room-source','旧快照');
     assert.equal(await evaluate('document.querySelector("#journal-content").textContent.includes("<img")'),true);
     assert.equal(await evaluate('window.ROOM_INJECTED || document.querySelectorAll("#journal-content img").length || 0'),0);
+    await click('[data-zone="shelf"]');await click('.project-stage summary');
+    await waitText('#project-source-note','旧快照');await waitText('#project-reading','需重新核对');
+    assert.equal(await evaluate('document.querySelector(".review-leaf").textContent.includes("<svg")'),true);
+    assert.equal(await evaluate('window.ROOM_INJECTED || document.querySelectorAll("#project-library img,#project-library svg").length || 0'),0);
     await cdp('Fetch.disable');socket.removeEventListener('message',handler);
     await cdp('Page.reload');await waitText('#room-source','虚构演示');
   });
@@ -316,6 +471,9 @@ try {
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".clouds")).animationName'),'none');
     assert.equal(await evaluate('document.querySelector("#room-character").dataset.frame'),'0');
     await click('[data-zone="shelf"]');await waitText('#journal-content','深海来信');
+    await click('.project-stage summary');
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".project-book")).transitionDuration'),'0s');
     await screenshot('room-mobile.png',true);
   });
   await check('60-second LivingMemory sync preserves view and scope, skips hidden and disabled pages',async()=>{

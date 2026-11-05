@@ -23,6 +23,7 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/style.css": ("style.css", "text/css; charset=utf-8")}
 ASSETS.update({"/room": ("room.html", "text/html; charset=utf-8"),
                "/room.js": ("room.js", "text/javascript; charset=utf-8"),
+               "/room-projects.js": ("room-projects.js", "text/javascript; charset=utf-8"),
                "/room-scene.js": ("room-scene.js", "text/javascript; charset=utf-8"),
                "/cozy.css": ("cozy.css", "text/css; charset=utf-8"),
                "/character-credits": ("character/credits.txt", "text/plain; charset=utf-8"),

@@ -11,7 +11,7 @@ import sqlite3
 import time
 
 DEFAULT_DIR = "/opt/dafeiyu/astrbot/data/plugin_data/astrbot_plugin_bili_activity"
-ACTIONS = {"research", "writing", "explore", "rest"}
+ACTIONS = {"research", "writing", "explore", "rest", "project_review"}
 
 
 class ActivityError(ValueError):
@@ -45,6 +45,100 @@ def rhythm_summary(value, at):
     return {"phase": value["phase"], "at": stamp, "reason": clean(value.get("reason")),
             **{key: number(value.get(key)) for key in
                ("recent_activity_minutes", "window_minutes", "limit_minutes", "next_eligible_at")}}
+
+
+def source_ids(raw):
+    try:
+        values = json.loads(raw)
+        if (isinstance(values, list) and len(values) <= 20 and
+                all(isinstance(v, str) and re.fullmatch(r"[0-9a-f]{32}", v) for v in values)
+                and len(set(values)) == len(values)):
+            return values
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def project_shelf(db, tables, scope, cfg):
+    """Small display projection only. No plugin imports or Workshop.check writes.
+
+    Availability means same-scope source rows still exist and are not superseded;
+    it does not re-run content checks or establish factual correctness.
+    """
+    result = {"state": "legacy", "enabled": all(cfg.get(k) is True for k in
+        ("life_projects_enabled", "life_enabled", "workshop_enabled", "life_decision_enabled")),
+        "items": [], "total": 0, "truncated": False}
+    required = {"project_meta", "life_projects", "project_stages", "project_reviews"}
+    if not tables & required:
+        return result
+    if not required <= tables:
+        return result | {"state": "unsupported"}
+    try:
+        version = db.execute("SELECT value FROM project_meta WHERE key='version'").fetchone()
+        if not version or version[0] != "1":
+            return result | {"state": "unsupported"}
+        result["total"] = db.execute("SELECT count(*) FROM life_projects WHERE scope=?", (scope,)).fetchone()[0]
+        result["truncated"] = result["total"] > 4
+        creative = {"creative_meta", "creative_works", "creative_revisions"} <= tables
+        if creative:
+            meta = db.execute("SELECT value FROM creative_meta WHERE key='version'").fetchone()
+            creative = bool(meta and meta[0] == "1")
+        for raw in db.execute("SELECT id,substr(title,1,100) title,substr(why,1,240) why,status,max_stages,updated "
+                "FROM life_projects WHERE scope=? ORDER BY CASE WHEN status IN ('active','paused') THEN 0 ELSE 1 END,updated DESC,id LIMIT 4", (scope,)):
+            p = {"id": clean(raw["id"], 100), "title": clean(raw["title"], 100), "why": clean(raw["why"]),
+                 "status": clean(raw["status"], 30), "max_stages": number(raw["max_stages"]),
+                 "updated": number(raw["updated"]), "stages": []}
+            for row in db.execute("SELECT s.position,s.goal_id,substr(s.title,1,100) title,"
+                    "g.id existing_goal,g.status,substr(g.next_step,1,180) next_step,g.updated_at "
+                    "FROM project_stages s LEFT JOIN goals g ON g.id=s.goal_id AND g.scope=s.scope "
+                    "WHERE s.scope=? AND s.project_id=? ORDER BY s.position LIMIT 6", (scope, raw["id"])):
+                stage = {"position": number(row["position"]), "title": clean(row["title"], 100),
+                    "goal_status": clean(row["status"], 30) if row["existing_goal"] else "pending_creation" if row["goal_id"] is None else "unavailable",
+                    "next_step": clean(row["next_step"], 180), "updated": number(row["updated_at"]),
+                    "work": None, "review": None, "review_state": "none"}
+                p["stages"].append(stage)
+                if not creative or not row["existing_goal"]:
+                    continue
+                work = db.execute("SELECT w.id,substr(w.title,1,100) title,w.revision,r.body_hash,"
+                    "substr(r.body,1,601) excerpt,substr(r.source_ids_json,1,2048) sources "
+                    "FROM creative_works w LEFT JOIN creative_revisions r ON r.work_id=w.id AND r.scope=w.scope AND r.revision=w.revision "
+                    "WHERE w.scope=? AND w.goal_id=? LIMIT 1", (scope, row["existing_goal"])).fetchone()
+                if not work:
+                    continue
+                ids = source_ids(work["sources"])
+                available = bool(ids) and "episodes" in tables
+                if available:
+                    for eid in ids:
+                        if not db.execute("SELECT 1 FROM episodes e WHERE e.id=? AND e.scope=? "
+                                "AND e.kind IN ('read','video','video_note') AND NOT EXISTS "
+                                "(SELECT 1 FROM episodes n WHERE n.supersedes_id=e.id)", (eid, scope)).fetchone():
+                            available = False
+                            break
+                stage["work"] = {"title": clean(work["title"], 100), "revision": number(work["revision"]),
+                    "excerpt": clean(work["excerpt"], 600), "excerpt_truncated": len(work["excerpt"] or "") > 600,
+                    "source_count": len(ids) if ids is not None else None, "sources_available": available}
+                review = db.execute("SELECT work_id,revision,body_hash,substr(sources_json,1,2048) sources,"
+                    "substr(reflection,1,361) reflection,substr(limitations,1,241) limitations,"
+                    "substr(next_question,1,160) next_question,created FROM project_reviews "
+                    "WHERE scope=? AND project_id=? AND position=?", (scope, raw["id"], row["position"])).fetchone()
+                if not review:
+                    continue
+                # A broken cross-work link cannot expose that work's review text.
+                if review["work_id"] != work["id"]:
+                    stage["review_state"] = "unavailable"
+                    continue
+                matches = (ids is not None and source_ids(review["sources"]) == ids and
+                    review["revision"] == work["revision"] and review["body_hash"] == work["body_hash"] and bool(work["body_hash"]))
+                stage["review_state"] = "recorded" if matches and available else "needs_recheck"
+                stage["review"] = {"revision": number(review["revision"]),
+                    "reflection": clean(review["reflection"], 360), "limitations": clean(review["limitations"], 240),
+                    "next_question": clean(review["next_question"], 160), "created": number(review["created"]),
+                    "truncated": len(review["reflection"] or "") > 360 or len(review["limitations"] or "") > 240}
+            result["items"].append(p)
+        return result | {"state": "ready"}
+    except sqlite3.DatabaseError:
+        # Optional incompatible project tables must not hide the existing room.
+        return result | {"state": "unsupported", "items": [], "total": 0, "truncated": False}
 
 
 def read_activity(folder, *, now=None):
@@ -132,11 +226,11 @@ def read_activity(folder, *, now=None):
                     state = "planned"
                 else:
                     state = "interrupted"
-                zone = {"research": "desk", "writing": "desk", "explore": "window", "rest": "rest"}[latest["action"]]
+                zone = {"research": "desk", "writing": "desk", "explore": "window", "rest": "rest", "project_review": "shelf"}[latest["action"]]
             return {"schema": "dafeiyu-room/v1", "mode": "activity", "connection": "ready", "as_of": at,
                 "scope_label": "已配置的主人私聊 · 活动账本", "state": state, "zone": zone,
                 "flags": flags, "paused": paused, "goals": goals, "decisions": decisions, "works": works,
-                "pending": pending, "contacts": contacts,
+                "pending": pending, "contacts": contacts, "projects": project_shelf(db, tables, scope, cfg),
                 "notice": "选择记录是意图，运行结束不等于目标完成。房间是记录的可视化，不是实时在线证明；不推断人格或关联其他记忆会话。"}
         finally:
             db.close()

@@ -214,7 +214,7 @@ class RoomHTTPTests(unittest.TestCase):
 
     def test_assets_and_cached_views_do_not_refresh_or_change_memory(self):
         before=self.request("/api/snapshot")[2]
-        for path in ("/room","/room.js","/room.css","/room-scene.js","/cozy.css",
+        for path in ("/room","/room.js","/room.css","/room-scene.js","/room-projects.js","/cozy.css",
                      "/character-credits","/character-license","/api/room"):
             status,headers,body=self.request(path)
             self.assertEqual(status,200)
@@ -239,6 +239,7 @@ class RoomHTTPTests(unittest.TestCase):
         stale=json.loads(self.request("/api/room")[2])
         self.assertEqual(stale["connection"],"stale")
         self.assertEqual(stale["goals"],self.data["goals"])
+        self.assertEqual(stale["projects"],self.data["projects"])
         self.source.load.side_effect=None
         self.assertEqual(json.loads(self.request("/api/room/refresh",{})[2])["connection"],"ready")
 

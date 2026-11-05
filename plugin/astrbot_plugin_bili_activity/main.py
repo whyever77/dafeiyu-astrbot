@@ -46,6 +46,10 @@ from .replies import (DEFAULTS as REPLY_DEFAULTS, ReplyWatch,
                       validate_config as validate_replies)
 
 
+class ProjectReviewFinished(PermissionError):
+    """This run saved the terminal review; stop further calls without failure."""
+
+
 DEFAULTS = {
     **INTERACTION_DEFAULTS,
     **REPLY_DEFAULTS,
@@ -831,8 +835,12 @@ class BiliActivity(Star):
                 project = Projects(self.store)._project(event.unified_msg_origin, review["project_id"])
             except (ValueError, RuntimeError):
                 raise PermissionError("项目回看已关闭、暂停或不可用") from None
-            if not projects_enabled(cfg) or project.get("status") in {"paused", "archived", "completed"}:
+            if not projects_enabled(cfg) or project.get("status") in {"paused", "archived"}:
                 raise PermissionError("项目回看已关闭或暂停")
+            if project.get("status") == "completed":
+                if review.get("closed_here") is True:
+                    raise ProjectReviewFinished("本轮已保存最终回看，停止后续调用")
+                raise PermissionError("项目回看已结束")
         if self.is_life_run(event):
             goal = self.active_goal(event)
             gate = Projects(self.store).goal_gate(event.unified_msg_origin, goal["id"], cfg) if goal else None
@@ -1339,6 +1347,10 @@ class BiliActivity(Star):
                     summary = await self.agent(event, prompt, tool_names,
                                                max_steps=min(32, cfg["max_model_calls_per_run"]) if life_mode else 32)
                     status = "completed"
+        except ProjectReviewFinished:
+            status, summary = "completed", "项目回看已保存，项目已收尾；本轮结束。"
+            self.store.event(scope, "project_review_run_finished", {"run_id": run_id,
+                "project_id": reviewing["project_id"], "stage": reviewing["project_stage"]})
         except asyncio.CancelledError:
             status, summary = "cancelled", "活动已停止；已取得内容保留。"
             raise
@@ -2043,6 +2055,11 @@ class BiliActivity(Star):
             result = projects.create(scope, goal_id, title, why, cfg)
         elif action == "review":
             result = projects.review(scope, project_id, stage, reflection, limitations, next_question, cfg)
+            if selected and result["status"] == "completed":
+                # Only a successful review saved by this exact run may end it
+                # normally. Existing/externally completed projects stay blocked.
+                selected["closed_here"] = True
+                result["round_complete"] = True
         elif action == "advance":
             result = projects.advance(scope, project_id, stage, cfg)
         else:
