@@ -1786,7 +1786,7 @@ class BiliActivity(Star):
                     if cfg["phone_free_explore_enabled"] and not writing and not reviewing:
                         tool_names = tool_names | PHONE_EXPLORE_TOOLS
                         prompt += ("\n已开启虚拟手机自由操作（严格限定B站与抖音）：可用 df_phone_observe 观察当前界面/截图/音频，"
-                                   "用 df_phone_act 做允许范围内的打开应用(launch_app)、退出当前应用回桌面(close_app/go_home)、点击/滑动/输入/返回；绝不可触碰支付、密码、系统设置。")
+                                   "用 df_phone_act 做允许范围内的打开应用(launch_app)、退回桌面(go_home)、点击/滑动/输入/返回；绝不可触碰支付、密码、系统设置。")
                     if cfg["douyin_enabled"] and not writing and not reviewing:
                         tool_names = tool_names | DOUYIN_TOOLS
                         prompt += ("\n已开启抖音探索与创作：可用 df_douyin_feed 刷推荐/关注/搜索视频（含画面与声音理解），"
@@ -1902,14 +1902,14 @@ class BiliActivity(Star):
             "【自身虚拟手机与应用能力认知】你连接的同一台虚拟手机同时装有 B站（tv.danmaku.bili）与抖音（com.ss.android.ugc.aweme）。"
             "你的手机查看与控制工具（get_current_app、get_screenshot/df_screen、get_ui_elements、listen_audio、tap、swipe、launch_app、go_back、go_home）"
             "对 B站、抖音和手机桌面同样生效，你可以直接看清并操作抖音界面，绝不要误以为自己只能看B站、看不到或碰不到抖音。"
-            "当主人让你关掉/退出抖音或B站、或询问“关了吗”时，先用 get_current_app（或 df_phone_observe）查看当前前台包名；"
-            "若仍在抖音（com.ss.android.ugc.aweme）或B站（tv.danmaku.bili）中，直接调用 go_home（或 df_phone_act 的 close_app/go_home）退回手机桌面停止播放，"
-            "再用 get_current_app 核实已离开该应用后如实回复，不要说“没有点抖音关闭的工具”。"
+            "当主人让你退出抖音或B站回桌面、或询问当前是否还在应用界面时，先用 get_current_app（或 df_phone_observe）查看当前前台包名；"
+            "若仍在抖音（com.ss.android.ugc.aweme）或B站（tv.danmaku.bili）中，可调用 go_home（或 df_phone_act(action='go_home')）退回手机桌面，"
+            "再用 get_current_app 核实已离开该前台应用后如实说明“已退回手机桌面”，不要过度声称“已强制关闭进程/已停止播放”。"
         ]
         if cfg.get("phone_free_explore_enabled"):
             parts.append(
                 "已开启手机自由操作：可用 df_phone_observe 查看当前前台应用/控件/截图/音频，"
-                "用 df_phone_act 执行 launch_app（打开B站/抖音）、close_app/go_home（退出当前应用回桌面）、tap/tap_element/swipe/type_text/go_back。"
+                "用 df_phone_act 执行 launch_app（打开B站/抖音）、go_home（退回手机桌面）、tap/tap_element/swipe/type_text/go_back。"
             )
         if cfg.get("douyin_enabled"):
             parts.append(
@@ -3092,8 +3092,8 @@ class BiliActivity(Star):
         """在允许的应用（严格限定B站与抖音）内执行安全的虚拟手机操作；遇支付/密码/系统设置自动拦截。
 
         Args:
-            action(string): launch_app/close_app/exit_app/tap/tap_element/swipe/type_text/press_key/go_back/go_home/wait（关掉/退出抖音或B站回桌面用 go_home 或 close_app）。
-            arguments(string): JSON对象；launch_app传app(bilibili/douyin)，close_app/go_home无需参数即可退出当前应用回桌面，tap传x,y，tap_element传text或resource_id，swipe传direction(up/down/left/right)，type_text传text,submit。
+            action(string): launch_app/tap/tap_element/swipe/type_text/press_key/go_back/go_home/wait（退回手机桌面用 go_home）。
+            arguments(string): JSON对象；launch_app传app(bilibili/douyin)，go_home无需参数即可退回手机桌面，tap传x,y，tap_element传text或resource_id，swipe传direction(up/down/left/right)，type_text传text,submit。
         """
         cfg = self.check_owner(event)
         if not cfg["phone_free_explore_enabled"]:

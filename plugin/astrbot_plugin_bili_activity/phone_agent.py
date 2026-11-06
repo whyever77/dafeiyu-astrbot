@@ -73,8 +73,6 @@ APP_ALIASES = {
 
 ALLOWED_ACTIONS = frozenset({
     "launch_app",
-    "close_app",
-    "exit_app",
     "tap",
     "tap_element",
     "swipe",
@@ -359,11 +357,9 @@ class PhoneAgent:
             self.store.event(scope, "phone_action", {"run_id": run_id, **detail})
             return {"ok": True, **detail}
 
-        if action in {"go_home", "close_app", "exit_app"}:
+        if action == "go_home":
             res = await self._call("go_home", {}, owner=owner)
-            detail = {"action": action, "result": _extract_mcp_text(res)[:200]}
-            self.store.event(scope, "phone_action", {"run_id": run_id, **detail})
-            return {"ok": True, **detail}
+            return {"ok": True, "action": "go_home", "result": _extract_mcp_text(res)[:200]}
 
         if action == "go_back":
             await self.enforce_package_guard(allowed, owner=owner, allow_launcher=True)
