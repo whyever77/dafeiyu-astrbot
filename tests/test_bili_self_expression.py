@@ -361,6 +361,73 @@ class ExpressionTests(unittest.TestCase):
         for internal in (work["body_hash"], work["id"], check["id"], source["id"], "episode_scan_limit", "checked_work_record"):
             self.assertNotIn(internal, memo)
 
+    def test_held_thoughts_expose_blocked_shares_and_clear_when_delivered_or_invalid(self):
+        source, work, _ = self.checked_work()
+        goal = self.store.life.goals(SCOPE, include_terminal=True)[0]
+        now = 1800000000
+        # Foreign scope and untrusted reasons are ignored.
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)", (
+            now - 120, OTHER, "share_held", core.canonical({
+                "kind": "thought", "delivery_id": "t-other", "fingerprint": "fp-other",
+                "excerpt": "外部会话念头", "reason": "现在是免打扰时间"})))
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)", (
+            now - 110, SCOPE, "share_held", core.canonical({
+                "kind": "thought", "delivery_id": "t-bad", "fingerprint": "fp-bad",
+                "excerpt": "不应出现", "reason": "RAW SECRET: 非白名单拒绝"})))
+        self.assertEqual(self.snapshot()["held_thoughts"], [])
+
+        # Valid held thought and held work excerpt are surfaced read-only.
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)", (
+            now - 90, SCOPE, "share_held", core.canonical({
+                "kind": "thought", "delivery_id": "thought:r1:fp1", "fingerprint": "fp1",
+                "excerpt": "看到一段双人机关配合特别巧妙", "reason": "主人刚在聊天，先留出空闲",
+                "goal_id": goal["id"]})))
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)", (
+            now - 60, SCOPE, "share_held", core.canonical({
+                "kind": "work", "delivery_id": f"work:{work['id']}:1", "fingerprint": work["body_hash"],
+                "excerpt": "整理好啦 — 《小笔记》第1版摘录", "reason": "daily_shares exhausted",
+                "goal_id": goal["id"], "work_id": work["id"], "revision": 1})))
+        before = list(self.store.db.iterdump())
+        snap = self.snapshot()
+        self.assertEqual(len(snap["held_thoughts"]), 2)
+        self.assertEqual(snap["held_thoughts"][0]["kind"], "work")
+        self.assertEqual(snap["held_thoughts"][1]["kind"], "thought")
+        self.assertEqual(snap["held_thoughts"][1]["goal_title"], "合作建造")
+        memo = self.view.context(SCOPE, self.cfg)
+        self.assertIn("攒着没发出去的作品摘录（关联目标《合作建造》）", memo)
+        self.assertIn("当时今日主动分享次数已满，留着没发，未发送QQ）：整理好啦 — 《小笔记》第1版摘录", memo)
+        self.assertIn("攒着没发出去的想法（关联目标《合作建造》）", memo)
+        self.assertIn("当时主人刚在聊天，留着没打扰，未发送QQ）：看到一段双人机关配合特别巧妙", memo)
+        self.assertEqual(list(self.store.db.iterdump()), before)
+
+        # Once the thought is delivered, it is no longer held.
+        self.store.delivery(SCOPE, "thought:r2:fp1", "thought", "fp1", {}, True)
+        self.store.delivered("thought:r2:fp1", {"message_id": 201})
+        after_send = self.snapshot()["held_thoughts"]
+        self.assertEqual(len(after_send), 1)
+        self.assertEqual(after_send[0]["kind"], "work")
+
+        # If the work's source is superseded by a failed read, the held work also clears.
+        episode(self.store, goal_id=goal["id"], supersedes_id=source["id"],
+                evidence={"operation": "info", "result_excerpt": '{"ok":false}'})
+        self.assertEqual(self.snapshot()["held_thoughts"], [])
+
+    def test_curiosity_threads_surface_project_followup_and_checked_read_work_questions(self):
+        source, work, _ = self.checked_work()
+        snap = self.snapshot()
+        self.assertEqual(len(snap["curiosity_threads"]), 1)
+        thread = snap["curiosity_threads"][0]
+        self.assertEqual(thread["kind"], "work_open_question")
+        self.assertEqual(thread["question"], "还需要别的来源。")
+        self.assertEqual(thread["reflection"], "先记下想法。")
+        self.assertEqual(thread["source_ids"], [source["id"]])
+        memo = self.view.context(SCOPE, self.cfg)
+        self.assertIn("留着想继续弄清的问题（来自已完成目标《合作建造》作品待核实，有 1 条可用来源）：还需要别的来源。（当时想法：先记下想法。）", memo)
+
+        # If a new goal already uses that question as its title, do not repeat it as a pending thread.
+        self.store.life.create_goal(SCOPE, "还需要别的来源。", "已经立项", "去查资料", "followup-goal")
+        self.assertEqual(self.snapshot()["curiosity_threads"], [])
+
 
 class ExpressionIntegrationTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = life_tests.LifeIntegrationTests.asyncSetUp
@@ -509,6 +576,27 @@ class ExpressionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(observed["prompt"].startswith("原人格和情绪"))
         self.assertIn(expression.MARKER, observed["prompt"])
         self.assertEqual(observed["tools"], [expression.TOOL])
+
+    async def test_blocked_autonomous_share_records_held_thought_for_next_chat(self):
+        self.enable()
+        self.config["daily_shares"] = 0
+        self.save_config()
+        self.plugin.life_runs.add("hold-run")
+        self.plugin.activity_budget().start_run(SCOPE, "hold-run", 600, self.config)
+        event = fixtures.FakeEvent(run_id="hold-run")
+        goal = self.plugin.store.life.create_goal(SCOPE, "合作建造", "想查清限制", "接着核对资料", "hold-goal")
+        self.plugin.store.life.claim_goal(SCOPE, goal["id"], "hold-run")
+        self.plugin.run_goals["hold-run"] = goal["id"]
+        with self.assertRaises(main.BudgetExceeded):
+            await self.plugin.share_thought(event, "刚才看到个很有意思的合作机关想跟你说")
+        self.delivery.send.assert_not_called()
+        snap = json.loads(await self.plugin.self_reflect(fixtures.FakeEvent()))
+        self.assertEqual(len(snap["held_thoughts"]), 1)
+        self.assertEqual(snap["held_thoughts"][0]["excerpt"], "刚才看到个很有意思的合作机关想跟你说")
+        req = self.request()
+        await self.plugin.guard_phone(fixtures.FakeEvent(), req)
+        self.assertIn("攒着没发出去的想法", req.system_prompt)
+        self.assertIn("刚才看到个很有意思的合作机关想跟你说", req.system_prompt)
 
 
 class ExpressionRunTests(unittest.IsolatedAsyncioTestCase):

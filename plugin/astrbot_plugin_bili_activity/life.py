@@ -31,6 +31,30 @@ def _text(value, name, maximum=1000, *, empty=False):
 
 
 CJK = re.compile(r"[㐀-鿿]")
+CHAT_TOPIC_PATTERNS = (
+    re.compile(r"^(?:我)?最近(?:在玩|在看|在查|在研究|对|挺喜欢|迷上了)([^。！？!?\n，,]{2,60}?)(?:感兴趣|挺有意思|很有意思)?[。！!～~]?$"),
+    re.compile(r"^(?:你可以|有空可以|下次可以|推荐你|给你安利)(?:去)?(?:看看|了解下|了解一下|查查|搜搜)([^。！？!?\n，,]{2,60})[。！!～~]?$"),
+    re.compile(r"^你知道([^。！？!?\n，,]{2,60}?)(?:吗|么)[？?]?$"),
+)
+_CHAT_TOPIC_STOPWORDS = (
+    "吗", "么", "如果", "的话", "可以", "暂停", "继续", "恢复",
+    "自主活动", "截图", "画面", "不喜欢", "讨厌", "不要", "别",
+)
+
+
+def extract_chat_topic(text):
+    if not isinstance(text, str):
+        return None
+    cleaned = text.strip()
+    if not cleaned or len(cleaned) > 200:
+        return None
+    for pattern in CHAT_TOPIC_PATTERNS:
+        match = pattern.fullmatch(cleaned)
+        if match:
+            topic = match.group(1).strip()
+            if topic and not any(word in topic for word in _CHAT_TOPIC_STOPWORDS):
+                return topic
+    return None
 
 
 def query_terms(query, maximum=8):
@@ -83,6 +107,26 @@ def observed_read_evidence(proof):
             # is not evidence that an otherwise non-empty read failed.
             parsed = None
     return not (isinstance(parsed, dict) and parsed.get("ok") is False)
+
+
+_WORK_HEADING_RE = re.compile(r"(?m)^##[ \t]+([^\r\n]+)[ \t]*$")
+_WORK_CITATION_RE = re.compile(r"\[E:[0-9a-f]{32}\]")
+
+
+def parse_work_sections(body):
+    if not isinstance(body, str) or not body:
+        return {}
+    headings = list(_WORK_HEADING_RE.finditer(body))
+    sections = {}
+    for index, match in enumerate(headings):
+        title = match.group(1).strip()
+        if title in {"资料观察", "我的想法", "待核实"} and title not in sections:
+            end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
+            raw = _WORK_CITATION_RE.sub("", body[match.end():end]).strip()
+            cleaned = " ".join(line.lstrip("-* \t") for line in raw.splitlines() if line.strip())
+            if cleaned:
+                sections[title] = cleaned[:160]
+    return sections
 
 
 def _validate_ranges(value):
@@ -345,6 +389,39 @@ class LifeState:
                                     subject_kind="user", subject_id=actor_id,
                                     evidence={"message_id": event_id, "actor_id": actor_id, "text": text},
                                     interpretation={"interest": {"topic": topic, "polarity": polarity}})
+
+    def record_chat_topic(self, scope, actor_id, event_id, text):
+        """Record an owner-mentioned chat topic cue in events without creating an episode or agent interest."""
+        actor_id = str(actor_id)
+        if not re.fullmatch(r"[^:]+:FriendMessage:[0-9]+", scope) or scope.rsplit(":", 1)[-1] != actor_id:
+            raise ValueError("chat topic message must belong to the configured private session")
+        if (event_id is None or isinstance(event_id, bool)
+                or not str(event_id).strip() or len(str(event_id)) > 250
+                or not isinstance(text, str) or not text.strip() or len(text) > 2000):
+            return None
+        event_id = str(event_id).strip()
+        topic = extract_chat_topic(text)
+        if not topic:
+            return None
+        for row in self.db.execute(
+            "SELECT details FROM events WHERE scope=? AND kind='owner_chat_topic' ORDER BY seq DESC LIMIT 12",
+            (scope,),
+        ):
+            try:
+                old = json.loads(row["details"])
+            except (ValueError, TypeError):
+                continue
+            if isinstance(old, dict) and (old.get("message_id") == event_id or old.get("topic") == topic):
+                return old
+        details = {
+            "message_id": event_id,
+            "actor_id": actor_id,
+            "topic": topic,
+            "text": text.strip()[:200],
+            "subject_kind": "user",
+        }
+        self.store.event(scope, "owner_chat_topic", details)
+        return details
 
     def episodes(self, scope, query="", goal_id=None, limit=8):
         query = _text(query, "query", 200, empty=True)

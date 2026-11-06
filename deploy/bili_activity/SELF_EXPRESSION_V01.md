@@ -47,7 +47,7 @@
 
 最多展示3条近期中断记录，只陈述可确定的边界：达到时间/预算上限、被取消、重启恢复时记为中断、失败。取消和失败的具体原因不能只凭状态断言；不从运行总结复制原因，不推断主人的态度、责任或机器人的情绪。中断也不等于整个目标失败。
 
-### 2026-11-06 拟人化增量：作息、跨日项目、前台打断衔接与自然中文备忘
+### 2026-11-06 拟人化增量：作息、跨日项目、前台打断衔接、攒着没发的话、聊天线索与好奇心反哺
 
 1. **当前作息与跨日项目并入近况快照（`rhythm` 与 `projects`）**：
    - `rhythm` 只读复用 `rhythm.snapshot`，在开启生活节律时返回当前时段（`morning` / `day` / `wind_down` / `rest_after_activity` / `sleep`）、原因、本地时间与窗口内已活动分钟数，供前台聊天感知当下作息阶段（如睡前仅整理作品、活动后留白休息），不生成生理疲劳或睡梦。
@@ -58,6 +58,15 @@
    - 若最近一次中断属于白名单前台打断、发生在最近15分钟（`900` 秒）内且此后尚无新运行结束，快照额外提供 `recent_preemption`，让她在主人开口时能自然接话“刚才正在看/写什么，因为你找我刚停下”。
 3. **系统提示词改为自然中文备忘（`_format_context`）**：
    - `df_self_reflect` 工具与 `df_life_status.self_expression` 继续返回结构化 JSON；而注入 `req.system_prompt` 的 `SelfExpression.context()` 改为紧凑中文备忘条目，剔除 `body_hash`、`check_episode_id`、`source_episode_id`、`episode_scan_limit` 等内部字段，减少公文汇报腔。
+4. **话到嘴边留着下次聊（`share_held` 与 `held_thoughts`）**：
+   - 后台生活轮次调用 `df_share_thought` 或 `df_workshop(..., action="share")` 被联系时机/留白/每日分享额度门禁拦截时（受控白名单原因 `HELD_SHARE_REASONS`），只记录 `share_held` 事件，不发 QQ 消息。
+   - `SelfExpression.snapshot` 只读暴露最近48小时内最多2条尚未发出的 `held_thoughts`（含摘录、被拦原因及关联作品/目标）；一旦同内容随后成功发出或状态不确定（`deliveries.status in {'sent','uncertain'}`），或关联作品修订/来源失效，自动从 `held_thoughts` 中移除，绝不把“攒着没发”说成“已经发过”。
+5. **聊过的话题纳入闲暇探索候选（`owner_chat_topic` 与 `chat_topics`）**：
+   - 主人私聊除了显式偏好（`record_user_preference`）外，日常提到的在玩/在看/想聊话题（`record_chat_topic`）以只读事件 `owner_chat_topic` 记录在当前会话，不改动 `episodes` 或长期记忆表。
+   - `LifePlanner.choose` 在生成 `explore` 候选时读取主人正向显式偏好与近期聊天话题作为 `chat_topics`（显式标注 `subject_kind="user"`，加4分 `owner_chat_topic_available`），在无自身探索主题时于 `reason` 提供“顺着之前和主人聊过的……看看资料”参考；`decision["topic"]` 与 `own_interest_evidence` 仍严格归属大肥鱼自身观察（`subject_kind="agent"`），绝不把主人提过的话题混作自身既定喜好。
+6. **阶段回看新问题与非视频核实作品反哺好奇心（`curiosity_threads`）**：
+   - 跨日项目已完成阶段回看留下的 `next_question`（`project_followup`，需阶段作品及来源有效）与独立已完成目标中通过结构核实的阅读/视频作品 `## 待核实` 段落（`work_open_question`，需当前头版本及 `read`/`video` 来源有效）共同汇总为 `curiosity_threads`。
+   - `SelfExpression` 在快照与中文备忘中展示最多3条 `curiosity_threads`（“留着想继续弄清的问题”）；当没有未展开的视频兴趣时，`LifePlanner.choose` 的 `explore` 候选可优先顺着这些有来源的待核实问题（`project_followup_question` +6分 / `work_open_question` +5分）开启下一轮探索。
 
 ## 接入和行为边界
 
@@ -106,14 +115,15 @@ git diff --check
 | 最终定向测试 | 33项，1.126秒，OK（0 skip） |
 | 最终全量回归 | 518项，24.893秒，OK（11 skip） |
 | 补公开回复隔离前的一次全量回归 | 517项，30.990秒，OK（11 skip） |
-| 2026-11-06 拟人化增量定向测试（无网只读容器 Python 3.12） | 37项，2.645秒，OK（0 skip） |
-| 2026-11-06 全量 `test_bili_*.py` 回归（无网只读容器 Python 3.12） | 610项，47.227秒，OK（1 skip：Windows junction 宿主专属测试） |
+| 2026-11-06 拟人化增量（1/2/5）定向测试（无网只读容器 Python 3.12） | 37项，2.645秒，OK（0 skip） |
+| 2026-11-06 拟人化增量（3/4/6）定向测试（无网只读容器 Python 3.12） | `test_bili_self_expression.py` 40项 OK，`test_bili_planner.py` 31项 OK（0 skip） |
+| 2026-11-06 全量 `test_bili_*.py` 回归（无网只读容器 Python 3.12） | 615项，42.944秒，OK（1 skip：Windows junction 宿主专属测试） |
 | `git diff --check` | 通过；只有既有 Git 换行转换提示，无空白错误 |
 | 受保护模块、人格、手机启动脚本 diff | 空 |
 
 11个跳过与基线一致：6项缺ffmpeg、1项Windows符号链接权限、4项Linux限定安全导出。全部使用临时库、fake/mock和本地测试服务，没有真实B站/QQ/模型调用。日志保留在本机临时目录 `dafeiyu-self-expression-baseline.log`、`dafeiyu-self-expression-focused.log`、`dafeiyu-self-expression-final.log`。
 
-反例覆盖：单次/重复/分P不构造变化，两期来源与时间边界，矛盾/无近期记录/用户偏好/外会话/未来/修订来源的保守处理；意图不当完成、完成运行不当完成目标、作品头版本与来源失效；错误自述不当中断原因；反复查看全库数据不变；缺省关闭、开关回退、不扩写权限；主人与背景轮次检查、DND/暂停、公开回复隔离；原生 Agent 钩子保留人格/已有情绪并在执行前注入资料。
+反例覆盖：单次/重复/分P不构造变化，两期来源与时间边界，矛盾/无近期记录/用户偏好/外会话/未来/修订来源的保守处理；意图不当完成、完成运行不当完成目标、作品头版本与来源失效；错误自述不当中断原因；攒着没发的话在发出/不确定/来源失效后自动清除；主人聊天线索不覆写自身探索主题；项目回看与作品待核实问题须来源有效才纳入好奇心；反复查看全库数据不变；缺省关闭、开关回退、不扩写权限；主人与背景轮次检查、DND/暂停、公开回复隔离；原生 Agent 钩子保留人格/已有情绪并在执行前注入资料。
 
 ## 尚未验证
 

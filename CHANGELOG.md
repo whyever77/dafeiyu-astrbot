@@ -2,6 +2,13 @@
 
 > 每一次值得说的进化都会记在这里。
 
+## 未发布 · 攒着没发的话、聊天探索线索与好奇心反哺（2026-11-06）
+
+- 后台生活轮次调用 `df_share_thought` 或 `df_workshop(..., action="share")` 被联系时机/留白/每日分享额度门禁拦截时记录 `share_held` 事件；`SelfExpression.snapshot` 只读暴露最近48小时最多2条 `held_thoughts` 并在中文备忘中提示下次私聊自然提起，若随后发出/状态不确定或作品修订/来源失效则自动清除。
+- 主人私聊日常提及的在玩/在看/想聊话题通过 `LifeState.record_chat_topic` 记入 `owner_chat_topic` 事件（不写 `episodes` 或长期记忆）；`LifePlanner.choose` 的 `explore` 候选汇总正向显式偏好与近期聊天话题为 `chat_topics`（`subject_kind="user"`，+4分），保持 `decision["topic"]` 与 `own_interest_evidence` 严格归属自身观察（`subject_kind="agent"`）。
+- 跨日项目已完成阶段回看的 `next_question`（`project_followup`）与独立已完成目标核实作品的 `## 待核实`（`work_open_question`，支持 `read`/`video` 有效来源）汇总为 `curiosity_threads`，同时供 `SelfExpression` 展示与 `LifePlanner.choose` 在无未展开视频兴趣时优先作为探索方向（+6/+5分）。
+- 无网只读容器（`dafeiyu-life-pilot-astrbot`，Python 3.12）定向测试 `test_bili_self_expression.py` 40项 OK、`test_bili_planner.py` 31项 OK，全量 `test_bili_*.py` 615项 OK（1 skip：Windows junction 专属测试）。未修改人格、审批、传输或运行配置，未部署。见 [SELF_EXPRESSION_V01.md](deploy/bili_activity/SELF_EXPRESSION_V01.md)。
+
 ## 未发布 · 近况回顾拟人化衔接与中文备忘（2026-11-06）
 
 - `SelfExpression.snapshot` 只读并入当前作息节律（`rhythm` 时段、原因、已活动分钟数）与跨日项目摘要（`projects` 阶段进度、回看状态、后续问题与到期任务 `review`/`advance`），未初始化项目表时不建表、不写备份。

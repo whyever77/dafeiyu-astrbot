@@ -31,8 +31,8 @@ from .agent_budget import instrument_runner
 from .planner import DEFAULTS as PLANNER_DEFAULTS, LifePlanner, validate_config as validate_planner
 from .memory_policy import (DEFAULTS as MEMORY_DEFAULTS, PREFIX as MEMORY_PREFIX, MemoryPolicy,
                             enabled as memory_enabled, validate_config as validate_memory)
-from .self_expression import (DEFAULTS as EXPRESSION_DEFAULTS, TOOL as EXPRESSION_TOOL, SelfExpression,
-                              enabled as expression_enabled, validate_config as validate_expression)
+from .self_expression import (DEFAULTS as EXPRESSION_DEFAULTS, HELD_SHARE_REASONS, TOOL as EXPRESSION_TOOL,
+                              SelfExpression, enabled as expression_enabled, validate_config as validate_expression)
 from .projects import (DEFAULTS as PROJECT_DEFAULTS, TOOL as PROJECT_TOOL, Projects,
                        PROMPT as PROJECT_PROMPT, REVIEW_PROMPT as PROJECT_REVIEW_PROMPT,
                        enabled as projects_enabled, validate_config as validate_projects)
@@ -922,6 +922,26 @@ class BiliActivity(Star):
             self.activity_budget().share(event.unified_msg_origin, event.get_extra("df_run_id"), kind, cfg,
                                          reservation_key=key)
 
+    def record_held_share(self, event, kind, delivery_id, fingerprint, excerpt, reason, *, work_id=None, revision=None):
+        run_id = event.get_extra("df_run_id")
+        if not run_id or reason not in HELD_SHARE_REASONS or not isinstance(excerpt, str) or not excerpt.strip():
+            return
+        goal = self.active_goal(event)
+        details = {
+            "run_id": run_id,
+            "delivery_id": delivery_id,
+            "kind": kind,
+            "fingerprint": fingerprint,
+            "excerpt": excerpt.strip()[:240],
+            "reason": reason,
+            "goal_id": goal["id"] if goal else None,
+        }
+        if work_id is not None:
+            details["work_id"] = work_id
+        if revision is not None:
+            details["revision"] = revision
+        self.store.event(event.unified_msg_origin, "share_held", details)
+
     def contact_ledger(self):
         if getattr(self, "_contact_store", None) is not self.store:
             self._contacts = ContactLedger(self.store)
@@ -1537,6 +1557,9 @@ class BiliActivity(Star):
                     self.store.queue_memory(event.unified_msg_origin,
                         "[主人在本私聊的明确表达；来源QQ消息 " + str(message_id) + "] " + original,
                         "episode:" + preference["id"])
+                else:
+                    self.store.life.record_chat_topic(event.unified_msg_origin,
+                        str(event.get_sender_id()), str(message_id), original)
         if SCREEN_REQUEST.fullmatch(original):
             event.stop_event()
             try:
@@ -1930,8 +1953,9 @@ class BiliActivity(Star):
         try:
             self.reserve_share(event, "thought", key)
             receipt = await self.contact_send(event, text[:1000], "thought", key)
-        except (BudgetExceeded, PermissionError):
+        except (BudgetExceeded, PermissionError) as exc:
             self.store.db.execute("UPDATE deliveries SET status='blocked' WHERE id=?", (key,))
+            self.record_held_share(event, "thought", key, digest(text), text[:240], str(exc))
             raise
         except BaseException:
             self.store.delivered(key)
@@ -2336,7 +2360,13 @@ class BiliActivity(Star):
         if self.store.db.execute("SELECT 1 FROM deliveries WHERE id=?", (key,)).fetchone():
             return canonical({"status": "duplicate_suppressed", "delivery_id": key})
         # A known refusal before I/O does not poison the version's delivery key.
-        self.reserve_share(event, "thought", key)
+        held_excerpt = ((caption.strip() + " — ") if caption.strip() else "") + f"《{work['title']}》第{work['revision']}版摘录"
+        try:
+            self.reserve_share(event, "thought", key)
+        except (BudgetExceeded, PermissionError) as exc:
+            self.record_held_share(event, "work", key, work["body_hash"], held_excerpt, str(exc),
+                                   work_id=work_id, revision=work["revision"])
+            raise
         if not self.store.delivery(scope, key, "work", work["body_hash"],
                                    {"work_id": work_id, "revision": work["revision"], "run_id": run_id}, True):
             return canonical({"status": "duplicate_suppressed", "delivery_id": key})
@@ -2345,8 +2375,10 @@ class BiliActivity(Star):
         text += work["body"][:1600] + ("\n……（摘录结束）" if len(work["body"]) > 1600 else "")
         try:
             receipt = await self.contact_send(event, text, "work", key)
-        except PermissionError:
+        except PermissionError as exc:
             self.store.db.execute("UPDATE deliveries SET status='blocked' WHERE id=? AND status='sending'", (key,))
+            self.record_held_share(event, "work", key, work["body_hash"], held_excerpt, str(exc),
+                                   work_id=work_id, revision=work["revision"])
             raise
         except BaseException:
             self.store.delivered(key)
