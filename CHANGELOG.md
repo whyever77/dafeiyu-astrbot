@@ -2,6 +2,13 @@
 
 > 每一次值得说的进化都会记在这里。
 
+## v3.0.3 · 工具文本上下文折叠、前台手机单轮限流与抖音笔记兼容（2026-11-06）
+
+- 新增 `trim_tool_text_contexts` 与 `trim_tool_text_history`：保留最近工具结果原文，将较早的 `role="tool"` 结果折叠为短占位符并保留 `tool_call_id` 配对结构，同时清理内联长串图片 base64；在 `ToolLoopAgentRunner._sanitize_contexts_for_provider` 与 `guard_phone`（`on_llm_request`）中同裁截图与工具文本，`handle_api_error` 超限重试先 `strip_image_parts` 再折叠工具结果，且后续重试无变化时委托原生错误处理器避免空转。
+- 前台主人私聊手机工具增加单回合上限：插件与 `ops.py` 新增 `phone_tool_calls_per_turn=40`、`phone_screenshots_per_turn=8`（及 `NUMERIC_LIMITS`），按 `(unified_msg_origin, message_id)` 有界计数，覆盖 `GuardedPhoneTool.call`、`df_phone_observe` 与 `df_phone_act`；后台 `df_run_id` 活动仍走原有运行预算不叠加。
+- `df_activity_note` 兼容抖音视频笔记：`cid` 改为可选，无 `cid` 时按当前私聊已核实的 `kind='douyin_video'` 经历（真实 `video_key` 如 `dy:...` 或 `episode_id`）校验观察证据与位置后保存笔记；严禁把搜索关键词、标题或序号当作 `bvid`，B站视频仍要求 `bvid+cid`。
+- 新增4项回归测试；全量 `test_*.py` 797项 OK（20 skip）。
+
 ## v3.0.2 · 手机坐标边界与等待上限（2026-11-06）
 
 - 修复 `PhoneAgent.act` 把点击边界写成 1440×2560（实际 720×1280）；越界点击直接拒绝并提示真实屏幕尺寸，swipe 坐标同样校验。

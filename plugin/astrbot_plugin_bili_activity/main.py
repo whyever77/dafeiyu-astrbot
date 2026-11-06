@@ -81,6 +81,7 @@ DEFAULTS = {
     "max_videos": 3, "max_minutes": 10, "once_at": None,
     "one_shot_verified": False, "device_id": "emulator-5554",
     "phone_screen_width": 720, "phone_screen_height": 1280,
+    "phone_tool_calls_per_turn": 40, "phone_screenshots_per_turn": 8,
     "life_enabled": False, "daily_minutes": 30, "max_model_calls_per_run": 20,
     "daily_model_calls": 60, "daily_shares": 3, "screenshots_per_run": 1,
     "chat_cooldown_seconds": 300, "workshop_enabled": False, "methods_enabled": False,
@@ -128,6 +129,8 @@ def _valid_timestamp(value):
 
 TOOL_IMAGE_PREFIX = "[Image from tool '"
 TOOL_IMAGE_PLACEHOLDER = "[较早的工具截图已从上下文移除，以控制模型长度]"
+TOOL_TEXT_PLACEHOLDER = "[较早的手机工具结果已折叠以控制上下文长度]"
+INLINE_IMAGE_DATA_RE = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]{200,}")
 
 
 def _message_data(message):
@@ -139,23 +142,78 @@ def _message_data(message):
 
 
 def _is_tool_image_message(message):
-    if not isinstance(message, dict) or message.get("role") != "user":
+    if not isinstance(message, dict):
         return False
+    role = message.get("role")
     content = message.get("content")
     if not isinstance(content, list):
         return False
-    tool_image = False
-    image_url = False
-    for part in content:
-        if not isinstance(part, dict):
-            continue
-        if part.get("type") == "text" and str(part.get("text", "")).startswith(
-            TOOL_IMAGE_PREFIX
-        ):
-            tool_image = True
-        elif part.get("type") == "image_url":
-            image_url = True
-    return tool_image and image_url
+    if role == "user":
+        tool_image = False
+        image_url = False
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" and str(part.get("text", "")).startswith(
+                TOOL_IMAGE_PREFIX
+            ):
+                tool_image = True
+            elif part.get("type") in {"image_url", "image"}:
+                image_url = True
+        return tool_image and image_url
+    if role == "tool":
+        return any(
+            isinstance(part, dict) and part.get("type") in {"image_url", "image"}
+            for part in content
+        )
+    return False
+
+
+def _is_tool_text_message(message):
+    if not isinstance(message, dict):
+        return False
+    if _is_tool_image_message(message):
+        return False
+    if message.get("role") == "tool":
+        return True
+    if message.get("tool_call_id") and message.get("role") not in {"system", "assistant"}:
+        return True
+    return False
+
+
+def _tool_message_text(message):
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                parts.append(str(part.get("text", "")))
+            elif isinstance(part, str):
+                parts.append(part)
+        return "\n".join(parts)
+    if content is None:
+        return ""
+    return str(content)
+
+
+def _is_folded_tool_text(text):
+    return isinstance(text, str) and (
+        text.startswith(TOOL_TEXT_PLACEHOLDER)
+        or text == TOOL_IMAGE_PLACEHOLDER
+    )
+
+
+def _fold_tool_text(text, max_chars=200):
+    text = INLINE_IMAGE_DATA_RE.sub("[图片数据已移除]", str(text or ""))
+    if _is_folded_tool_text(text):
+        return text
+    if max_chars > 0 and len(text) > max_chars:
+        return f"{TOOL_TEXT_PLACEHOLDER} {text[:max_chars]}..."
+    return TOOL_TEXT_PLACEHOLDER
 
 
 def trim_tool_image_contexts(contexts, keep=1):
@@ -182,8 +240,72 @@ def trim_tool_image_contexts(contexts, keep=1):
         trimmed.append(data)
     remove = positions[:-keep] if keep > 0 else positions
     for index in remove:
-        trimmed[index] = {"role": "user", "content": TOOL_IMAGE_PLACEHOLDER}
+        if isinstance(trimmed[index], dict) and trimmed[index].get("role") == "tool":
+            folded = dict(trimmed[index])
+            folded["content"] = TOOL_IMAGE_PLACEHOLDER
+            trimmed[index] = folded
+        else:
+            trimmed[index] = {"role": "user", "content": TOOL_IMAGE_PLACEHOLDER}
     return trimmed
+
+
+def trim_tool_text_contexts(contexts, keep=2, max_chars=200, kept_max_chars=12000):
+    """Return contexts with older tool text results folded into short placeholders.
+
+    Preserves the newest ``keep`` tool results so the model can reason over its
+    latest observation while bounding multi-step phone/MCP tool loops.  System,
+    assistant, user chat, and approval messages are never modified.
+    """
+    if not isinstance(contexts, list):
+        return contexts
+    trimmed = []
+    positions = []
+    for message in contexts:
+        data = _message_data(message)
+        if data is None:
+            trimmed.append(message)
+            continue
+        if _is_tool_text_message(data):
+            positions.append(len(trimmed))
+        trimmed.append(data)
+    fold_indices = set(positions[:-keep] if keep > 0 else positions)
+    kept_indices = set(positions) - fold_indices
+    for index in fold_indices:
+        item = dict(trimmed[index])
+        text = _tool_message_text(item)
+        item["content"] = _fold_tool_text(text, max_chars=max_chars)
+        trimmed[index] = item
+    if kept_max_chars and kept_max_chars > 0:
+        for index in kept_indices:
+            item = dict(trimmed[index])
+            text = INLINE_IMAGE_DATA_RE.sub("[图片数据已移除]", _tool_message_text(item))
+            if len(text) > kept_max_chars:
+                item["content"] = f"{text[:kept_max_chars]}...[单条工具输出过长已截断]"
+                trimmed[index] = item
+            elif text != _tool_message_text(item):
+                item["content"] = text
+                trimmed[index] = item
+    return trimmed
+
+
+def trim_tool_text_history(contexts, keep=2, max_chars=200):
+    """Fold older tool text results in place and return how many were newly folded."""
+    if not isinstance(contexts, list):
+        return 0
+    before = sum(
+        1
+        for message in contexts
+        if _is_tool_text_message(_message_data(message))
+        and not _is_folded_tool_text(_tool_message_text(_message_data(message)))
+    )
+    contexts[:] = trim_tool_text_contexts(contexts, keep=keep, max_chars=max_chars)
+    after = sum(
+        1
+        for message in contexts
+        if _is_tool_text_message(_message_data(message))
+        and not _is_folded_tool_text(_tool_message_text(_message_data(message)))
+    )
+    return max(0, before - after)
 
 
 def strip_image_parts(contexts):
@@ -204,15 +326,23 @@ def strip_image_parts(contexts):
             continue
         content = data.get("content")
         if isinstance(content, list):
-            kept = [
-                part
-                for part in content
-                if not (isinstance(part, dict) and part.get("type") == "image_url")
-            ]
-            if len(kept) != len(content):
+            kept = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in {"image_url", "image"}:
+                    continue
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    cleaned = INLINE_IMAGE_DATA_RE.sub("[图片数据已移除]", part["text"])
+                    if cleaned != part["text"]:
+                        part = {**part, "text": cleaned}
+                kept.append(part)
+            if len(kept) != len(content) or kept != content:
                 data["content"] = kept or [
                     {"type": "text", "text": "[图片已从上下文移除]"}
                 ]
+        elif isinstance(content, str):
+            cleaned = INLINE_IMAGE_DATA_RE.sub("[图片数据已移除]", content)
+            if cleaned != content:
+                data["content"] = cleaned
         stripped.append(data)
     return stripped
 
@@ -232,7 +362,7 @@ def trim_tool_image_history(contexts, keep=1):
 
 
 def install_tool_image_context_guard():
-    """Trim tool screenshots right before every provider payload is built.
+    """Trim tool screenshots and older tool outputs right before every provider payload is built.
 
     A plugin ``on_llm_request`` hook mutates ``ProviderRequest.contexts`` after
     the agent runner has already copied its own message list, so the hook alone
@@ -264,6 +394,24 @@ def install_tool_image_context_guard():
                 "trimmed %s old tool screenshot(s) before provider request",
                 before - after,
             )
+        text_before = sum(
+            1
+            for message in trimmed
+            if _is_tool_text_message(_message_data(message))
+            and not _is_folded_tool_text(_tool_message_text(_message_data(message)))
+        ) if isinstance(trimmed, list) else 0
+        trimmed = trim_tool_text_contexts(trimmed, keep=2)
+        text_after = sum(
+            1
+            for message in trimmed
+            if _is_tool_text_message(_message_data(message))
+            and not _is_folded_tool_text(_tool_message_text(_message_data(message)))
+        ) if isinstance(trimmed, list) else 0
+        if text_before > text_after:
+            logger.info(
+                "folded %s old tool result(s) before provider request",
+                text_before - text_after,
+            )
         return original(self, trimmed)
 
     sanitize._dafeiyu_tool_image_guard = True
@@ -271,7 +419,7 @@ def install_tool_image_context_guard():
 
     # Last-resort recovery: if a provider still reports a context-length error
     # (for example an OpenAI-compatible model that counts base64 as text),
-    # remove historical images before the normal "pop oldest message" retry.
+    # remove historical images and fold tool results before the normal "pop oldest message" retry.
     try:
         from astrbot.core.provider.sources.openai_source import (
             ProviderOpenAIOfficial,
@@ -301,18 +449,51 @@ def install_tool_image_context_guard():
         ):
             message = str(e)
             if "maximum context length" in message or "context length" in message.lower():
-                context_query = strip_image_parts(context_query)
-                payloads["messages"] = context_query
-                logger.warning("上下文超限：已移除历史图片并重试")
-                return (
-                    False,
-                    chosen_key,
-                    available_api_keys,
-                    payloads,
-                    context_query,
-                    func_tool,
-                    image_fallback_used,
+                stripped = strip_image_parts(context_query)
+                unfolded_before = (
+                    sum(
+                        1
+                        for m in stripped
+                        if _is_tool_text_message(_message_data(m))
+                        and not _is_folded_tool_text(_tool_message_text(_message_data(m)))
+                    )
+                    if isinstance(stripped, list)
+                    else 0
                 )
+                folded = trim_tool_text_contexts(
+                    stripped, keep=1, max_chars=200, kept_max_chars=4000
+                )
+                unfolded_after = (
+                    sum(
+                        1
+                        for m in folded
+                        if _is_tool_text_message(_message_data(m))
+                        and not _is_folded_tool_text(_tool_message_text(_message_data(m)))
+                    )
+                    if isinstance(folded, list)
+                    else 0
+                )
+                folded_count = max(0, unfolded_before - unfolded_after)
+                changed = folded != context_query
+                if isinstance(context_query, list) and isinstance(folded, list):
+                    context_query[:] = folded
+                else:
+                    context_query = folded
+                payloads["messages"] = context_query
+                if changed or not retry_cnt:
+                    logger.warning(
+                        "上下文超限：已移除历史图片并折叠 %s 条工具结果后重试",
+                        folded_count,
+                    )
+                    return (
+                        False,
+                        chosen_key,
+                        available_api_keys,
+                        payloads,
+                        context_query,
+                        func_tool,
+                        image_fallback_used,
+                    )
             return await original_error_handler(
                 self,
                 e,
@@ -430,6 +611,8 @@ class GuardedPhoneTool(FunctionTool):
                     raise ValueError(f"滑动坐标 {key}={value} 超出屏幕范围 {width}x{height}")
         elif name == "wait":
             kwargs["seconds"] = max(0.1, min(float(kwargs.get("seconds", 1)), 10.0))
+        if not owner:
+            self.plugin.check_foreground_phone_budget(event, name, cfg)
         client = self.plugin.phone()
         if "device_id" in self.original.parameters.get("properties", {}):
             kwargs["device_id"] = cfg["device_id"]
@@ -463,8 +646,49 @@ class BiliActivity(Star):
         self.writing_runs = set()
         self.method_runs = set()
         self.decision_runs = set()
+        self.foreground_phone_counts = {}
         self.contact_api = ContactAPI(self)
         setattr(self.context, CONTACT_BRIDGE, self.contact_api)
+
+    def check_foreground_phone_budget(self, event, tool_name: str, cfg: dict | None = None, *, include_screenshot: bool = False):
+        """Bound foreground single-turn phone tool calls and screenshots per (scope, message_id)."""
+        if event.get_extra("df_run_id"):
+            return
+        if cfg is None:
+            cfg = self.cfg()
+        counts = getattr(self, "foreground_phone_counts", None)
+        if counts is None:
+            counts = {}
+            self.foreground_phone_counts = counts
+        msg_id = str(getattr(getattr(event, "message_obj", None), "message_id", "") or id(event))
+        key = (str(getattr(event, "unified_msg_origin", "")), msg_id)
+        entry = counts.get(key)
+        if entry is None:
+            while len(counts) >= 128:
+                counts.pop(next(iter(counts)))
+            entry = {"calls": 0, "screenshots": 0}
+            counts[key] = entry
+        if tool_name == "get_screenshot":
+            max_shots = int(cfg.get("phone_screenshots_per_turn", DEFAULTS["phone_screenshots_per_turn"]))
+            if entry["screenshots"] >= max_shots:
+                raise ValueError(
+                    f"本轮手机截图已达 {max_shots} 次上限，请总结已确认的内容并结束，不要继续截图。"
+                )
+            entry["screenshots"] += 1
+            return
+        max_calls = int(cfg.get("phone_tool_calls_per_turn", DEFAULTS["phone_tool_calls_per_turn"]))
+        if entry["calls"] >= max_calls:
+            raise ValueError(
+                f"本轮手机操作已达 {max_calls} 次上限，请总结已确认的内容并结束，不要继续截图。"
+            )
+        if include_screenshot:
+            max_shots = int(cfg.get("phone_screenshots_per_turn", DEFAULTS["phone_screenshots_per_turn"]))
+            if entry["screenshots"] >= max_shots:
+                raise ValueError(
+                    f"本轮手机截图已达 {max_shots} 次上限，请总结已确认的内容并结束，不要继续截图。"
+                )
+            entry["screenshots"] += 1
+        entry["calls"] += 1
 
     def cfg(self):
         value = json.loads(self.control.read_text(encoding="utf-8"))
@@ -474,6 +698,7 @@ class BiliActivity(Star):
                                ("daily_minutes", 1, 240), ("max_model_calls_per_run", 1, 64),
                                ("daily_model_calls", 1, 1000), ("daily_shares", 0, 50),
                                ("screenshots_per_run", 0, 10), ("chat_cooldown_seconds", 0, 3600),
+                               ("phone_tool_calls_per_turn", 1, 200), ("phone_screenshots_per_turn", 0, 50),
                                ("workshop_revisions_per_run", 1, 10), ("workshop_max_characters", 500, 20000)):
             cfg[key] = min(high, max(low, int(cfg[key])))
         for key in ("enabled", "periodic_enabled", "life_enabled", "workshop_enabled", "methods_enabled", "public_interactions",
@@ -1675,6 +1900,9 @@ class BiliActivity(Star):
         trimmed = trim_tool_image_history(getattr(req, "contexts", None), keep=1)
         if trimmed:
             logger.info("trimmed %s old tool screenshot(s) from LLM context", trimmed)
+        folded = trim_tool_text_history(getattr(req, "contexts", None), keep=2)
+        if folded:
+            logger.info("folded %s old tool result(s) from LLM context", folded)
         cfg = self.cfg()
         for tool in list(req.func_tool.tools if req.func_tool else []):
             if tool.name == PROJECT_TOOL and (not projects_enabled(cfg) or self.is_reply_run(event)
@@ -2201,34 +2429,135 @@ class BiliActivity(Star):
         return canonical(receipt)
 
     @filter.llm_tool(name="df_activity_note")
-    async def activity_note(self, event: AstrMessageEvent, bvid: str, cid: str, position: int, thought: str):
-        """保存本轮视频位置及大肥鱼自己的感想；此工具不能声称主人喜欢。
+    async def activity_note(
+        self,
+        event: AstrMessageEvent,
+        bvid: str = "",
+        cid: str = "",
+        position: int = 0,
+        thought: str = "",
+        video_key: str = "",
+        episode_id: str = "",
+    ):
+        """保存本轮视频位置及大肥鱼自己的感想（支持B站bvid+cid或抖音真实video_key/episode_id）；此工具不能声称主人喜欢。
 
         Args:
-            bvid(string): 已读到的视频BV号。
-            cid(string): 同一分P的cid。
+            bvid(string): 已读到的B站视频BV号，或df_douyin_feed返回的真实抖音video_key（如dy:...）。
+            cid(string): B站视频同一分P的cid；抖音视频可留空。
             position(number): 实际看到的位置（秒）。
             thought(string): 大肥鱼自己的感想，不能将其归属给主人。
+            video_key(string): 可选，df_douyin_feed返回的真实抖音video_key（如dy:...）。
+            episode_id(string): 可选，df_douyin_feed返回的真实抖音经历episode_id。
         """
         self.check_owner(event)
-        history = self.store.history(event.unified_msg_origin, 100)
-        previous = next((v for v in history if v["bvid"] == bvid and str(v["cid"]) == str(cid)), None)
-        if not previous:
-            raise ValueError("没有该视频的实际读取记录")
-        covered = previous.get("range")
-        if not covered or len(covered) != 2 or not covered[0] <= position <= covered[1]:
+        scope = event.unified_msg_origin
+        bvid_str = str(bvid or "").strip()
+        cid_str = str(cid or "").strip()
+        vkey_str = str(video_key or "").strip()
+        epid_str = str(episode_id or "").strip()
+
+        if cid_str or bvid_str.startswith("BV"):
+            if not cid_str:
+                raise ValueError("B站视频记录笔记必须提供已核实的分P cid")
+            history = self.store.history(scope, 100)
+            previous = next((v for v in history if v["bvid"] == bvid_str and str(v["cid"]) == cid_str), None)
+            if not previous:
+                raise ValueError("没有该视频的实际读取记录")
+            covered = previous.get("range")
+            if not covered or len(covered) != 2 or not covered[0] <= position <= covered[1]:
+                raise ValueError("位置超出了实际读取范围")
+            evidence_times = [float(row.get("to", row.get("end", 0))) for row in previous.get("subtitles", [])]
+            for observation in previous.get("observations", []):
+                evidence_times.extend(observation.get("times", []))
+                if observation.get("range"):
+                    evidence_times.append(observation["range"][1])
+            if not evidence_times or position > max(evidence_times):
+                raise ValueError("该位置尚无画面、字幕或转写证据")
+            value = previous | {"position": max(0, int(position)), "position_kind": "analyzed_sample",
+                                "agent_thought": thought[:1500], "preference_owner": "agent"}
+            episode = self.record_video(event, value)
+            return canonical({"saved": True, "subject_kind": "agent", "episode_id": episode["id"] if episode else None})
+
+        target_key = vkey_str or bvid_str
+        if not target_key and not epid_str:
+            raise ValueError("没有该视频的实际读取记录，请提供B站 bvid+cid 或抖音真实 video_key/episode_id")
+        if target_key and not re.fullmatch(r"dy:[0-9a-fA-F]{6,64}", target_key) and not (
+            not vkey_str and not epid_str and re.fullmatch(r"[0-9a-fA-F]{8,64}", target_key)
+        ):
+            raise ValueError("没有该抖音视频的实际读取记录，不能凭搜索词、标题或序号记笔记")
+        if epid_str and not re.fullmatch(r"[0-9a-fA-F]{8,64}", epid_str):
+            raise ValueError("没有该抖音视频的实际读取记录，不能凭搜索词、标题或序号记笔记")
+
+        rows = self.store.db.execute(
+            "SELECT * FROM episodes WHERE scope=? AND kind='douyin_video' ORDER BY occurred_at DESC, id DESC LIMIT 100",
+            (scope,),
+        ).fetchall()
+        matched_row = None
+        matched_ev = None
+        for row in rows:
+            ev = json.loads(row["evidence_json"] or "{}")
+            row_vkey = str(ev.get("video_key") or row["subject_id"] or "")
+            if epid_str and row["id"] == epid_str:
+                matched_row, matched_ev = row, ev
+                break
+            if target_key and (row_vkey == target_key or (not target_key.startswith("dy:") and row["id"] == target_key)):
+                matched_row, matched_ev = row, ev
+                break
+        if not matched_row or matched_ev is None:
+            raise ValueError("没有该抖音视频的实际读取记录，不能凭搜索标题记笔记")
+        if not (matched_ev.get("caption") or matched_ev.get("audio_transcript") or matched_ev.get("fingerprint")):
+            raise ValueError("该抖音视频尚无画面、文案或音频观察证据")
+        if isinstance(position, bool) or not isinstance(position, (int, float)) or not 0 <= int(position) <= 60:
             raise ValueError("位置超出了实际读取范围")
-        evidence_times = [float(row.get("to", row.get("end", 0))) for row in previous.get("subtitles", [])]
-        for observation in previous.get("observations", []):
-            evidence_times.extend(observation.get("times", []))
-            if observation.get("range"):
-                evidence_times.append(observation["range"][1])
-        if not evidence_times or position > max(evidence_times):
-            raise ValueError("该位置尚无画面、字幕或转写证据")
-        value = previous | {"position": max(0, int(position)), "position_kind": "analyzed_sample",
-                            "agent_thought": thought[:1500], "preference_owner": "agent"}
-        episode = self.record_video(event, value)
-        return canonical({"saved": True, "subject_kind": "agent", "episode_id": episode["id"] if episode else None})
+        pos = int(position)
+        real_vkey = str(matched_ev.get("video_key") or matched_row["subject_id"] or target_key)
+        goal = self.active_goal(event)
+        run_id = event.get_extra("df_run_id")
+        note_evidence = {
+            **matched_ev,
+            "video_key": real_vkey,
+            "source_episode_id": matched_row["id"],
+            "position": pos,
+            "position_kind": "douyin_observed",
+            "preference_owner": "agent",
+        }
+        interp = json.loads(matched_row["interpretation_json"] or "{}")
+        note_interp = {
+            "title": interp.get("title") or (matched_ev.get("caption") or f"{matched_ev.get('author', '')} 的抖音视频")[:120],
+            "summary": interp.get("summary") or f"刷抖音看到 @{matched_ev.get('author', '')}：{str(matched_ev.get('caption', ''))[:120]}",
+            "thought": str(thought or "")[:1500],
+        }
+        episode = self.store.life.record_episode(
+            scope,
+            kind="douyin_video",
+            source_id=digest([
+                run_id or str(getattr(getattr(event, "message_obj", None), "message_id", "")),
+                real_vkey,
+                pos,
+                str(thought or "")[:1500],
+            ]),
+            evidence=note_evidence,
+            interpretation=note_interp,
+            run_id=run_id,
+            goal_id=goal["id"] if goal else matched_row["goal_id"],
+            subject_kind="agent",
+            subject_id=real_vkey,
+        )
+        if goal and goal["status"] == "running":
+            self.store.life.update_goal(
+                scope,
+                goal["id"],
+                checkpoint={"episode_id": episode["id"], "video_key": real_vkey, "position": pos},
+                run_id=run_id,
+            )
+        if not memory_enabled(self.cfg()):
+            self.store.queue_memory(
+                scope,
+                "[大肥鱼经历，非主人偏好；episode_id=" + episode["id"] + "] "
+                + canonical({"evidence": note_evidence, "interpretation": episode["interpretation"]}),
+                "episode:" + episode["id"],
+            )
+        return canonical({"saved": True, "subject_kind": "agent", "video_key": real_vkey, "episode_id": episode["id"]})
 
     @filter.llm_tool(name="df_life_status")
     async def life_status(self, event: AstrMessageEvent):
@@ -2705,6 +3034,12 @@ class BiliActivity(Star):
         if not run_id:
             await self.pause_background("主人请求观察手机画面")
             cfg = self.check_owner(event)
+            self.check_foreground_phone_budget(
+                event,
+                "df_phone_observe",
+                cfg,
+                include_screenshot=bool(include_screenshot and cfg.get("screenshot_enabled", True)),
+            )
         goal = self.active_goal(event)
         agent = self.phone_agent()
         if run_id:
@@ -2739,6 +3074,7 @@ class BiliActivity(Star):
         if not run_id:
             await self.pause_background("主人请求操作虚拟手机")
             cfg = self.check_owner(event)
+            self.check_foreground_phone_budget(event, "df_phone_act", cfg)
         goal = self.active_goal(event)
         agent = self.phone_agent()
         if run_id:
