@@ -10,7 +10,7 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .core import canonical
+from .core import canonical, digest
 from .life import observed_read_evidence
 from .memory_policy import LIMIT, MemoryPolicy, _clock, _known_time
 from .projects import Projects, enabled as projects_enabled
@@ -27,6 +27,8 @@ GUIDANCE = """沿用当前人格和已有情绪上下文。以下是有日期与
 当前作息时段可用于自然贴合当下状态（如睡前只做整理、刚忙完留白休息），但不编造睡梦、饮食或生理疲劳。
 若刚因主人找你或操作而停下手头的事，可自然接话提及刚才在看或写什么，不抱怨或归咎于主人。
 若有攒着没发出去的想法或作品摘录，可在主人聊起近况或相关话题时顺嘴提一句，不补发刷屏，也不声称当时已发送。
+这些摘录只证明原先主动分享被拦，不证明普通聊天里从未提过；提供给模型参考也不等于已经说出或QQ送达。
+主人主动问近况时可用df_self_reflect查询有效记录；候选暂未提供不代表没有想法。
 当前目标只是意图；运行结束不是目标完成。完成记录缺少当前来源时先说尚需核对。
 兴趣只有两段时期各有独立依据时才能说发生变化；单次感想不写成长期性格，没记录不等于不喜欢。
 中断只说明账本可确定的原因；不从超时、预算、暂停或取消推测情绪、主人的态度或责任。
@@ -305,12 +307,14 @@ class SelfExpression:
         if (not isinstance(work_id, str) or not work_id or isinstance(revision, bool)
                 or not isinstance(revision, int) or revision <= 0):
             return False
-        if not self.db.execute(
-            "SELECT 1 FROM sqlite_master WHERE name='creative_revisions' AND type='table'"
-        ).fetchone():
+        if self.db.execute(
+            "SELECT count(*) FROM sqlite_master WHERE name IN ('creative_revisions','creative_works') AND type='table'"
+        ).fetchone()[0] != 2:
             return False
         row = self.db.execute(
-            "SELECT source_ids_json FROM creative_revisions WHERE scope=? AND work_id=? AND revision=?",
+            "SELECT r.source_ids_json FROM creative_revisions r JOIN creative_works w "
+            "ON w.scope=r.scope AND w.id=r.work_id AND w.revision=r.revision "
+            "WHERE r.scope=? AND r.work_id=? AND r.revision=?",
             (scope, work_id, revision),
         ).fetchone()
         if not row:
@@ -319,7 +323,8 @@ class SelfExpression:
             sources = json.loads(row["source_ids_json"] or "[]")
         except (ValueError, TypeError):
             return False
-        return (bool(sources) and len(sources) <= 24
+        return (isinstance(sources, list) and bool(sources) and len(sources) <= 24
+                and all(isinstance(sid, str) and sid for sid in sources)
                 and all(self._observed(self.memory.source(scope, sid), now) for sid in sources))
 
     def _held_thoughts(self, scope, now, days):
@@ -344,9 +349,12 @@ class SelfExpression:
                 continue
             kind = details.get("kind")
             reason = details.get("reason")
-            excerpt = (details.get("excerpt") or "").strip()[:240]
-            if kind not in {"thought", "work"} or reason not in HELD_SHARE_REASONS or not excerpt:
+            excerpt = details.get("excerpt")
+            if (not isinstance(kind, str) or kind not in {"thought", "work"}
+                    or not isinstance(reason, str) or reason not in HELD_SHARE_REASONS
+                    or not isinstance(excerpt, str) or not excerpt.strip()):
                 continue
+            excerpt = excerpt.strip()[:240]
             delivery_id = details.get("delivery_id") if isinstance(details.get("delivery_id"), str) else ""
             fp = details.get("fingerprint") if isinstance(details.get("fingerprint"), str) else ""
             if has_deliveries:
@@ -375,6 +383,8 @@ class SelfExpression:
                 "reason": reason,
                 "explanation": HELD_SHARE_REASONS[reason],
                 "qq_sent": False,
+                "held_id": digest([kind, fp or excerpt, details.get("work_id") if kind == "work" else None,
+                                   details.get("revision") if kind == "work" else None]),
             }
             gid = details.get("goal_id")
             if isinstance(gid, str) and gid:
@@ -602,7 +612,7 @@ class SelfExpression:
             kind_label = "作品摘录" if item["kind"] == "work" else "想法"
             goal_part = f"（关联目标《{item['goal_title']}》）" if item.get("goal_title") else ""
             lines.append(
-                f"- 攒着没发出去的{kind_label}{goal_part}（{_date(item['at'])}，{item['explanation']}，未发送QQ）："
+                f"- 攒着没发出去的{kind_label}{goal_part}（{_date(item['at'])}，{item['explanation']}，当次主动分享未发送QQ）："
                 f"{item['excerpt']}"
             )
         projects = value.get("projects") or []
@@ -682,7 +692,10 @@ class SelfExpression:
         return "\n".join(lines)
 
     def context(self, scope, cfg, *, now=None):
-        value = self.snapshot(scope, cfg, now=now)
+        return self.render_context(self.snapshot(scope, cfg, now=now))
+
+    @staticmethod
+    def render_context(value):
         if not value["enabled"]:
             return ""
-        return "\n" + MARKER + "\n" + GUIDANCE + self._format_context(value)
+        return "\n" + MARKER + "\n" + GUIDANCE + SelfExpression._format_context(value)
