@@ -2,6 +2,13 @@
 
 > 每一次值得说的进化都会记在这里。
 
+## 未发布 · 隔离记忆联查验收准备（2026-11-06）
+
+- 新增只读检查器 `python -B -m deploy.bili_activity.pilot_memory_check --pilot-dir .life-pilot/v01`：核对固定版本/模型ID、源码与活动配置哈希、QQ/活动/记忆访问与清理开关，密钥只报告是否存在。状态 `invalid_input`/`blocked_config` 退出3，`missing_keys`/`models_disabled`/`models_partly_enabled` 退出2，`config_ready` 退出0；始终 `live_verified=false`，运行时八项UNVERIFIED。
+- 审查修复：符号链接环在旧Python上抛出的RuntimeError按 `invalid_input` 处理；`invalid_input` 时清空部分检查结果与密钥状态。新增junction、链接环、部分结果清理和检查期间配置变化测试，共32项。
+- 实际结果：对隔离目录运行为 `missing_keys`（退出2），8项静态检查通过，235个源文件0不一致。定向测试 Windows 32项 OK、5 skip（符号链接/junction权限），WSL 32项 OK、1 skip。Windows全量 `test_bili_*.py` UNVERIFIED：206项中19个模块缺 `mcp` 无法导入、1项部署测试受宿主bash路径影响失败、14 skip，原测试venv已不存在。
+- 未填写密钥、未调用模型/嵌入、未写入/回读/召回记忆，未启动QQ或活动。未来联查步骤与通过条件见 [PILOT_MEMORY_ACCEPTANCE_V01.md](deploy/bili_activity/PILOT_MEMORY_ACCEPTANCE_V01.md)；验收准备完成不等于真实链路通过。
+
 ## 未发布 · 房间近况同步收尾（2026-11-06）
 
 - 完成可关闭的60秒只读同步验收，页面隐藏时暂停，手动与自动读取共享在途请求；失败保留原记录与快照时间，不改变角色区域、镜头或机器人活动。

@@ -37,6 +37,8 @@
 
 本机 `.life-pilot/v01/MODEL_MEMORY_SETUP.md` 已给出两处密钥填写位置。主人只填写并保存密钥，暂时保持模型禁用；之后再验证连通性、初始化及指定测试会话的一条测试记忆。不要把密钥写进聊天或提交到Git。
 
+2026-11-06主人选择“暂不填写，先完成验收准备”。已增加只读检查器 `python -B -m deploy.bili_activity.pilot_memory_check --pilot-dir .life-pilot/v01`：状态 `invalid_input` / `blocked_config`（退出3）、`missing_keys` / `models_disabled` / `models_partly_enabled`（退出2）、`config_ready`（退出0），始终 `live_verified=false`，运行时八项均UNVERIFIED。当次对本目录的实际结果为 `missing_keys`（退出2），8项静态检查通过、235个源文件0不一致。上表的 `verify-memory.py` 仅适用于填钥前；`prepare-memory.py` 是一次性准备，不要重跑。用法、已验证/未验证边界和未来真实联查的步骤与通过条件见[验收准备](PILOT_MEMORY_ACCEPTANCE_V01.md)；真实写入—回读—召回仍未执行。
+
 原[基础实例记录](PILOT_V01.md)及其 `MANIFEST.json` / `RUNTIME_CHECK.json` 是前一阶段快照。本轮记录为 `MEMORY_INSTALL.json` / `MEMORY_CHECK.json`；它们与启停脚本、凭据、运行目录均被Git忽略。
 
 上游依据：[固定版本](https://github.com/lxfight-s-Astrbot-Plugins/astrbot_plugin_livingmemory/releases/tag/2.7.0-beta.2)、[DeepSeek接口](https://api-docs.deepseek.com/quick_start/agent_integrations/)、[硅基流动嵌入接口](https://siliconflow.readme.io/reference/createembedding)、[LivingMemory嵌入配置](https://lxfight-s-astrbot-plugins.github.io/astrbot_plugin_livingmemory/en/guide/embedding-model)。
