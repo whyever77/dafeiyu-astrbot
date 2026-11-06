@@ -8,8 +8,9 @@
 - 主人私聊日常提及的在玩/在看/想聊话题通过 `LifeState.record_chat_topic` 记入 `owner_chat_topic` 事件（不写 `episodes` 或长期记忆）；`LifePlanner.choose` 的 `explore` 候选汇总正向显式偏好与近期聊天话题为 `chat_topics`（`subject_kind="user"`，+4分），保持 `decision["topic"]` 与 `own_interest_evidence` 严格归属自身观察（`subject_kind="agent"`）。
 - 跨日项目已完成阶段回看的 `next_question`（`project_followup`）与独立已完成目标核实作品的 `## 待核实`（`work_open_question`，支持 `read`/`video` 有效来源）汇总为 `curiosity_threads`，同时供 `SelfExpression` 展示与 `LifePlanner.choose` 在无未展开视频兴趣时优先作为探索方向（+6/+5分）。
 - 前台主人私聊新增 `ExpressionCadence`：每条消息最多自动提供1条 `held_thoughts` 摘录，同一候选6小时冷却；同一消息的工具续轮复用原选择，曝光只写 `held_thought_context` 的 `context_only` 状态，不删除原记录、不标记已发送。全量 `test_*.py` 768项 OK（20 skip）。
-- 运行加固：`once_at`/`next_check_at` 非法值不再让调度循环崩溃；手机健康检查连续3次失败才取消本轮；主人决策时间戳先按5分钟容差解析，明显过期时给出回执而不是静默丢弃；bili 伴随 MCP 代理只允许 AstrBot 容器 IP 连接。
+- 运行加固：`once_at`/`next_check_at` 非法值不再让调度循环崩溃；手机健康检查连续3次失败才取消本轮；主人决策时间戳先按5秒容差解析，明显过期时给出回执而不是静默丢弃；bili 伴随 MCP 代理只允许 AstrBot 容器 IP 连接。
 - 测试隔离：修复 `load_plugin()` 的临时 `sys.modules` 补丁误删 PIL 与插件子模块，导致 douyin/phone 在 `test_*.py` 全量顺序下串测失败的问题。
+- v3.0.0 全量离线测试：787项 OK（20 skip）；发布预检10项通过、0警告。
 - 无网只读容器（`dafeiyu-life-pilot-astrbot`，Python 3.12）定向测试 `test_bili_self_expression.py` 40项 OK、`test_bili_planner.py` 31项 OK，全量 `test_bili_*.py` 615项 OK（1 skip：Windows junction 专属测试）。未修改人格、审批、传输或运行配置，未部署。见 [SELF_EXPRESSION_V01.md](deploy/bili_activity/SELF_EXPRESSION_V01.md)。
 
 ## 未发布 · 近况回顾拟人化衔接与中文备忘（2026-11-06）
