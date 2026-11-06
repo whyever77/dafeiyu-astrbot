@@ -73,6 +73,13 @@ class LifePlanner:
             return False
         if row["kind"] == "read":
             return observed_read_evidence(proof)
+        if row["kind"] == "douyin_video":
+            return bool(proof.get("caption") or proof.get("audio_transcript") or proof.get("snapshot"))
+        if row["kind"] == "phone_observation":
+            return bool(
+                proof.get("package")
+                and (proof.get("visible_texts") or proof.get("audio_transcript") or proof.get("snapshot"))
+            )
         return (
             row["kind"] in {"video", "video_note"}
             and bool(proof.get("bvid"))
@@ -191,7 +198,38 @@ class LifePlanner:
                     "source_ids": list(sources)[:8],
                     "subject_kind": "agent",
                 })
-        return threads[:3]
+        if cfg.get("learning_enabled") and self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='knowledge_cards' AND type='table'"
+        ).fetchone():
+            for card in self.db.execute(
+                "SELECT id,topic,claim,source_episode_ids_json,updated_at FROM knowledge_cards "
+                "WHERE scope=? AND epistemic_status='hypothesis' AND updated_at>=? AND updated_at<=? "
+                "ORDER BY updated_at DESC,id LIMIT 5",
+                (scope, cutoff, now),
+            ).fetchall():
+                if not _known_time(card["updated_at"], now):
+                    continue
+                try:
+                    sources = json.loads(card["source_episode_ids_json"] or "[]")
+                except (ValueError, TypeError):
+                    continue
+                if (not sources or len(sources) > 24
+                        or not all(self._observed_source(scope, sid, now) for sid in sources)):
+                    continue
+                q = (card["topic"] or card["claim"] or "").strip()
+                if not q or q in recent_topics or q.casefold() in all_goal_titles or q.casefold() in seen:
+                    continue
+                seen.add(q.casefold())
+                threads.append({
+                    "kind": "hypothesis_verification",
+                    "card_id": card["id"],
+                    "title": (card["topic"] or "")[:120],
+                    "claim": (card["claim"] or "")[:240],
+                    "question": q[:160],
+                    "source_ids": list(sources)[:8],
+                    "subject_kind": "agent",
+                })
+        return threads[:4]
 
     def _chat_topics(self, scope, now, goals, recent_topics):
         user_interests = self.store.life.interests(scope, "user", limit=8)
@@ -303,7 +341,7 @@ class LifePlanner:
             evidence, content = [], set()
             for row in self.db.execute(
                 "SELECT e.id,e.kind,e.evidence_json FROM episodes e WHERE e.scope=? AND e.goal_id=? "
-                "AND e.kind IN ('read','video','video_note') "
+                "AND e.kind IN ('read','video','video_note','douyin_video','phone_observation') "
                 "AND NOT EXISTS (SELECT 1 FROM episodes n WHERE n.supersedes_id=e.id) "
                 "ORDER BY e.occurred_at DESC,e.id LIMIT 200", (scope, gid)):
                 proof = json.loads(row["evidence_json"])
@@ -317,6 +355,16 @@ class LifePlanner:
                         except ValueError:
                             pass
                     observed = ["read", proof["operation"], excerpt]
+                elif row["kind"] == "douyin_video":
+                    if not (proof.get("caption") or proof.get("audio_transcript") or proof.get("snapshot")):
+                        continue
+                    observed = ["douyin_video", {k: proof[k] for k in
+                        ("author", "caption", "audio_transcript", "sampled_comments") if k in proof}]
+                elif row["kind"] == "phone_observation":
+                    if not (proof.get("package") and (proof.get("visible_texts") or proof.get("audio_transcript") or proof.get("snapshot"))):
+                        continue
+                    observed = ["phone_observation", {k: proof[k] for k in
+                        ("package", "visible_texts", "audio_transcript") if k in proof}]
                 else:
                     if not (proof.get("observations") or proof.get("subtitles")):
                         continue
@@ -354,8 +402,30 @@ class LifePlanner:
                 review_task=review["task"], evidence_ids=review["work"]["source_ids"])
 
         if not phone_busy and len(goals) < 8:
-            # All exploration shares one cooldown, even when topics change.
-            explored = any(h["action"] == "explore" for h in history)
+            # All exploration shares one cooldown, unless a single fresh post-explore
+            # chat topic or hypothesis spark arrived after the first exploration.
+            explore_history = [h for h in history if h["action"] == "explore"]
+            last_explore_at = max((h["at"] for h in explore_history), default=0.0)
+            fresh_post_explore_spark = False
+            if len(explore_history) == 1 and last_explore_at > 0:
+                has_fresh_chat = bool(
+                    self.db.execute(
+                        "SELECT 1 FROM events WHERE scope=? AND kind='owner_chat_topic' AND time>? AND time<=? LIMIT 1",
+                        (scope, last_explore_at, now),
+                    ).fetchone()
+                )
+                has_fresh_hyp = bool(
+                    cfg.get("learning_enabled")
+                    and self.db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='knowledge_cards' AND type='table'"
+                    ).fetchone()
+                    and self.db.execute(
+                        "SELECT 1 FROM knowledge_cards WHERE scope=? AND epistemic_status='hypothesis' AND updated_at>? AND updated_at<=? LIMIT 1",
+                        (scope, last_explore_at, now),
+                    ).fetchone()
+                )
+                fresh_post_explore_spark = has_fresh_chat or has_fresh_hyp
+            explored = bool(explore_history) and not fresh_post_explore_spark
             if explored:
                 excluded.append({"key": "explore", "reason": "recent_exploration"})
             else:
@@ -370,6 +440,7 @@ class LifePlanner:
                 chat_topics = self._chat_topics(scope, now, goals, recent_topics)
                 project_followup = next((c for c in curiosity_threads if c["kind"] == "project_followup"), None)
                 open_question = next((c for c in curiosity_threads if c["kind"] == "work_open_question"), None)
+                hypothesis_q = next((c for c in curiosity_threads if c["kind"] == "hypothesis_verification"), None)
                 topic = (
                     interest["topic"]
                     if interest
@@ -377,6 +448,8 @@ class LifePlanner:
                     if project_followup
                     else open_question["question"]
                     if open_question
+                    else hypothesis_q["question"]
+                    if hypothesis_q
                     else ""
                 )
                 evidence_ids = (
@@ -386,10 +459,12 @@ class LifePlanner:
                     if project_followup
                     else open_question["source_ids"]
                     if open_question
+                    else hypothesis_q["source_ids"]
+                    if hypothesis_q
                     else []
                 )
                 diversify = len(recent) == 3 and all(h["action"] != "explore" for h in recent)
-                score = 35 + (8 if interest else 6 if project_followup else 5 if open_question else 0) + (40 if diversify else 0)
+                score = 35 + (8 if interest else 6 if project_followup else 5 if (open_question or hypothesis_q) else 0) + (40 if diversify else 0)
                 factors = [{"reason": "bounded_exploration", "points": 35}]
                 if interest:
                     factors.append({"reason": "own_interest_evidence", "points": 8})
@@ -397,6 +472,8 @@ class LifePlanner:
                     factors.append({"reason": "project_followup_question", "points": 6})
                 elif open_question:
                     factors.append({"reason": "work_open_question", "points": 5})
+                elif hypothesis_q:
+                    factors.append({"reason": "hypothesis_verification_needed", "points": 5})
                 if chat_topics:
                     factors.append({"reason": "owner_chat_topic_available", "points": 4})
                     score += 4
@@ -408,6 +485,8 @@ class LifePlanner:
                     reason = "顺着已完成项目回看留下的新问题继续探索：" + topic
                 elif open_question:
                     reason = "顺着已完成作品里待核实的问题继续探索：" + topic
+                elif hypothesis_q:
+                    reason = "交叉核实待验证的见闻假设：" + topic
                 elif chat_topics:
                     reason = (
                         f"看看新的资料（也可顺带了解主人聊过的「{chat_topics[0]['topic'][:60]}」，"
@@ -420,7 +499,12 @@ class LifePlanner:
                     extra_explore["curiosity_threads"] = curiosity_threads
                 if chat_topics:
                     extra_explore["chat_topics"] = chat_topics
-                add("explore", "explore", fingerprint(topic),
+                explore_sig = (
+                    fingerprint([topic, [c["topic"] for c in chat_topics]])
+                    if (chat_topics and not topic)
+                    else fingerprint(topic)
+                )
+                add("explore", "explore", explore_sig,
                     reason, score, factors, topic=topic, evidence_ids=evidence_ids, **extra_explore)
         else:
             excluded.append({"key": "explore", "reason": "device_busy" if phone_busy else "goal_capacity"})

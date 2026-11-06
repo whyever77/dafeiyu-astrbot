@@ -262,6 +262,63 @@ class PlannerTests(unittest.TestCase):
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 self.planner.choose(SCOPE, self.cfg | {key: value}, now=self.now)
 
+    def test_douyin_and_phone_episodes_unlock_goal_progress(self):
+        self.attempted(self.choose())  # Put generic explore on cooldown.
+        goal = self.goal("douyin-goal")
+        for _ in range(2):
+            choice = self.choose()
+            self.assertEqual(choice["goal_id"], goal["id"])
+            self.attempted(choice)
+        self.assertEqual(self.choose()["action"], "rest")
+        dy_ep = self.store.life.record_episode(
+            SCOPE, goal_id=goal["id"], kind="douyin_video", source_id="dy-1",
+            evidence={"author": "@科技评测", "caption": "实测帧率表现", "audio_transcript": "平均帧率稳定60帧"})
+        resumed = self.choose()
+        self.assertEqual(resumed["goal_id"], goal["id"])
+        self.assertIn(dy_ep["id"], resumed["evidence_ids"])
+
+    def test_hypothesis_card_seeds_curiosity_verification_in_explore(self):
+        self.cfg["learning_enabled"] = True
+        dy_ep = self.store.life.record_episode(
+            SCOPE, kind="douyin_video", source_id="dy-hyp",
+            evidence={"author": "@科普君", "caption": "冷水面条更容易煮透的原理", "audio_transcript": "淀粉糊化温度差异"})
+        gate = main.KnowledgeGate(self.store)
+        res = gate.evaluate_candidate(
+            SCOPE, self.cfg,
+            topic="冷水面条糊化原理",
+            claim="冷水下锅比沸水下锅更能让干面条内外均匀吸水糊化",
+            rationale="抖音单条科普视频提及，尚缺第二独立来源印证",
+            source_episode_ids=[dy_ep["id"]],
+            category="daily_skill",
+            proposed_tier="verified_knowledge",
+        )
+        self.assertEqual(res["epistemic_status"], "hypothesis")
+        self.now = time.time() + 5
+        decision = self.choose()
+        self.assertEqual(decision["action"], "explore")
+        self.assertEqual(decision["topic"], "冷水面条糊化原理")
+        self.assertEqual(decision["evidence_ids"], [dy_ep["id"]])
+        self.assertIn({"reason": "hypothesis_verification_needed", "points": 5}, decision["factors"])
+        self.assertIn("交叉核实待验证的见闻假设：冷水面条糊化原理", decision["reason"])
+        self.assertEqual(decision["curiosity_threads"][0]["kind"], "hypothesis_verification")
+        self.assertEqual(decision["curiosity_threads"][0]["card_id"], res["card"]["id"])
+
+    def test_post_explore_chat_topic_or_hypothesis_unlocks_one_followup_exploration(self):
+        first = self.choose()
+        self.assertEqual(first["action"], "explore")
+        self.attempted(first)
+        self.assertEqual(self.choose()["action"], "rest")
+        # Owner mentions a new chat topic after the first exploration.
+        self.now = time.time() + 10
+        with patch.object(core.time, "time", return_value=self.now):
+            self.store.life.record_chat_topic(SCOPE, "12345", "m-post", "最近在看非遗打铁花")
+        second = self.choose()
+        self.assertEqual(second["action"], "explore")
+        self.assertIn("非遗打铁花", second["reason"])
+        self.attempted(second)
+        # Capped at 1 post-explore spark per cooldown window.
+        self.assertEqual(self.choose()["action"], "rest")
+
 
 class PlannerIntegrationTests(unittest.IsolatedAsyncioTestCase):
     save_config = life_fixtures.LifeIntegrationTests.save_config
@@ -395,6 +452,42 @@ class PlannerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.run_activity("once")
         self.plugin.agent.assert_awaited_once()
         self.assertEqual(self.plugin.life_planner().recent(SCOPE), [])
+
+    async def test_post_chat_curiosity_spark_wakes_schedule_early_without_waiting_for_periodic_timer(self):
+        self.config.update(
+            enabled=True, periodic_enabled=True, one_shot_verified=True,
+            life_enabled=True, life_decision_enabled=True, chat_cooldown_seconds=60,
+        )
+        self.save_config()
+        now = time.time()
+        # Next periodic run is 2 hours away.
+        self.plugin.store.setting("next_check_at", now + 7200)
+        await self.plugin.incoming(FakeEvent(event_id="m-spark", text="最近在看非遗打铁花"))
+        spark = self.plugin.store.get_setting("curiosity_spark:" + SCOPE)
+        self.assertEqual(spark["kind"], "chat_topic")
+        # Immediately after chat, cooldown is active so she stays quiet.
+        self.assertIsNone(self.plugin.curiosity_wakeup_due(self.plugin.cfg(), now=now + 10))
+        # Once post-chat quiet period elapses (65s later), curiosity wake-up is due.
+        self.plugin.store.setting("last_owner_message:" + SCOPE, now - 65)
+        self.plugin.store.setting("curiosity_spark:" + SCOPE, {**spark, "at": now - 65})
+        self.assertEqual(self.plugin.curiosity_wakeup_due(self.plugin.cfg(), now=now), "curiosity:chat_topic")
+
+        observed_triggers = []
+        async def fake_run_activity(trigger):
+            observed_triggers.append(trigger)
+
+        async def stop_after_one_tick(_seconds):
+            raise asyncio.CancelledError
+
+        self.plugin.run_activity = AsyncMock(side_effect=fake_run_activity)
+        with patch.object(main, "quiet_now", return_value=False), patch.object(main.asyncio, "sleep", stop_after_one_tick):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.plugin.schedule()
+        if self.plugin.live:
+            await self.plugin.live
+        self.assertEqual(observed_triggers, ["curiosity:chat_topic"])
+        # Same spark will not wake a second time.
+        self.assertIsNone(self.plugin.curiosity_wakeup_due(self.plugin.cfg(), now=now + 10))
 
 
 class PlannerOpsTests(unittest.TestCase):

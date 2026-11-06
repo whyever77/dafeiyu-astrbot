@@ -55,6 +55,9 @@ PREEMPT_REASONS = {
     "主人处理研究方法": "因主人处理研究方法而停下了当时的后台活动",
     "主人处理文字作品": "因主人处理文字作品而停下了当时的后台活动",
     "主人处理作品": "因主人处理作品而停下了当时的后台活动",
+    "主人请求观察手机画面": "因主人请求观察手机画面而停下了当时的后台活动",
+    "主人请求操作虚拟手机": "因主人请求操作虚拟手机而停下了当时的后台活动",
+    "主人请求刷抖音": "因主人请求刷抖音而停下了当时的后台活动",
 }
 HELD_SHARE_REASONS = {
     "现在是免打扰时间": "当时正值免打扰时段，留着没发",
@@ -139,6 +142,13 @@ class SelfExpression:
         proof = row["evidence"]
         if row["kind"] == "read":
             return observed_read_evidence(proof)
+        if row["kind"] == "douyin_video":
+            return bool(proof.get("caption") or proof.get("audio_transcript") or proof.get("snapshot"))
+        if row["kind"] == "phone_observation":
+            return bool(
+                proof.get("package")
+                and (proof.get("visible_texts") or proof.get("audio_transcript") or proof.get("snapshot"))
+            )
         return (row["kind"] in {"video", "video_note"} and bool(proof.get("bvid"))
                 and bool(proof.get("cid")) and bool(proof.get("observations") or proof.get("subtitles")))
 
@@ -469,6 +479,37 @@ class SelfExpression:
                     "subject_kind": "agent",
                     "meaning": "文字作品中记录的待核实问题；基于当前可用读取或视频来源，不代表已证实结论或主人偏好",
                 })
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='knowledge_cards' AND type='table'").fetchone():
+            for card in self.db.execute(
+                "SELECT id,topic,claim,rationale,source_episode_ids_json,updated_at FROM knowledge_cards "
+                "WHERE scope=? AND epistemic_status='hypothesis' AND updated_at>=? AND updated_at<=? "
+                "ORDER BY updated_at DESC,id LIMIT 5",
+                (scope, cutoff, now),
+            ).fetchall():
+                if not _known_time(card["updated_at"], now):
+                    continue
+                try:
+                    sources = json.loads(card["source_episode_ids_json"] or "[]")
+                except (ValueError, TypeError):
+                    continue
+                if (not sources or len(sources) > 24
+                        or not all(self._observed(self.memory.source(scope, sid), now) for sid in sources)):
+                    continue
+                q = (card["claim"] or card["topic"] or "").strip()
+                if not q or q.casefold() in all_goal_titles or q.casefold() in seen:
+                    continue
+                seen.add(q.casefold())
+                threads.append({
+                    "kind": "hypothesis_verification",
+                    "card_id": card["id"],
+                    "title": (card["topic"] or "")[:120],
+                    "question": q[:160],
+                    "reflection": (card["rationale"] or "")[:160],
+                    "recorded_at": card["updated_at"],
+                    "source_ids": list(sources)[:8],
+                    "subject_kind": "agent",
+                    "meaning": "互联网单源见闻留下的待核实假设；尚未经多源印证，不代表已证实事实或主人偏好",
+                })
         return sorted(threads, key=lambda r: (-r["recorded_at"], r["title"]))[:3]
 
     def _run_context(self, scope, run_id, started, ended, status, now, used_preempt_seqs):
@@ -640,6 +681,8 @@ class SelfExpression:
             origin_label = (
                 f"跨日项目《{item['title']}》阶段回看"
                 if item["kind"] == "project_followup"
+                else f"互联网见闻待核实假设《{item['title']}》"
+                if item["kind"] == "hypothesis_verification"
                 else f"已完成目标《{item['title']}》作品待核实"
             )
             reflection_part = f"（当时想法：{item['reflection']}）" if item.get("reflection") else ""

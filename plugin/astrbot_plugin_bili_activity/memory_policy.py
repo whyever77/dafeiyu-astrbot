@@ -84,7 +84,7 @@ class MemoryPolicy:
     def _gist(row):
         proof, opinion = row["evidence"], row["interpretation"]
         # Whitelist provenance, never copy a raw read response into the gist.
-        refs = {key: proof[key] for key in ("bvid", "cid", "operation", "work_id", "revision", "status") if key in proof}
+        refs = {key: proof[key] for key in ("bvid", "cid", "operation", "work_id", "revision", "status", "author", "package") if key in proof}
         thought = opinion.get("thought") or opinion.get("title") or opinion.get("summary")
         interest = opinion.get("interest")
         result = {"kind": row["kind"], "source": refs}
@@ -134,16 +134,22 @@ class MemoryPolicy:
             if not isinstance(topic, str) or not topic.strip() or len(topic) > 100 or type(polarity) is not int or polarity not in {-1, 1}:
                 continue
             source = self.source(scope, row["evidence"].get("episode_id"))
-            if (not source or source["superseded_by"] or source["kind"] not in {"video", "video_note"}
+            if (not source or source["superseded_by"] or source["kind"] not in {"video", "video_note", "douyin_video"}
                     or not _known_time(source["occurred_at"], now)):
                 continue
             proof = source["evidence"]
-            if (not proof.get("bvid") or not proof.get("cid") or not (proof.get("observations") or proof.get("subtitles"))
-                    or str(row["evidence"].get("bvid")) != str(proof["bvid"])
-                    or str(row["evidence"].get("cid")) != str(proof["cid"])):
-                continue
+            if source["kind"] == "douyin_video":
+                if not (proof.get("caption") or proof.get("audio_transcript") or proof.get("snapshot")):
+                    continue
+                origin_id = "douyin:" + str(source["source_id"] or source["id"])
+            else:
+                if (not proof.get("bvid") or not proof.get("cid") or not (proof.get("observations") or proof.get("subtitles"))
+                        or str(row["evidence"].get("bvid")) != str(proof["bvid"])
+                        or str(row["evidence"].get("cid")) != str(proof["cid"])):
+                    continue
+                origin_id = str(proof["bvid"])
             result.append({"topic": topic.strip(), "polarity": polarity, "episode_id": row["id"],
-                "source_episode_id": source["id"], "bvid": str(proof["bvid"]), "occurred_at": row["occurred_at"]})
+                "source_episode_id": source["id"], "bvid": origin_id, "occurred_at": row["occurred_at"]})
         return result
 
     def candidates(self, scope, *, now=None):

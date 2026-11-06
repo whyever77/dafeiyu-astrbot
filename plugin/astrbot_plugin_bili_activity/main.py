@@ -1186,6 +1186,38 @@ class BiliActivity(Star):
                     return instance
         return None
 
+    def curiosity_wakeup_due(self, cfg, now=None):
+        """Return trigger tag if an intrinsic post-chat or hypothesis spark should wake activity early."""
+        if not (cfg.get("periodic_enabled") and cfg.get("one_shot_verified")
+                and cfg.get("life_enabled") and cfg.get("life_decision_enabled")):
+            return None
+        now = time.time() if now is None else float(now)
+        scope = cfg["owner_scope"]
+        spark = self.store.get_setting("curiosity_spark:" + scope)
+        if not isinstance(spark, dict):
+            return None
+        spark_at = float(spark.get("at") or 0)
+        if spark_at <= 0 or spark_at > now or now - spark_at > 3600:
+            return None
+        if float(self.store.get_setting("last_curiosity_wakeup:" + scope, 0) or 0) >= spark_at:
+            return None
+        kind = str(spark.get("kind") or "spark")
+        if kind in {"chat_topic", "user_preference"}:
+            quiet_needed = max(60, int(cfg.get("chat_cooldown_seconds", 300)))
+            if now - float(self.store.get_setting("last_owner_message:" + scope, 0) or 0) < quiet_needed:
+                return None
+        else:
+            if now - float(self.store.get_setting("last_check_time", 0) or 0) < 300:
+                return None
+        if not self.life_ready(cfg):
+            return None
+        choice = self.life_planner().choose(
+            scope, cfg, phone_busy=bool(getattr(self.gate, "owner", None)), now=now
+        )
+        if choice.get("action") == "rest":
+            return None
+        return "curiosity:" + kind
+
     async def schedule(self):
         while True:
             try:
@@ -1214,14 +1246,22 @@ class BiliActivity(Star):
                                 next_at = now + self.periodic_interval(cfg)
                                 self.store.setting("next_check_at", next_at)
                             due_periodic = now >= next_at
-                        if (due_once or due_periodic) and (not cfg["life_enabled"] or self.life_ready(cfg)):
+                        due_curiosity = (
+                            None
+                            if (due_once or due_periodic)
+                            else self.curiosity_wakeup_due(cfg, now=now)
+                        )
+                        if (due_once or due_periodic or due_curiosity) and (not cfg["life_enabled"] or self.life_ready(cfg)):
                             if due_once:
                                 self.store.setting("last_once", raw_once)
-                            if due_periodic:
+                            if due_periodic or due_curiosity:
                                 self.store.setting("next_check_at", now + self.periodic_interval(cfg))
+                            if due_curiosity:
+                                self.store.setting("last_curiosity_wakeup:" + cfg["owner_scope"], now)
                             self.last_tick = now
                             self.store.setting("last_check_time", now)
-                            self.live = asyncio.create_task(self.run_activity("once" if due_once else "periodic"))
+                            trigger_name = "once" if due_once else ("periodic" if due_periodic else due_curiosity)
+                            self.live = asyncio.create_task(self.run_activity(trigger_name))
                         elif (cfg["reply_watch_enabled"] and cfg["public_interactions"]
                               and not self.store.get_setting("life_paused:" + cfg["owner_scope"], False)
                               and now - self.store.get_setting("last_owner_message:" + cfg["owner_scope"], 0) >= cfg["chat_cooldown_seconds"]):
@@ -1513,6 +1553,12 @@ class BiliActivity(Star):
                         tool_names = tool_names | LEARNING_TOOLS
                         prompt += ("\n已开启明辨学习机制：遇到值得吸收的知识先用 df_learn_evaluate 提交认知门控评估（广告带货、震惊体谣言、单源孤证、指令注入会被拦截或仅列为待核实假设；"
                                    "双独立来源印证或主人确认才升格为已核实学识），可用 df_knowledge 检索或推翻已存卡片。")
+                    if str(trigger).startswith("curiosity:") and not reviewing:
+                        prompt += (
+                            "\n[内生兴致唤醒] 本轮并非机械定时任务，而是因为刚产生的好奇心或对话余温（"
+                            + str(trigger)
+                            + "）主动拿起手机；可结合刚聊到的话题或待核实的假设，自主选择去B站或抖音探索、互动、创作或找主人分享。"
+                        )
                     summary = await self.agent(event, prompt, tool_names,
                                                max_steps=min(32, cfg["max_model_calls_per_run"]) if life_mode else 32)
                     status = "completed"
@@ -1721,9 +1767,16 @@ class BiliActivity(Star):
                     self.store.queue_memory(event.unified_msg_origin,
                         "[主人在本私聊的明确表达；来源QQ消息 " + str(message_id) + "] " + original,
                         "episode:" + preference["id"])
+                    self.store.setting("curiosity_spark:" + event.unified_msg_origin, {
+                        "at": time.time(), "kind": "user_preference", "message_id": str(message_id),
+                    })
                 else:
-                    self.store.life.record_chat_topic(event.unified_msg_origin,
+                    chat_ep = self.store.life.record_chat_topic(event.unified_msg_origin,
                         str(event.get_sender_id()), str(message_id), original)
+                    if chat_ep:
+                        self.store.setting("curiosity_spark:" + event.unified_msg_origin, {
+                            "at": time.time(), "kind": "chat_topic", "message_id": str(message_id),
+                        })
         if SCREEN_REQUEST.fullmatch(original):
             event.stop_event()
             try:
@@ -2970,6 +3023,10 @@ class BiliActivity(Star):
             run_id=event.get_extra("df_run_id"),
             goal_id=goal["id"] if goal else None,
         )
+        if res.get("epistemic_status") == "hypothesis" and isinstance(res.get("card"), dict):
+            self.store.setting("curiosity_spark:" + event.unified_msg_origin, {
+                "at": time.time(), "kind": "hypothesis", "card_id": res["card"].get("id", ""),
+            })
         return canonical(res)
 
     @filter.llm_tool(name="df_knowledge")

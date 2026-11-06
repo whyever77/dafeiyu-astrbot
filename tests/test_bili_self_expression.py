@@ -428,6 +428,52 @@ class ExpressionTests(unittest.TestCase):
         self.store.life.create_goal(SCOPE, "还需要别的来源。", "已经立项", "去查资料", "followup-goal")
         self.assertEqual(self.snapshot()["curiosity_threads"], [])
 
+    def test_douyin_interests_preemptions_and_hypothesis_threads_in_self_expression(self):
+        # 1. Two independent Douyin video observations support repeated_recent interest.
+        for idx in (1, 2):
+            dy_ep = episode(
+                self.store, kind="douyin_video", age=idx,
+                evidence={"author": f"@up{idx}", "caption": f"手工木作第{idx}期", "audio_transcript": "榫卯结构讲解"},
+            )
+            episode(
+                self.store, kind="interest", age=idx,
+                evidence={"episode_id": dy_ep["id"], "platform": "douyin", "author": f"@up{idx}", "caption": f"手工木作第{idx}期"},
+                interpretation={"interest": {"topic": "传统木作", "polarity": 1}},
+            )
+        # 2. Hypothesis card from Douyin observation surfaces in curiosity_threads.
+        gate = main.KnowledgeGate(self.store)
+        hyp = gate.evaluate_candidate(
+            SCOPE, self.cfg | {"learning_enabled": True},
+            topic="燕尾榫承重极限",
+            claim="干燥硬木燕尾榫无需胶水即可承受百斤拉力",
+            rationale="抖音木工视频单源演示，想再去B站找力学测试核实",
+            source_episode_ids=[dy_ep["id"]],
+            category="creator_craft",
+            proposed_tier="verified_knowledge",
+        )
+        self.assertEqual(hyp["epistemic_status"], "hypothesis")
+        # 3. Foreground preemption from Douyin browsing request links cleanly.
+        started, ended = 1799999900, 1799999950
+        self.store.db.execute(
+            "INSERT INTO runs VALUES(?,?,?,?,?,?)",
+            ("run-dy-preempt", SCOPE, started, ended, "cancelled", "summary"),
+        )
+        self.store.db.execute(
+            "INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)",
+            (ended, SCOPE, "foreground_preempt", core.canonical({"reason": "主人请求刷抖音"})),
+        )
+        snap = self.snapshot()
+        self.assertEqual(snap["interests"][0]["topic"], "传统木作")
+        self.assertEqual(snap["interests"][0]["state"], "repeated_recent")
+        self.assertEqual(snap["interests"][0]["recent_origin_count"], 2)
+        self.assertEqual(snap["recent_preemption"]["reason"], "主人请求刷抖音")
+        self.assertEqual(snap["curiosity_threads"][0]["kind"], "hypothesis_verification")
+        self.assertEqual(snap["curiosity_threads"][0]["title"], "燕尾榫承重极限")
+        memo = self.view.context(SCOPE, self.cfg)
+        self.assertIn("因主人请求刷抖音而停下了当时的后台活动", memo)
+        self.assertIn("来自互联网见闻待核实假设《燕尾榫承重极限》", memo)
+        self.assertIn("自身兴趣观察「传统木作」", memo)
+
 
 class ExpressionIntegrationTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = life_tests.LifeIntegrationTests.asyncSetUp
