@@ -1,7 +1,7 @@
 name: astrbot_plugin_bili_activity
 display_name: 大肥鱼B站与抖音自主活动
 desc: 虚拟手机安全操作（限定B站/抖音）、刷抖音与发作品审批、评论互动配额、明辨学习门控、来源笔记和真实QQ截图
-version: v3.0.1
+version: v3.0.2
 author: dafeiyu-tools
 support_platforms:
   - aiocqhttp
