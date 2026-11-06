@@ -33,6 +33,7 @@ from .memory_policy import (DEFAULTS as MEMORY_DEFAULTS, PREFIX as MEMORY_PREFIX
                             enabled as memory_enabled, validate_config as validate_memory)
 from .self_expression import (DEFAULTS as EXPRESSION_DEFAULTS, HELD_SHARE_REASONS, TOOL as EXPRESSION_TOOL,
                               SelfExpression, enabled as expression_enabled, validate_config as validate_expression)
+from .expression_cadence import ExpressionCadence
 from .projects import (DEFAULTS as PROJECT_DEFAULTS, TOOL as PROJECT_TOOL, Projects,
                        PROMPT as PROJECT_PROMPT, REVIEW_PROMPT as PROJECT_REVIEW_PROMPT,
                        enabled as projects_enabled, validate_config as validate_projects)
@@ -1650,7 +1651,11 @@ class BiliActivity(Star):
                 if (str(event.get_sender_id()) == str(cfg["owner_id"]) and not self.is_reply_run(event)
                         and not quiet_now(cfg.get("dnd_ranges") or [])
                         and not self.store.get_setting("life_paused:" + event.unified_msg_origin, False)):
-                    req.system_prompt += SelfExpression(self.store).context(event.unified_msg_origin, cfg)
+                    message_id = None
+                    if (not event.get_extra("df_run_id") and ":FriendMessage:" in event.unified_msg_origin):
+                        message_id = getattr(getattr(event, "message_obj", None), "message_id", None)
+                    req.system_prompt += ExpressionCadence(self.store).context(
+                        event.unified_msg_origin, cfg, message_id)
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def incoming(self, event: AstrMessageEvent):

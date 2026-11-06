@@ -395,9 +395,9 @@ class ExpressionTests(unittest.TestCase):
         self.assertEqual(snap["held_thoughts"][1]["goal_title"], "合作建造")
         memo = self.view.context(SCOPE, self.cfg)
         self.assertIn("攒着没发出去的作品摘录（关联目标《合作建造》）", memo)
-        self.assertIn("当时今日主动分享次数已满，留着没发，未发送QQ）：整理好啦 — 《小笔记》第1版摘录", memo)
+        self.assertIn("当时今日主动分享次数已满，留着没发，当次主动分享未发送QQ）：整理好啦 — 《小笔记》第1版摘录", memo)
         self.assertIn("攒着没发出去的想法（关联目标《合作建造》）", memo)
-        self.assertIn("当时主人刚在聊天，留着没打扰，未发送QQ）：看到一段双人机关配合特别巧妙", memo)
+        self.assertIn("当时主人刚在聊天，留着没打扰，当次主动分享未发送QQ）：看到一段双人机关配合特别巧妙", memo)
         self.assertEqual(list(self.store.db.iterdump()), before)
 
         # Once the thought is delivered, it is no longer held.
