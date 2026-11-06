@@ -166,6 +166,10 @@ def human_result(action, value):
         return "关注状态回读对得上。" if verified else "关注状态没核对上，先别算成功。"
     if action.startswith("favorite") or action.startswith("folder"):
         return "收藏操作回读对得上。" if verified else "收藏操作没核对上，先别算成功。"
+    if action == "douyin_post":
+        return "抖音作品已经直接点「发布」发出去啦，画面也截存确认了。" if verified else "抖音作品发布结果还没完全核实，先记作待确认，不会重复乱发。"
+    if action.startswith("douyin_"):
+        return "抖音上的操作已经点好并截屏确认了。" if verified else "抖音上的动作画面没明显变化，先不算确认成功，不重复点。"
     return "办好了，回读核对上了。" if verified else "这次没核对上，先别算成功。"
 
 

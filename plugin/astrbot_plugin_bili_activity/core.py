@@ -14,10 +14,15 @@ from zoneinfo import ZoneInfo
 from .life import LifeState, prepare_database
 
 
-WRITES = {
+BILI_WRITES = {
     "comment", "reply", "follow", "unfollow", "favorite_add", "favorite_remove",
     "folder_create", "folder_rename", "favorite_move", "like", "coin", "danmaku",
 }
+DOUYIN_WRITES = {
+    "douyin_like", "douyin_favorite", "douyin_follow",
+    "douyin_comment", "douyin_reply", "douyin_post",
+}
+WRITES = BILI_WRITES | DOUYIN_WRITES
 PUBLIC = {"comment", "reply", "danmaku"}
 ENGAGEMENT = {"like", "coin"}
 
@@ -45,7 +50,8 @@ def quiet_now(ranges, now=None):
 def decision(text):
     value = text.strip().rstrip("。！!~～ ")
     if value in {"可以", "同意", "好", "好的", "执行", "可以呀", "行",
-                 "批", "批准", "批准点赞", "批准执行", "确认", "确认执行", "同意执行"}:
+                 "批", "批准", "批准点赞", "批准执行", "批准发布", "发吧",
+                 "确认", "确认执行", "确认发布", "同意执行", "同意发布"}:
         return "approve"
     if value in {"算了", "取消", "不同意", "不要", "别发", "不行",
                  "拒绝", "停", "先不要", "别点", "不批准"}:

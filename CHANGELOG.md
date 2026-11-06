@@ -59,6 +59,13 @@
 - 同步及切换角落保留所选项目与章节开合；角色、镜头、望窗/睡姿八帧和星海60秒同步未改。未新增活动或写接口；房间新增可关闭的 60 秒只读自动同步（默认开启，复用 `/api/room/refresh`，页面隐藏时暂停）。
 - 新增13项项目读取测试；Windows/WSL观测台各98项通过（WSL 1 skip），Chrome虚构浏览器27项通过。真实项目库/SSH/LivingMemory联动未验证，未部署。详见 [PROJECT_SHELF_V01.md](deploy/memory_observatory/PROJECT_SHELF_V01.md)。
 
+## 2026-11-06 · bili_activity v0.6.0：虚拟手机自由操作（B站/抖音）、抖音互动发作品与明辨学习门控
+
+- **M1 通用虚拟手机安全控制器（`phone_agent.py`）**：新增 `PhoneAgent` 与工具 `df_phone_observe` / `df_phone_act`。严格限定白名单仅允许 B站（`tv.danmaku.bili`）与抖音（`com.ss.android.ugc.aweme`），硬编码拦截系统设置、安装器、支付宝、微信等禁区包名并自动 `go_home`；点击与输入前拦截「确认支付 / 输入密码 / 实名认证 / 卸载应用」等高危 UI 词条；当动态视频画面导致 `get_ui_elements`（`uiautomator dump`）失败时自动降级为 `ScreenCapture` 真实截图 + `listen_audio` 内录转写，并写入 `phone_observation` 经历。
+- **M2 & M3 抖音浏览、互动与作品直接发布（`douyin.py`）**：新增 `DouyinController` 与工具 `df_douyin_feed` / `df_douyin_propose` / `df_douyin_create_post`。支持推荐流/关注流/搜索流连续刷抖音、弹窗自动关闭、画面截图与音频转写、评论区采样，记录 `douyin_video` 经历并无缝接入 `df_interest` 与 `Workshop` 创作引用；支持点赞、收藏、关注、评论、回复的配额账本（`douyin_actions`）与操作前后画面指纹核验；作品发布（`douyin_post`）强制路径防越界检查并始终需要主人在 QQ 明确批准（如回复「可以」「批准」「批准发布」「发吧」），批准后自动推送素材、填写标题/文案/话题标签并**直接点击「发布」**。
+- **M4 互联网明辨学习与认知门控（`knowledge_gate.py`）**：新增 `KnowledgeGate`（`knowledge_cards` 表）与工具 `df_learn_evaluate` / `df_knowledge`。第一道确定性过滤器拦截提示词注入、修改人设、认主欺骗、微商引流与震惊体谣言；第二道认知分级漏斗要求绑定本会话真实观察经历 ID（防幻觉），单源孤证最高仅存为 `hypothesis`（待核实假设，不入长期记忆），仅当 ≥2 个独立信源（如 B站+抖音）交叉印证或主人前台 `confirm` 确认时才升格为 `verified_knowledge` 并带信源标签写入 LivingMemory；支持 `refute` 一键证伪撤回并阻止重复吸取。
+- **全量回归验证**：新增 `tests/test_phone_agent.py`、`tests/test_douyin_activity.py`、`tests/test_knowledge_gate.py`，连同仓库原有 39 个测试套件共 42 个测试文件全部通过。
+
 ## 2026-11-06 · deploy-kit：本地一键引导、干净组装与体检包（PR #3）
 
 - 合入并升级 @kibsmdadah-lgtm 的 `deploy-kit/` 与 `QUICKSTART.md`：把「装前体检 → 建虚拟环境装依赖 → 组装 `payload/` → 跑离线测试 → 装后复查」串成可验证的一键链路。

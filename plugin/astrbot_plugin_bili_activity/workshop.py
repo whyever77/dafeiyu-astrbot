@@ -168,10 +168,10 @@ class Workshop:
                 "SELECT * FROM episodes e WHERE e.scope=? AND e.id=? "
                 "AND NOT EXISTS(SELECT 1 FROM episodes next WHERE next.supersedes_id=e.id)",
                 (scope, episode_id)).fetchone()
-            if row is None or row["kind"] not in {"video", "video_note", "read"}:
+            if row is None or row["kind"] not in {"video", "video_note", "read", "douyin_video", "phone_observation"}:
                 raise ValueError("source is unavailable, superseded or not observed content in this session")
             proof = json.loads(row["evidence_json"])
-            if row["kind"] == "read":
+            if row["kind"] in {"read", "douyin_video", "phone_observation"}:
                 valid = observed_read_evidence(proof)
             else:
                 valid = bool(proof.get("observations") or proof.get("subtitles"))
