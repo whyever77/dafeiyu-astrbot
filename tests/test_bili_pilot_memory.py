@@ -17,7 +17,7 @@ from deploy.bili_activity import pilot_memory_check as readiness
 CHAT_ID = "pilot_deepseek/deepseek-flash"
 EMBEDDING_ID = "pilot_bge_m3"
 COMMIT = "28698d31250073280ff23cf4d00a1ea17041b48c"
-SECRET = "PRIVATE-KEY-MUST-NOT-LEAVE-THIS-FIXTURE"
+SECRET = "example-private-key-must-not-leave-this-fixture"
 RAW = "PRIVATE-RAW-RESPONSE-MUST-NOT-LEAVE"
 RUNTIME_FIELDS = {"container", "model", "embedding", "engine", "memory_write", "readback", "recall", "QQ"}
 
