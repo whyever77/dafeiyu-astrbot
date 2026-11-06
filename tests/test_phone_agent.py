@@ -186,6 +186,14 @@ class PhoneAgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(act["ok"])
         self.assertEqual(act["package"], "com.ss.android.ugc.aweme")
 
+        home_raw = await plugin.phone_act(ev, "go_home", "{}")
+        home_res = json.loads(home_raw)
+        self.assertTrue(home_res["ok"])
+        self.assertEqual(home_res["action"], "go_home")
+        self.assertEqual(self.mcp.pkg, "com.android.launcher3")
+        with self.assertRaises(ValueError):
+            await plugin.phone_act(ev, "close_app", "{}")
+
 
 if __name__ == "__main__":
     unittest.main()

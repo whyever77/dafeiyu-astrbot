@@ -480,6 +480,120 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["position_kind"], "analyzed_sample")
         self.assertEqual(saved["preference_owner"], "agent")
 
+    async def test_activity_note_supports_verified_douyin_video_and_rejects_search_tags(self):
+        with self.assertRaisesRegex(ValueError, "不能凭搜索词|没有该抖音视频的实际读取记录"):
+            await self.plugin.activity_note(FakeEvent(), bvid="douyin_search_paperbox", thought="不能用搜索标签")
+        with self.assertRaisesRegex(ValueError, "必须提供已核实的分P cid"):
+            await self.plugin.activity_note(FakeEvent(), bvid="BVexpected", thought="B站漏了cid")
+        with self.assertRaisesRegex(ValueError, "没有该抖音视频的实际读取记录"):
+            await self.plugin.activity_note(FakeEvent(), bvid="dy:0011223344556677", thought="未读过的抖音视频")
+
+        ep = self.plugin.store.life.record_episode(
+            SCOPE,
+            kind="douyin_video",
+            source_id="dy:abcdef0123456789:1",
+            evidence={
+                "ok": True,
+                "platform": "douyin",
+                "operation": "douyin_feed:search",
+                "video_key": "dy:abcdef0123456789",
+                "author": "手工阿鱼",
+                "caption": "三步折纸盒教程",
+                "audio_transcript": "先把正方形纸对折",
+                "fingerprint": "abcdef0123456789" * 4,
+            },
+            interpretation={"title": "三步折纸盒教程", "summary": "刷抖音看到 @手工阿鱼"},
+            subject_kind="agent",
+            subject_id="dy:abcdef0123456789",
+        )
+        res = json.loads(
+            await self.plugin.activity_note(
+                FakeEvent(), bvid="dy:abcdef0123456789", position=6, thought="折痕对齐那一步很关键"
+            )
+        )
+        self.assertTrue(res["saved"])
+        self.assertEqual(res["video_key"], "dy:abcdef0123456789")
+        self.assertTrue(res["episode_id"])
+
+        res_by_ep = json.loads(
+            await self.plugin.activity_note(
+                FakeEvent(), episode_id=ep["id"], position=4, thought="用episode_id也能记笔记"
+            )
+        )
+        self.assertTrue(res_by_ep["saved"])
+        self.assertEqual(res_by_ep["video_key"], "dy:abcdef0123456789")
+
+    async def test_foreground_phone_tool_calls_and_screenshots_are_bounded_per_turn(self):
+        def make_tool(name):
+            orig = types.SimpleNamespace(
+                name=name,
+                description=name,
+                parameters={"type": "object", "properties": {}},
+                active=True,
+                mcp_tool=types.SimpleNamespace(name=name),
+            )
+            return main.GuardedPhoneTool(orig, self.plugin)
+
+        self.plugin.gate = types.SimpleNamespace(call=AsyncMock(return_value="ok"))
+        self.plugin.phone = lambda: "mcp-client"
+        wait_tool = make_tool("wait")
+        shot_tool = make_tool("get_screenshot")
+
+        turn1 = FakeEvent(event_id="msg-turn-1")
+        ctx1 = types.SimpleNamespace(context=types.SimpleNamespace(event=turn1))
+        for _ in range(40):
+            await wait_tool.call(ctx1, seconds=0.2)
+        with self.assertRaisesRegex(ValueError, "本轮手机操作已达 40 次上限"):
+            await wait_tool.call(ctx1, seconds=0.2)
+
+        for _ in range(8):
+            await shot_tool.call(ctx1)
+        with self.assertRaisesRegex(ValueError, "本轮手机截图已达 8 次上限"):
+            await shot_tool.call(ctx1)
+
+        # df_phone_observe / df_phone_act share the same foreground turn budget
+        self.config["phone_free_explore_enabled"] = True
+        self.plugin.control.write_text(json.dumps(self.config))
+        with self.assertRaisesRegex(ValueError, "本轮手机操作已达 40 次上限"):
+            await self.plugin.phone_observe(turn1, include_screenshot=False)
+        with self.assertRaisesRegex(ValueError, "本轮手机操作已达 40 次上限"):
+            await self.plugin.phone_act(turn1, "go_back", "{}")
+
+        # A new user message gets a fresh turn budget
+        turn2 = FakeEvent(event_id="msg-turn-2")
+        ctx2 = types.SimpleNamespace(context=types.SimpleNamespace(event=turn2))
+        await wait_tool.call(ctx2, seconds=0.2)
+        await shot_tool.call(ctx2)
+
+        # Background runs with df_run_id are not limited by foreground turn counters
+        bg_ctx = types.SimpleNamespace(context=types.SimpleNamespace(event=FakeEvent(event_id="msg-turn-1", run_id="bg-run")))
+        for _ in range(45):
+            await wait_tool.call(bg_ctx, seconds=0.2)
+        for _ in range(10):
+            await shot_tool.call(bg_ctx)
+
+    async def test_guard_phone_injects_phone_and_douyin_capability_awareness_for_owner_only(self):
+        self.config.update(
+            phone_free_explore_enabled=True,
+            douyin_enabled=True,
+            learning_enabled=True,
+        )
+        self.plugin.control.write_text(json.dumps(self.config))
+        owner_req = types.SimpleNamespace(system_prompt="基础人格", func_tool=ToolSet(), contexts=[])
+        await self.plugin.guard_phone(FakeEvent(), owner_req)
+        self.assertIn("【自身虚拟手机与应用能力认知】", owner_req.system_prompt)
+        self.assertIn("com.ss.android.ugc.aweme", owner_req.system_prompt)
+        self.assertIn("go_home", owner_req.system_prompt)
+        self.assertIn("已退回手机桌面", owner_req.system_prompt)
+        self.assertNotIn("close_app", owner_req.system_prompt)
+        self.assertIn("df_douyin_feed", owner_req.system_prompt)
+        self.assertIn("df_phone_observe", owner_req.system_prompt)
+        self.assertIn("df_learn_evaluate", owner_req.system_prompt)
+
+        other_req = types.SimpleNamespace(system_prompt="基础人格", func_tool=ToolSet(), contexts=[])
+        await self.plugin.guard_phone(FakeEvent(scope=OTHER_SCOPE), other_req)
+        self.assertNotIn("【自身虚拟手机与应用能力认知】", other_req.system_prompt)
+
     async def test_true_owner_scope_is_required_even_for_background_event(self):
         with self.assertRaises(PermissionError):
             self.plugin.check_owner(FakeEvent(scope=OTHER_SCOPE, run_id="run"))
@@ -637,7 +751,7 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         persist.assert_not_awaited()
 
 
-class ToolImageTrimTests(unittest.TestCase):
+class ToolImageTrimTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def tool_image(path):
         return {
@@ -725,6 +839,94 @@ class ToolImageTrimTests(unittest.TestCase):
 
     def test_non_list_context_is_ignored(self):
         self.assertEqual(main.trim_tool_image_history(None), 0)
+        self.assertEqual(main.trim_tool_text_history(None), 0)
+
+    def test_trim_tool_text_contexts_folds_older_results_and_preserves_latest_and_user_messages(self):
+        class Message:
+            def __init__(self, data):
+                self.data = data
+
+            def model_dump(self):
+                return self.data
+
+        contexts = [
+            {"role": "system", "content": "系统人格提示"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "旧工具结果1：无障碍节点列表"},
+            Message({"role": "tool", "tool_call_id": "call_2", "content": "旧工具结果2：" + "A" * 300}),
+            {"role": "tool", "tool_call_id": "call_3", "content": "最新工具结果3：当前画面元素"},
+            {"role": "user", "content": "主人真实发言"},
+        ]
+        trimmed = main.trim_tool_text_contexts(contexts, keep=1, max_chars=200)
+        self.assertEqual(trimmed[0], {"role": "system", "content": "系统人格提示"})
+        self.assertEqual(trimmed[1]["role"], "tool")
+        self.assertEqual(trimmed[1]["tool_call_id"], "call_1")
+        self.assertEqual(trimmed[1]["content"], main.TOOL_TEXT_PLACEHOLDER)
+        self.assertTrue(trimmed[2]["content"].startswith(main.TOOL_TEXT_PLACEHOLDER))
+        self.assertTrue(trimmed[2]["content"].endswith("..."))
+        self.assertEqual(trimmed[3]["content"], "最新工具结果3：当前画面元素")
+        self.assertEqual(trimmed[4], {"role": "user", "content": "主人真实发言"})
+
+    async def test_context_guard_sanitize_and_api_error_fallback_fold_tool_text(self):
+        class FakeRunner:
+            def _sanitize_contexts_for_provider(self, contexts):
+                return contexts
+
+        class FakeProvider:
+            async def _handle_api_error(
+                self, e, payloads, context_query, func_tool, chosen_key, available_api_keys, retry_cnt, max_retries, image_fallback_used=False
+            ):
+                return ("delegated", retry_cnt, len(context_query))
+
+        runner_mod = types.ModuleType("astrbot.core.agent.runners.tool_loop_agent_runner")
+        runner_mod.ToolLoopAgentRunner = FakeRunner
+        provider_mod = types.ModuleType("astrbot.core.provider.sources.openai_source")
+        provider_mod.ProviderOpenAIOfficial = FakeProvider
+        with patch.dict(
+            sys.modules,
+            {
+                "astrbot.core.agent.runners": types.ModuleType("astrbot.core.agent.runners"),
+                "astrbot.core.agent.runners.tool_loop_agent_runner": runner_mod,
+                "astrbot.core.provider": types.ModuleType("astrbot.core.provider"),
+                "astrbot.core.provider.sources": types.ModuleType("astrbot.core.provider.sources"),
+                "astrbot.core.provider.sources.openai_source": provider_mod,
+            },
+        ):
+            self.assertTrue(main.install_tool_image_context_guard())
+            runner = FakeRunner()
+            sanitized = runner._sanitize_contexts_for_provider(
+                [
+                    self.tool_image("old-shot.jpg"),
+                    self.tool_image("new-shot.jpg"),
+                    {"role": "tool", "tool_call_id": "t1", "content": "old tool 1"},
+                    {"role": "tool", "tool_call_id": "t2", "content": "old tool 2"},
+                    {"role": "tool", "tool_call_id": "t3", "content": "new tool 3"},
+                ]
+            )
+            self.assertEqual(sanitized[0]["content"], main.TOOL_IMAGE_PLACEHOLDER)
+            self.assertEqual(sanitized[2]["content"], main.TOOL_TEXT_PLACEHOLDER)
+            self.assertEqual(sanitized[3]["content"], "old tool 2")
+            self.assertEqual(sanitized[4]["content"], "new tool 3")
+
+            provider = FakeProvider()
+            context_query = [
+                self.tool_image("shot.jpg"),
+                {"role": "tool", "tool_call_id": "t1", "content": "old tool 1"},
+                {"role": "tool", "tool_call_id": "t2", "content": "latest tool 2"},
+            ]
+            payloads = {"messages": list(context_query)}
+            err = RuntimeError("This model's maximum context length is 1048576 tokens.")
+            res1 = await provider._handle_api_error(
+                err, payloads, context_query, None, "k", ["k"], 0, 3, False
+            )
+            self.assertFalse(res1[0])
+            self.assertEqual(payloads["messages"][1]["content"], main.TOOL_TEXT_PLACEHOLDER)
+            self.assertEqual(payloads["messages"][2]["content"], "latest tool 2")
+
+            # Subsequent retry when nothing more can be stripped delegates to original handler
+            res2 = await provider._handle_api_error(
+                err, payloads, context_query, None, "k", ["k"], 1, 3, False
+            )
+            self.assertEqual(res2[0], "delegated")
 
 
 if __name__ == "__main__":

@@ -94,6 +94,8 @@ DEFAULTS = {
     "phone_allowed_packages": list(DEFAULT_ALLOWED_PACKAGES),
     "phone_max_steps_per_run": 15,
     "phone_audio_listen_seconds": 8,
+    "phone_tool_calls_per_turn": 40,
+    "phone_screenshots_per_turn": 8,
 }
 
 
@@ -111,7 +113,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
             raise ValueError(f"禁止将高危系统或支付应用加入允许列表: {pkg}")
         if pkg not in set(DEFAULT_ALLOWED_PACKAGES):
             raise ValueError(f"应用 {pkg!r} 不在允许列表 {DEFAULT_ALLOWED_PACKAGES} 中（仅允许 B站 和 抖音）")
-    for key, low, high in (("phone_max_steps_per_run", 1, 50), ("phone_audio_listen_seconds", 3, 20)):
+    for key, low, high in (("phone_max_steps_per_run", 1, 50), ("phone_audio_listen_seconds", 3, 20),
+                           ("phone_tool_calls_per_turn", 1, 200), ("phone_screenshots_per_turn", 0, 50)):
         val = cfg[key]
         if isinstance(val, bool) or not isinstance(val, int) or not low <= val <= high:
             raise ValueError(f"{key} 必须是 {low}–{high} 的整数")
