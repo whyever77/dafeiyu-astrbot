@@ -1,0 +1,11 @@
+# 大肥鱼核心插件依赖（装进 AstrBot 运行环境，或 bootstrap 建的测试 venv）
+#
+#   核心聊天（face_convert / schedule_awareness）：
+#     pip install -r deploy-kit/requirements-plugin.txt
+#   可选 B 站自主活动插件（astrbot_plugin_bili_activity）：
+#     pip install -r plugin/astrbot_plugin_bili_activity/requirements.txt
+#   云端 Docker 部署（见 deploy/Dockerfile）：
+#     另装 edge-tts（微软免费语音兜底）
+dashscope>=1.20          # 百炼：qwen3-asr 语音听写、qwen3-vl 视频看图、qwen-audio TTS
+imageio-ffmpeg>=0.5      # 自带 ffmpeg 二进制，视频抽帧/抽音轨免装系统 ffmpeg
+aiohttp>=3.9             # 媒体下载与离线视频回归测试

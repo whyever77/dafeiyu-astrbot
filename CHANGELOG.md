@@ -59,6 +59,19 @@
 - 同步及切换角落保留所选项目与章节开合；角色、镜头、望窗/睡姿八帧和星海60秒同步未改。未新增活动或写接口；房间新增可关闭的 60 秒只读自动同步（默认开启，复用 `/api/room/refresh`，页面隐藏时暂停）。
 - 新增13项项目读取测试；Windows/WSL观测台各98项通过（WSL 1 skip），Chrome虚构浏览器27项通过。真实项目库/SSH/LivingMemory联动未验证，未部署。详见 [PROJECT_SHELF_V01.md](deploy/memory_observatory/PROJECT_SHELF_V01.md)。
 
+## 2026-11-06 · deploy-kit：本地一键引导、干净组装与体检包（PR #3）
+
+- 合入并升级 @kibsmdadah-lgtm 的 `deploy-kit/` 与 `QUICKSTART.md`：把「装前体检 → 建虚拟环境装依赖 → 组装 `payload/` → 跑离线测试 → 装后复查」串成可验证的一键链路。
+- `deploy-kit/preflight.py` 增强：区分 `--stage install`（端口空闲不误报警）与 `--stage post`（复查 6199/6185/6099 均在监听）；新增插件源码语法编译、`face_map.json`（326 项）与人格提示词完整性检查；`.env` 校验识别未替换占位符、行尾注释、`export` 前缀、QQ 号合法性及大小号同号风险；支持 `--with-bili`（检查 Python 3.12+ / `Asia/Shanghai` 时区 / `Pillow` / `mcp`）与 `--json`。
+- 干净组装 `payload/`：默认只打包 2 个核心聊天插件（`face_convert` + `schedule_awareness`），避免无 Python 3.12 / `mcp` 的新用户拷入 `bili_activity` 报错（加 `--with-bili` 才一并打包）；自动剔除 `__pycache__`、`*.pyc`、本地 `config.json` 与数据库；自动剥离 `persona/大肥鱼-人格.md` 顶部说明生成可直接全选粘贴的 `payload/persona/大肥鱼-system-prompt.txt`。
+- 修复 `bootstrap.sh` / `bootstrap.ps1` 克隆模式下引用 `$ROOT` 导致找不到 `requirements-plugin.txt` 与 `preflight.py` 的问题；`bootstrap.ps1` 补齐 `uv pip` 兼容与测试退出码检查；支持清华源自动回退与 `--offline` 离线自检；`QUICKSTART.md` 对齐 NapCat 根目录 `napcat.bat` 自包含模式、`admins_id` 主人识别与 `asr_api_key` 解耦说明。新增 `tests/test_deploy_kit.py`（21 项断言全部通过）。
+
+## 2026-11-06 · face_convert v1.3.3：主人私聊补齐身份标记（issue #18）
+
+- 修复主人（`admins_id`）私聊时不进入身份标记分支、消息不带任何平台身份映射的问题；人格规则只认平台映射、不认自称，导致私聊里拒绝认主。
+- 现在管理员不论群聊还是私聊都标 `[主人(QQ号)]`；群友 `[昵称(QQ号)]`、访客私聊 `[主人的朋友 昵称(QQ号)]` 不变；非群非私聊（如频道）仍不标记；「喊了你一声」仍仅限群聊。人格无需改动。
+- 新增 7 项身份标记回归用例（四象限 + 其他会话 + 不重复打标 + 私聊空消息），旧代码下 `private-admin` 用例失败、修复后全部通过。感谢 @954031894 的定位与方案。
+
 ## 2026-11-05 · schedule_awareness v1.0.1 / v2.11.2：任务名/备注收敛（issue #17）
 
 - `_format_schedule` 新增 `_safe_label()`：折叠换行与空白、移除 `【】[]{}<>`、`：|` 和独立 `:` 转空格，任务名限 20 字（备注 60 字），空名回退「未命名任务」；`07:00` 这类时间冒号保留。

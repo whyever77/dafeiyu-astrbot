@@ -232,6 +232,61 @@ asyncio.run(plugin.scrub_drafts(_Event(), resp))
 want = "嗯？就这么一个字呀。\n晚安，别眯着眼睛又玩手机。"
 check("scrub-drafts-unwrap", resp.completion_text == want, repr(resp.completion_text))
 
+# 11) 身份标记四象限（issue #18：主人私聊也必须带平台身份映射）
+class _InEvent:
+    def __init__(self, sid, name, group="", private=False, text="在吗"):
+        self._sid, self._name, self._group, self._private = sid, name, group, private
+        self.message_str = text
+        self.is_wake = True
+        self._extra = {}
+
+    def get_sender_id(self):
+        return self._sid
+
+    def get_sender_name(self):
+        return self._name
+
+    def get_group_id(self):
+        return self._group
+
+    def is_private_chat(self):
+        return self._private
+
+    def get_messages(self):
+        return []
+
+    def get_self_id(self):
+        return "999"
+
+    def get_extra(self, key):
+        return self._extra.get(key)
+
+    def set_extra(self, key, value):
+        self._extra[key] = value
+
+
+plugin.admins = ["123456"]
+for label, ev, want in (
+    ("group-admin", _InEvent("123456", "主号", group="g1"), "[主人(123456)] 在吗"),
+    ("group-member", _InEvent("222", "小明", group="g1"), "[小明(222)] 在吗"),
+    ("private-admin", _InEvent("123456", "主号", private=True), "[主人(123456)] 在吗"),
+    ("private-guest", _InEvent("333", "访客", private=True), "[主人的朋友 访客(333)] 在吗"),
+    ("other-channel", _InEvent("123456", "主号"), "在吗"),
+):
+    asyncio.run(plugin.inbound_face_to_text(ev))
+    check("identity-tag: " + label, ev.message_str == want, repr(ev.message_str))
+
+# 已打过标签的不重复打
+ev = _InEvent("123456", "主号", private=True)
+asyncio.run(plugin.inbound_face_to_text(ev))
+asyncio.run(plugin.inbound_face_to_text(ev))
+check("identity-tag: no-double", ev.message_str == "[主人(123456)] 在吗", repr(ev.message_str))
+
+# 私聊空消息不补「喊了你一声」（那是群聊专用）
+ev = _InEvent("123456", "主号", private=True, text="")
+asyncio.run(plugin.inbound_face_to_text(ev))
+check("identity-tag: private-empty", ev.message_str == "", repr(ev.message_str))
+
 print()
 if failures:
     print("结果：%d 项失败" % len(failures))
