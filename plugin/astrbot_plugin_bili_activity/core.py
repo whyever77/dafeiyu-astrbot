@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 import time
 import uuid
@@ -33,6 +34,27 @@ def canonical(value):
 
 def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
+
+
+STALE_DECISION_SECONDS = 5
+
+
+def _event_timestamp(value):
+    """Best-effort epoch seconds; None means staleness cannot be proven."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return number if math.isfinite(number) else None
 
 
 def quiet_now(ranges, now=None):
@@ -174,9 +196,14 @@ class Store:
             if not row:
                 self.db.execute("INSERT INTO decisions VALUES(?,?,?,?)", (scope, actor, event_id, ""))
                 return None
-            if event_time is not None and float(event_time) + 1 < row["created"]:
+            event_at = _event_timestamp(event_time)
+            if event_at is not None and event_at + STALE_DECISION_SECONDS < row["created"]:
                 self.db.execute("INSERT INTO decisions VALUES(?,?,?,?)", (scope, actor, event_id, ""))
-                return None
+                self.event(scope, "decision_rejected_stale", {
+                    "proposal_id": row["id"], "event_id": event_id,
+                    "event_time": event_at, "created": row["created"],
+                    "skew_seconds": row["created"] - event_at})
+                return {"id": row["id"], "status": "stale", "event_id": event_id}
             status = "executing" if answer == "approve" else "rejected"
             self.db.execute("INSERT INTO decisions VALUES(?,?,?,?)", (scope, actor, event_id, row["id"]))
             self.db.execute("UPDATE proposals SET status=?,decision_event=? WHERE id=?",

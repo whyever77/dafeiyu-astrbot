@@ -6,6 +6,7 @@ import base64
 import copy
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -111,6 +112,17 @@ UNLABELLED_SERVERS = {"", "unlabelled"}
 
 def normalized_server_name(value):
     return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
+
+
+def _valid_timestamp(value):
+    """Return a positive finite float, or None for malformed config values."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
 
 
 TOOL_IMAGE_PREFIX = "[Image from tool '"
@@ -1189,20 +1201,22 @@ class BiliActivity(Star):
                 elif (not self.live or self.live.done()) and cfg["owner_scope"] and cfg["owner_id"]:
                     if cfg["dnd_ranges"] is not None and not quiet_now(cfg["dnd_ranges"]):
                         now = time.time()
-                        once = cfg["once_at"]
-                        due_once = once and now >= float(once) and self.store.get_setting("last_once") != once
+                        raw_once = cfg["once_at"]
+                        once = _valid_timestamp(raw_once)
+                        due_once = (once is not None and now >= once
+                                    and self.store.get_setting("last_once") != raw_once)
                         due_periodic = False
                         if cfg["periodic_enabled"] and cfg["one_shot_verified"]:
-                            next_at = self.store.get_setting("next_check_at")
+                            next_at = _valid_timestamp(self.store.get_setting("next_check_at"))
                             if next_at is None:
                                 # Schedule the first periodic run one random interval
                                 # from now; enabling must not trigger an immediate run.
                                 next_at = now + self.periodic_interval(cfg)
                                 self.store.setting("next_check_at", next_at)
-                            due_periodic = now >= float(next_at)
+                            due_periodic = now >= next_at
                         if (due_once or due_periodic) and (not cfg["life_enabled"] or self.life_ready(cfg)):
                             if due_once:
-                                self.store.setting("last_once", once)
+                                self.store.setting("last_once", raw_once)
                             if due_periodic:
                                 self.store.setting("next_check_at", now + self.periodic_interval(cfg))
                             self.last_tick = now
@@ -1408,16 +1422,34 @@ class BiliActivity(Star):
                         self.store.event(scope, "resume_observation", {"run_id": run_id, "current": observed_current})
                     active_task = asyncio.current_task()
                     async def check_connection():
+                        failures = 0
                         while True:
                             await asyncio.sleep(15)
                             try:
-                                health = await self.bili(10).json_call("bili_phone", {"operation": "status", "args": {}})
-                                if not health.get("online"):
-                                    raise TransportError("手机离线")
+                                health = await self.bili(10).json_call(
+                                    "bili_phone", {"operation": "status", "args": {}})
                             except asyncio.CancelledError:
                                 raise
-                            except Exception:
-                                self.store.event(scope, "phone_disconnected", {"run_id": run_id})
+                            except Exception as exc:
+                                failures += 1
+                                self.store.event(scope, "phone_check_failed", {
+                                    "run_id": run_id, "error": type(exc).__name__, "failures": failures})
+                                if failures >= 3:
+                                    self.store.event(scope, "phone_disconnected", {
+                                        "run_id": run_id, "failures": failures})
+                                    active_task.cancel()
+                                    return
+                                continue
+                            online = health.get("online") if isinstance(health, dict) else None
+                            if online is True:
+                                failures = 0
+                                continue
+                            failures += 1
+                            self.store.event(scope, "phone_check_failed", {
+                                "run_id": run_id, "online": online, "failures": failures})
+                            if failures >= 3:
+                                self.store.event(scope, "phone_disconnected", {
+                                    "run_id": run_id, "failures": failures})
                                 active_task.cancel()
                                 return
                     if not writing and not reviewing:
@@ -1725,6 +1757,9 @@ class BiliActivity(Star):
                                      getattr(event.message_obj, "timestamp", None))
         if proposal:
             event.stop_event()
+            if proposal["status"] == "stale":
+                await event.send(event.plain_result("这条回复比提议还早，可能是时钟偏差；我没有执行。请再发一次「可以」或「算了」。"))
+                return
             if proposal["status"] == "rejected":
                 self.settle_goal_proposal(event.unified_msg_origin, proposal["id"], "paused")
                 await event.send(event.plain_result("好，那就不动它。"))
