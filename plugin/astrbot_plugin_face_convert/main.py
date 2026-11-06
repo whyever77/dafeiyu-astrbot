@@ -740,15 +740,15 @@ class FaceConvertPlugin(Star):
                 logger.info(f"[face_convert] 收信翻译: {extra}")
 
         # 身份标记（只进她的上下文，对方看不到字面量）：
-        # 群聊 -> [昵称(QQ号)]，管理员标「主人」；陌生人私聊 -> [主人的朋友 昵称(QQ号)]
+        # 群聊 -> [昵称(QQ号)]；陌生人私聊 -> [主人的朋友 昵称(QQ号)]；
+        # 管理员无论群聊还是私聊都标 [主人(QQ号)]——人格只认平台映射，私聊也得给（issue #18）
         try:
             if not event.get_extra("_fy_tagged"):
                 sid = str(event.get_sender_id())
                 is_group = bool(event.get_group_id())
-                is_guest = (not is_group) and event.is_private_chat() and sid not in self.admins
-                if is_group or is_guest:
+                if is_group or event.is_private_chat():
                     name = re.sub(r"[\[\]\r\n]", "", (event.get_sender_name() or "").strip())[:16]
-                    if is_group and sid in self.admins:
+                    if sid in self.admins:
                         tag = f"主人({sid})"
                     elif is_group:
                         tag = f"{name}({sid})" if name else f"群友({sid})"
