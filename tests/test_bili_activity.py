@@ -84,8 +84,19 @@ def load_plugin():
     for name, values in attrs.items():
         modules[name] = types.ModuleType(name)
         vars(modules[name]).update(values)
-    with patch.dict(sys.modules, modules):
+    saved = {name: sys.modules.get(name) for name in modules}
+    sys.modules.update(modules)
+    try:
         return load_module(package.__name__ + ".main", PLUGIN / "main.py")
+    finally:
+        # Restore only the fake AstrBot modules. Third-party modules (PIL, mcp)
+        # and the plugin's own submodules stay cached, so later tests import the
+        # same module objects main.py actually uses.
+        for name, previous in saved.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
 
 
 main = load_plugin()
@@ -138,6 +149,21 @@ class StoreTests(unittest.TestCase):
         self.store.finish_proposal(row["id"], {"verified": True})
         self.assertIsNone(self.store.decide(SCOPE, "12345", "可以", "e3"))
 
+    def test_stale_message_timestamp_is_reported_instead_of_silently_dropped(self):
+        row = self.proposal()
+        self.offer(row)
+        stale = self.store.decide(SCOPE, "12345", "可以", "e1",
+                                  row["created"] - core.STALE_DECISION_SECONDS - 1)
+        self.assertEqual(stale["status"], "stale")
+        fresh = self.store.decide(SCOPE, "12345", "算了", "e2", row["created"] - 1)
+        self.assertEqual(fresh["status"], "rejected")
+
+    def test_malformed_config_timestamps_are_ignored(self):
+        self.assertIsNone(main._valid_timestamp("2026-11-06T10:00"))
+        self.assertIsNone(main._valid_timestamp(True))
+        self.assertIsNone(main._valid_timestamp(float("nan")))
+        self.assertEqual(main._valid_timestamp("12.5"), 12.5)
+
     def test_duplicate_old_qq_answer_cannot_approve_new_proposal(self):
         first = self.proposal()
         self.offer(first)
@@ -163,7 +189,8 @@ class StoreTests(unittest.TestCase):
             row = self.proposal()
             self.offer(row)
         with patch.object(core.time, "time", return_value=110):
-            self.assertIsNone(self.store.decide(SCOPE, "12345", "可以", "delayed", event_time=90))
+            stale = self.store.decide(SCOPE, "12345", "可以", "delayed", event_time=90)
+            self.assertEqual(stale["status"], "stale")
             self.assertIsNone(self.store.decide(SCOPE, "12345", "可以", "delayed", event_time=110))
             self.assertIsNotNone(self.store.decide(SCOPE, "12345", "可以", "new", event_time=110))
 

@@ -28,7 +28,8 @@ operation_lock = (state / ".proxy.lock").open("a")
 fcntl.flock(operation_lock, fcntl.LOCK_EX)
 pid_file = state / "proxy.pid.json"
 log_file = state / "proxy.log"
-command = [sys.executable, "-u", str(root / "proxy.py"), "--listen-host", gateway, "--port", "8011"]
+command = [sys.executable, "-u", str(root / "proxy.py"), "--listen-host", gateway, "--port", "8011",
+           "--allow-container", "astrbot"]
 
 def owned_process():
     if not pid_file.exists():
