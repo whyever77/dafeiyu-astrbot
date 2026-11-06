@@ -74,14 +74,18 @@ deploy/ops_mcp/                        ← 🛠️ 云端运维 MCP（health/log
 deploy/browser_use/                    ← 🌐 只读浏览器任务（Browser Use MCP / 反向隧道 / 启停）
 deploy/bili_activity/                  ← B站服务、活动开关、升级及验证说明
 deploy/incident_20261020/              ← 🧹 旧测试记录隔离脚本与复盘
+deploy-kit/                            ← 🧰 本地一键引导与体检包（preflight / bootstrap / 干净组装 payload）
+QUICKSTART.md                          ← ⚡ 十步从零到聊天速通卡片
 CHANGELOG.md                           ← 更新日志
-deploy/                                ← 云服务器部署套件（Docker Compose + 补丁 + 备份 + 运维笔记）
-tests/                                 ← 回归测试（插件文本规则 / 路径解析）
+tests/                                 ← 回归测试（插件文本规则 / 路径解析 / 部署体检）
 assets/avatars/                        ← 头像素材（18 张，v3-20261025 新立绘）
 assets/voice-demo/                     ← 音色样本与复刻链路说明
 ```
 
 ## 🚀 快速开始
+
+> 想少踩坑：先 `python deploy-kit/preflight.py` 体检，再 `bash deploy-kit/bootstrap.sh`
+> 一键装依赖 + 组装 + 自检（Windows 用 `bootstrap.ps1`）。十步全流程见 **[QUICKSTART.md](QUICKSTART.md)**。
 
 1. 按 `docs/部署指南.md` 搭好 AstrBot + NapCat + QQ 小号
 2. 把 `plugin/astrbot_plugin_face_convert/` 放进 AstrBot 的 `data/plugins/`
