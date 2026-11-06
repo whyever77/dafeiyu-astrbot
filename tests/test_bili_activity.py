@@ -572,6 +572,27 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(10):
             await shot_tool.call(bg_ctx)
 
+    async def test_guard_phone_injects_phone_and_douyin_capability_awareness_for_owner_only(self):
+        self.config.update(
+            phone_free_explore_enabled=True,
+            douyin_enabled=True,
+            learning_enabled=True,
+        )
+        self.plugin.control.write_text(json.dumps(self.config))
+        owner_req = types.SimpleNamespace(system_prompt="基础人格", func_tool=ToolSet(), contexts=[])
+        await self.plugin.guard_phone(FakeEvent(), owner_req)
+        self.assertIn("【自身虚拟手机与应用能力认知】", owner_req.system_prompt)
+        self.assertIn("com.ss.android.ugc.aweme", owner_req.system_prompt)
+        self.assertIn("go_home", owner_req.system_prompt)
+        self.assertIn("close_app", owner_req.system_prompt)
+        self.assertIn("df_douyin_feed", owner_req.system_prompt)
+        self.assertIn("df_phone_observe", owner_req.system_prompt)
+        self.assertIn("df_learn_evaluate", owner_req.system_prompt)
+
+        other_req = types.SimpleNamespace(system_prompt="基础人格", func_tool=ToolSet(), contexts=[])
+        await self.plugin.guard_phone(FakeEvent(scope=OTHER_SCOPE), other_req)
+        self.assertNotIn("【自身虚拟手机与应用能力认知】", other_req.system_prompt)
+
     async def test_true_owner_scope_is_required_even_for_background_event(self):
         with self.assertRaises(PermissionError):
             self.plugin.check_owner(FakeEvent(scope=OTHER_SCOPE, run_id="run"))

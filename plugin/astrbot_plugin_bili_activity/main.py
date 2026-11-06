@@ -1786,10 +1786,11 @@ class BiliActivity(Star):
                     if cfg["phone_free_explore_enabled"] and not writing and not reviewing:
                         tool_names = tool_names | PHONE_EXPLORE_TOOLS
                         prompt += ("\n已开启虚拟手机自由操作（严格限定B站与抖音）：可用 df_phone_observe 观察当前界面/截图/音频，"
-                                   "用 df_phone_act 做允许范围内的点击/滑动/输入/返回；绝不可触碰支付、密码、系统设置。")
+                                   "用 df_phone_act 做允许范围内的打开应用(launch_app)、退出当前应用回桌面(close_app/go_home)、点击/滑动/输入/返回；绝不可触碰支付、密码、系统设置。")
                     if cfg["douyin_enabled"] and not writing and not reviewing:
                         tool_names = tool_names | DOUYIN_TOOLS
                         prompt += ("\n已开启抖音探索与创作：可用 df_douyin_feed 刷推荐/关注/搜索视频（含画面与声音理解），"
+                                   "用 df_activity_note(video_key=...) 记录抖音观看感想，"
                                    "用 df_douyin_propose 提议点赞/收藏/关注/评论，用 df_douyin_create_post 准备作品草稿并向主人发起发布审批（主人批准后直接点「发布」）。")
                     if cfg["learning_enabled"] and not reviewing:
                         tool_names = tool_names | LEARNING_TOOLS
@@ -1895,6 +1896,33 @@ class BiliActivity(Star):
                     receipt["livingmemory_id"] = remote_id
                 self.store.event(event.unified_msg_origin, "memory_consolidation_result", receipt)
 
+    def capability_context(self, cfg: dict) -> str:
+        """Concise self-awareness of active virtual phone, Bilibili, Douyin, and learning capabilities."""
+        parts = [
+            "【自身虚拟手机与应用能力认知】你连接的同一台虚拟手机同时装有 B站（tv.danmaku.bili）与抖音（com.ss.android.ugc.aweme）。"
+            "你的手机查看与控制工具（get_current_app、get_screenshot/df_screen、get_ui_elements、listen_audio、tap、swipe、launch_app、go_back、go_home）"
+            "对 B站、抖音和手机桌面同样生效，你可以直接看清并操作抖音界面，绝不要误以为自己只能看B站、看不到或碰不到抖音。"
+            "当主人让你关掉/退出抖音或B站、或询问“关了吗”时，先用 get_current_app（或 df_phone_observe）查看当前前台包名；"
+            "若仍在抖音（com.ss.android.ugc.aweme）或B站（tv.danmaku.bili）中，直接调用 go_home（或 df_phone_act 的 close_app/go_home）退回手机桌面停止播放，"
+            "再用 get_current_app 核实已离开该应用后如实回复，不要说“没有点抖音关闭的工具”。"
+        ]
+        if cfg.get("phone_free_explore_enabled"):
+            parts.append(
+                "已开启手机自由操作：可用 df_phone_observe 查看当前前台应用/控件/截图/音频，"
+                "用 df_phone_act 执行 launch_app（打开B站/抖音）、close_app/go_home（退出当前应用回桌面）、tap/tap_element/swipe/type_text/go_back。"
+            )
+        if cfg.get("douyin_enabled"):
+            parts.append(
+                "已开启抖音探索与互动：可用 df_douyin_feed 刷推荐/关注/搜索/当前抖音视频（含画面与声音），"
+                "用 df_activity_note（传抖音真实 video_key 或 episode_id，无需 cid）记录观看笔记，"
+                "用 df_douyin_propose 提议抖音点赞/收藏/关注/评论，用 df_douyin_create_post 准备作品草稿并提请主人审批。"
+            )
+        if cfg.get("learning_enabled"):
+            parts.append(
+                "已开启明辨学习：可用 df_learn_evaluate 对B站/抖音见闻做认知门控评估，用 df_knowledge 检索、由主人确认（confirm）或推翻（refute）学识卡片。"
+            )
+        return "\n" + "".join(parts)
+
     @filter.on_llm_request(priority=-100)
     async def guard_phone(self, event: AstrMessageEvent, req):
         trimmed = trim_tool_image_history(getattr(req, "contexts", None), keep=1)
@@ -1950,6 +1978,8 @@ class BiliActivity(Star):
                     req.func_tool.remove_tool(tool.name)
         req.system_prompt = (req.system_prompt or "") + "\nB站账号写入必须通过df_bili_propose提交精确参数，默认等待主人答复；仅控制器按主人显式配置判定自动执行，模型不能批准。不要通过手机点击绕过。截图分享使用df_screen及df_share_screen，不要将截图成功等同于QQ发送成功。对主人汇报B站动作时用大白话：只说成了/没成、确认了什么、没确认什么；不要念 accepted/verified/visibility/risk_code 这些内部字段，也不要用弹幕字段解释点赞。"
         if event.unified_msg_origin == cfg["owner_scope"]:
+            if not self.is_reply_run(event):
+                req.system_prompt += self.capability_context(cfg)
             if cfg["comment_learning_enabled"]:
                 req.system_prompt += self.reply_watch().context(event.unified_msg_origin, cfg)
             if cfg["learning_enabled"]:
@@ -3062,8 +3092,8 @@ class BiliActivity(Star):
         """在允许的应用（严格限定B站与抖音）内执行安全的虚拟手机操作；遇支付/密码/系统设置自动拦截。
 
         Args:
-            action(string): launch_app/tap/tap_element/swipe/type_text/press_key/go_back/go_home/wait。
-            arguments(string): JSON对象；launch_app传app(bilibili/douyin)，tap传x,y，tap_element传text或resource_id，swipe传direction(up/down/left/right)，type_text传text,submit。
+            action(string): launch_app/close_app/exit_app/tap/tap_element/swipe/type_text/press_key/go_back/go_home/wait（关掉/退出抖音或B站回桌面用 go_home 或 close_app）。
+            arguments(string): JSON对象；launch_app传app(bilibili/douyin)，close_app/go_home无需参数即可退出当前应用回桌面，tap传x,y，tap_element传text或resource_id，swipe传direction(up/down/left/right)，type_text传text,submit。
         """
         cfg = self.check_owner(event)
         if not cfg["phone_free_explore_enabled"]:
