@@ -1334,14 +1334,19 @@ class BiliActivity(Star):
                         }))
                         tool_names = LIFE_TOOLS | WORKSHOP_TOOLS | {"df_share_thought"}
                     else:
-                        prompt = PROMPT.format(max_videos=cfg["max_videos"], max_minutes=cfg["max_minutes"],
-                                               history=canonical(MemoryPolicy(self.store).recall(scope, cfg, limit=5)
-                                                                 if memory_enabled(cfg) else self.store.history(scope)))
+                        recalled = (MemoryPolicy(self.store).recall(scope, cfg, limit=5)
+                                    if life_mode or memory_enabled(cfg) else None)
+                        prompt = PROMPT.format(
+                            max_videos=cfg["max_videos"], max_minutes=cfg["max_minutes"],
+                            history=("见下方持续活动资料中的episodes"
+                                     if life_mode and memory_enabled(cfg)
+                                     else canonical(recalled if memory_enabled(cfg) else self.store.history(scope))),
+                        )
                         tool_names = ACTIVITY_TOOLS
                     if life_mode and not writing and not reviewing:
                         prompt += LIFE_PROMPT.format(context=canonical({
                             "goals": self.store.life.goals(scope),
-                            "episodes": MemoryPolicy(self.store).recall(scope, cfg, limit=5),
+                            "episodes": recalled,
                             "agent_interests": self.store.life.interests(scope),
                             "user_explicit_interests": self.store.life.interests(scope, "user"),
                             "current_device_observation": observed_current,
