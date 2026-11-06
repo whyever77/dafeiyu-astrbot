@@ -47,6 +47,18 @@
 
 最多展示3条近期中断记录，只陈述可确定的边界：达到时间/预算上限、被取消、重启恢复时记为中断、失败。取消和失败的具体原因不能只凭状态断言；不从运行总结复制原因，不推断主人的态度、责任或机器人的情绪。中断也不等于整个目标失败。
 
+### 2026-11-06 拟人化增量：作息、跨日项目、前台打断衔接与自然中文备忘
+
+1. **当前作息与跨日项目并入近况快照（`rhythm` 与 `projects`）**：
+   - `rhythm` 只读复用 `rhythm.snapshot`，在开启生活节律时返回当前时段（`morning` / `day` / `wind_down` / `rest_after_activity` / `sleep`）、原因、本地时间与窗口内已活动分钟数，供前台聊天感知当下作息阶段（如睡前仅整理作品、活动后留白休息），不生成生理疲劳或睡梦。
+   - `projects` 在开启跨日项目且表已初始化时（`ready(create=False)`，绝不建表或写备份），只读返回最多3个当前会话项目、当前阶段状态、回看是否已记录、后续问题（`next_question`）及是否到点待回看/待推进（`due_task: review | advance`）；来源被修订或失效时降为 `portfolio_valid=false` 并提示重新核对。
+2. **被主人前台操作/消息打断的衔接（`foreground_preempt` 与 `recent_preemption`）**：
+   - 中断记录关联同轮 `trigger`（活动类型 `browsing` / `writing` / `project_review`）与 `goal_selected`（同会话 agent 目标标题）。
+   - 当 `status='cancelled'` 且运行时间窗口内存在受控白名单的 `foreground_preempt` 事件（如主人请求截图、使用手机、调整目标/项目/作品等），记录 `preempt_reason` 与 `preempt_explanation`；非白名单字符串、外会话事件或超出时间窗口的事件一律忽略。
+   - 若最近一次中断属于白名单前台打断、发生在最近15分钟（`900` 秒）内且此后尚无新运行结束，快照额外提供 `recent_preemption`，让她在主人开口时能自然接话“刚才正在看/写什么，因为你找我刚停下”。
+3. **系统提示词改为自然中文备忘（`_format_context`）**：
+   - `df_self_reflect` 工具与 `df_life_status.self_expression` 继续返回结构化 JSON；而注入 `req.system_prompt` 的 `SelfExpression.context()` 改为紧凑中文备忘条目，剔除 `body_hash`、`check_episode_id`、`source_episode_id`、`episode_scan_limit` 等内部字段，减少公文汇报腔。
+
 ## 接入和行为边界
 
 - 新工具 `df_self_reflect` 只读返回上述资料；`df_life_status.self_expression` 同时提供状态快照。
@@ -94,6 +106,8 @@ git diff --check
 | 最终定向测试 | 33项，1.126秒，OK（0 skip） |
 | 最终全量回归 | 518项，24.893秒，OK（11 skip） |
 | 补公开回复隔离前的一次全量回归 | 517项，30.990秒，OK（11 skip） |
+| 2026-11-06 拟人化增量定向测试（无网只读容器 Python 3.12） | 37项，2.645秒，OK（0 skip） |
+| 2026-11-06 全量 `test_bili_*.py` 回归（无网只读容器 Python 3.12） | 610项，47.227秒，OK（1 skip：Windows junction 宿主专属测试） |
 | `git diff --check` | 通过；只有既有 Git 换行转换提示，无空白错误 |
 | 受保护模块、人格、手机启动脚本 diff | 空 |
 

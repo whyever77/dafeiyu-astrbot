@@ -2,6 +2,13 @@
 
 > 每一次值得说的进化都会记在这里。
 
+## 未发布 · 近况回顾拟人化衔接与中文备忘（2026-11-06）
+
+- `SelfExpression.snapshot` 只读并入当前作息节律（`rhythm` 时段、原因、已活动分钟数）与跨日项目摘要（`projects` 阶段进度、回看状态、后续问题与到期任务 `review`/`advance`），未初始化项目表时不建表、不写备份。
+- 中断记录关联同轮 `trigger` 活动类型与 `goal_selected` 目标标题；当 `cancelled` 运行匹配受控白名单 `foreground_preempt` 事件时附带打断说明，并在15分钟窗口且无后续运行完成时提供 `recent_preemption`，支持被主人找她/操作打断后的自然接话。
+- `SelfExpression.context` 注入提示词由原始 JSON 改为紧凑中文备忘，剔除 `body_hash`、`check_episode_id`、`source_episode_id`、`episode_scan_limit` 等内部字段；`df_self_reflect` 工具与状态接口仍返回结构化 JSON。
+- 无网只读容器（`dafeiyu-life-pilot-astrbot`，Python 3.12）定向测试 `test_bili_self_expression.py` 37项 OK（0 skip），全量 `test_bili_*.py` 610项 OK（1 skip：Windows junction 专属测试）。未修改人格、审批、传输或运行配置，未部署。见 [SELF_EXPRESSION_V01.md](deploy/bili_activity/SELF_EXPRESSION_V01.md)。
+
 ## 未发布 · 隔离记忆联查验收准备（2026-11-06）
 
 - 新增只读检查器 `python -B -m deploy.bili_activity.pilot_memory_check --pilot-dir .life-pilot/v01`：核对固定版本/模型ID、源码与活动配置哈希、QQ/活动/记忆访问与清理开关，密钥只报告是否存在。状态 `invalid_input`/`blocked_config` 退出3，`missing_keys`/`models_disabled`/`models_partly_enabled` 退出2，`config_ready` 退出0；始终 `live_verified=false`，运行时八项UNVERIFIED。
