@@ -230,6 +230,204 @@ class ExpressionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.snapshot(now=now)
 
+    def test_rhythm_phase_and_load_are_exposed_readonly_in_snapshot_and_context(self):
+        from datetime import datetime
+        self.assertEqual(self.snapshot()["rhythm"], {"enabled": False, "configured": False, "phase": "disabled"})
+        cfg = self.cfg | {"life_decision_enabled": True, "life_rhythm_enabled": True}
+        wind_down_at = datetime.fromisoformat("2026-11-01T22:30:00+08:00").timestamp()
+        self.store.db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?)",
+                              ("r1", SCOPE, wind_down_at - 900, wind_down_at - 60, "completed", "PRIVATE SUMMARY"))
+        before = list(self.store.db.iterdump())
+        snap = self.view.snapshot(SCOPE, cfg, now=wind_down_at)
+        self.assertEqual(snap["rhythm"]["phase"], "wind_down")
+        self.assertTrue(snap["rhythm"]["writing_only"])
+        self.assertEqual(snap["rhythm"]["recent_activity_minutes"], 14.0)
+        memo = self.view.context(SCOPE, cfg, now=wind_down_at)
+        self.assertIn("睡前整理时段", memo)
+        self.assertIn("14.0/20 分钟", memo)
+        self.assertNotIn("PRIVATE SUMMARY", memo)
+        self.assertEqual(list(self.store.db.iterdump()), before)
+
+        day_at = datetime.fromisoformat("2026-11-02T14:00:00+08:00").timestamp()
+        self.store.db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?)",
+                              ("r2", SCOPE, day_at - 1500, day_at - 300, "completed", "PRIVATE SUMMARY"))
+        rest_snap = self.view.snapshot(SCOPE, cfg, now=day_at)
+        self.assertEqual(rest_snap["rhythm"]["phase"], "rest_after_activity")
+        self.assertFalse(rest_snap["rhythm"]["allow_activity"])
+        self.assertIn("活动后留白休息", self.view.context(SCOPE, cfg, now=day_at))
+
+    def test_projects_stage_and_due_states_are_exposed_readonly_without_creating_tables(self):
+        Projects = importlib.import_module("bili_activity_test.projects").Projects
+        cfg = self.cfg | {"life_projects_enabled": True, "workshop_enabled": True, "life_decision_enabled": True}
+        before_tables = {r[0] for r in self.store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertEqual(self.view.snapshot(SCOPE, cfg)["projects"], [])
+        self.assertEqual({r[0] for r in self.store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}, before_tables)
+
+        goal = self.goal("proj-g1")
+        projects = Projects(self.store)
+        proj = projects.create(SCOPE, goal["id"], "海洋建筑考据", "分阶段核对不同资料", cfg)
+        other_goal = self.goal("other-g", scope=OTHER)
+        projects.create(OTHER, other_goal["id"], "外部会话项目", "不应出现", cfg)
+        source = episode(self.store, goal_id=goal["id"])
+        workshop = Workshop(self.store)
+        work = workshop.create(SCOPE, goal["id"], "第一阶段笔记", "pw1")
+        body = f"## 资料观察\n阶段观察。[E:{source['id']}]\n## 我的想法\n阶段想法。\n## 待核实\n阶段待核实。"
+        work = workshop.revise(SCOPE, work["id"], body, [source["id"]], 0, "pr1")
+        episode(self.store, kind="work_checked", goal_id=goal["id"], evidence={
+            "work_id": work["id"], "revision": 1, "body_hash": work["body_hash"],
+            "source_ids": work["source_ids"], "checks_passed": True})
+        self.store.life.update_goal(SCOPE, goal["id"], status="completed")
+
+        # Before 24h review delay: not due yet.
+        early = self.view.snapshot(SCOPE, cfg, now=1800000000 + 3600)
+        self.assertEqual(len(early["projects"]), 1)
+        self.assertEqual(early["projects"][0]["project_id"], proj["id"])
+        self.assertIsNone(early["projects"][0]["due_task"])
+
+        # After 24h delay: review is due.
+        due_time = 1800000000 + 25 * 3600
+        due_snap = self.view.snapshot(SCOPE, cfg, now=due_time)
+        self.assertEqual(due_snap["projects"][0]["due_task"], "review")
+        self.assertIn("阶段已完成，到点待回看", self.view.context(SCOPE, cfg, now=due_time))
+
+        # Record review with next_question: advance is due.
+        with patch.object(importlib.import_module("bili_activity_test.projects").time, "time", return_value=due_time):
+            projects.review(SCOPE, proj["id"], 1, "阶段一收获", "单一来源局限", "查第二份独立案例", cfg)
+        adv_snap = self.view.snapshot(SCOPE, cfg, now=due_time + 60)
+        self.assertEqual(adv_snap["projects"][0]["due_task"], "advance")
+        self.assertEqual(adv_snap["projects"][0]["current_stage"]["next_question"], "查第二份独立案例")
+        self.assertIn("已回看，待推进下一阶段：查第二份独立案例", self.view.context(SCOPE, cfg, now=due_time + 60))
+
+        # Supersede source with failed read: portfolio invalidated and flagged for recheck.
+        episode(self.store, goal_id=goal["id"], supersedes_id=source["id"],
+                evidence={"operation": "info", "result_excerpt": '{"ok":false}'})
+        invalid_snap = self.view.snapshot(SCOPE, cfg, now=due_time + 120)
+        self.assertFalse(invalid_snap["projects"][0]["current_stage"]["portfolio_valid"])
+        self.assertIsNone(invalid_snap["projects"][0]["due_task"])
+        self.assertIn("来源或作品结构待重新核对", self.view.context(SCOPE, cfg, now=due_time + 120))
+
+    def test_foreground_preemption_links_activity_and_goal_with_whitelist_and_recency_window(self):
+        goal = self.goal("preempt-g")
+        started, ended = 1799999800, 1799999860
+        self.store.db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?)",
+                              ("run-preempt", SCOPE, started, ended, "cancelled", "UNTRUSTED SUMMARY"))
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)",
+                              (started, SCOPE, "trigger", core.canonical({"run_id": "run-preempt", "activity": "browsing"})))
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)",
+                              (started + 1, SCOPE, "goal_selected", core.canonical({"run_id": "run-preempt", "goal_id": goal["id"]})))
+        # Untrusted or foreign-scope preemption reasons must be ignored.
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)",
+                              (ended, OTHER, "foreground_preempt", core.canonical({"reason": "主人使用手机"})))
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)",
+                              (ended, SCOPE, "foreground_preempt", core.canonical({"reason": "RAW SECRET: 非白名单原因"})))
+        snap_untrusted = self.snapshot()
+        self.assertIsNone(snap_untrusted["recent_preemption"])
+        self.assertNotIn("preempt_reason", snap_untrusted["interruptions"][0])
+        self.assertNotIn("RAW SECRET", self.view.context(SCOPE, self.cfg))
+
+        # Whitelisted foreground preemption within the run window links cleanly.
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)",
+                              (ended, SCOPE, "foreground_preempt", core.canonical({"reason": "主人请求截图"})))
+        snap = self.snapshot()
+        top = snap["interruptions"][0]
+        self.assertEqual(top["known_reason"], expression.STOP_REASONS["cancelled"])
+        self.assertEqual(top["activity"], "browsing")
+        self.assertEqual((top["goal_id"], top["goal_title"]), (goal["id"], "合作建造"))
+        self.assertEqual(top["preempt_reason"], "主人请求截图")
+        self.assertIsNotNone(snap["recent_preemption"])
+        self.assertEqual(snap["recent_preemption"]["ago_seconds"], 140)
+        memo = self.view.context(SCOPE, self.cfg)
+        self.assertIn("刚刚停下的手头事：因主人要看截图而停下了当时的后台活动；当时正在逛B站看资料（目标《合作建造》），进度已保留。", memo)
+
+        # Outside the 15-minute recency window, recent_preemption clears.
+        later = self.view.snapshot(SCOPE, self.cfg, now=ended + 901)
+        self.assertIsNone(later["recent_preemption"])
+        self.assertEqual(later["interruptions"][0]["preempt_reason"], "主人请求截图")
+
+        # If a newer run finishes after the preemption, recent_preemption also clears.
+        self.store.db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?)",
+                              ("run-after", SCOPE, ended + 10, ended + 40, "completed", "done"))
+        self.assertIsNone(self.snapshot()["recent_preemption"])
+
+    def test_natural_context_memo_omits_internal_hashes_and_ids_while_keeping_boundaries(self):
+        source, work, check = self.checked_work()
+        for bvid, age, polarity in (("BV1", 20, -1), ("BV2", 21, -1), ("BV3", 1, 1), ("BV4", 2, 1)):
+            interest(self.store, bvid, age=age, polarity=polarity)
+        memo = self.view.context(SCOPE, self.cfg)
+        self.assertIn(expression.MARKER, memo)
+        self.assertIn("只读回顾", memo)
+        self.assertIn("已核对关联作品第 1 版与当前来源", memo)
+        self.assertIn("自身兴趣观察「海洋」：此前窗口（2 个来源）偏不太感冒，近期窗口（2 个来源）转为偏感兴趣", memo)
+        for internal in (work["body_hash"], work["id"], check["id"], source["id"], "episode_scan_limit", "checked_work_record"):
+            self.assertNotIn(internal, memo)
+
+    def test_held_thoughts_expose_blocked_shares_and_clear_when_delivered_or_invalid(self):
+        source, work, _ = self.checked_work()
+        goal = self.store.life.goals(SCOPE, include_terminal=True)[0]
+        now = 1800000000
+        # Foreign scope and untrusted reasons are ignored.
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)", (
+            now - 120, OTHER, "share_held", core.canonical({
+                "kind": "thought", "delivery_id": "t-other", "fingerprint": "fp-other",
+                "excerpt": "外部会话念头", "reason": "现在是免打扰时间"})))
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)", (
+            now - 110, SCOPE, "share_held", core.canonical({
+                "kind": "thought", "delivery_id": "t-bad", "fingerprint": "fp-bad",
+                "excerpt": "不应出现", "reason": "RAW SECRET: 非白名单拒绝"})))
+        self.assertEqual(self.snapshot()["held_thoughts"], [])
+
+        # Valid held thought and held work excerpt are surfaced read-only.
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)", (
+            now - 90, SCOPE, "share_held", core.canonical({
+                "kind": "thought", "delivery_id": "thought:r1:fp1", "fingerprint": "fp1",
+                "excerpt": "看到一段双人机关配合特别巧妙", "reason": "主人刚在聊天，先留出空闲",
+                "goal_id": goal["id"]})))
+        self.store.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)", (
+            now - 60, SCOPE, "share_held", core.canonical({
+                "kind": "work", "delivery_id": f"work:{work['id']}:1", "fingerprint": work["body_hash"],
+                "excerpt": "整理好啦 — 《小笔记》第1版摘录", "reason": "daily_shares exhausted",
+                "goal_id": goal["id"], "work_id": work["id"], "revision": 1})))
+        before = list(self.store.db.iterdump())
+        snap = self.snapshot()
+        self.assertEqual(len(snap["held_thoughts"]), 2)
+        self.assertEqual(snap["held_thoughts"][0]["kind"], "work")
+        self.assertEqual(snap["held_thoughts"][1]["kind"], "thought")
+        self.assertEqual(snap["held_thoughts"][1]["goal_title"], "合作建造")
+        memo = self.view.context(SCOPE, self.cfg)
+        self.assertIn("攒着没发出去的作品摘录（关联目标《合作建造》）", memo)
+        self.assertIn("当时今日主动分享次数已满，留着没发，未发送QQ）：整理好啦 — 《小笔记》第1版摘录", memo)
+        self.assertIn("攒着没发出去的想法（关联目标《合作建造》）", memo)
+        self.assertIn("当时主人刚在聊天，留着没打扰，未发送QQ）：看到一段双人机关配合特别巧妙", memo)
+        self.assertEqual(list(self.store.db.iterdump()), before)
+
+        # Once the thought is delivered, it is no longer held.
+        self.store.delivery(SCOPE, "thought:r2:fp1", "thought", "fp1", {}, True)
+        self.store.delivered("thought:r2:fp1", {"message_id": 201})
+        after_send = self.snapshot()["held_thoughts"]
+        self.assertEqual(len(after_send), 1)
+        self.assertEqual(after_send[0]["kind"], "work")
+
+        # If the work's source is superseded by a failed read, the held work also clears.
+        episode(self.store, goal_id=goal["id"], supersedes_id=source["id"],
+                evidence={"operation": "info", "result_excerpt": '{"ok":false}'})
+        self.assertEqual(self.snapshot()["held_thoughts"], [])
+
+    def test_curiosity_threads_surface_project_followup_and_checked_read_work_questions(self):
+        source, work, _ = self.checked_work()
+        snap = self.snapshot()
+        self.assertEqual(len(snap["curiosity_threads"]), 1)
+        thread = snap["curiosity_threads"][0]
+        self.assertEqual(thread["kind"], "work_open_question")
+        self.assertEqual(thread["question"], "还需要别的来源。")
+        self.assertEqual(thread["reflection"], "先记下想法。")
+        self.assertEqual(thread["source_ids"], [source["id"]])
+        memo = self.view.context(SCOPE, self.cfg)
+        self.assertIn("留着想继续弄清的问题（来自已完成目标《合作建造》作品待核实，有 1 条可用来源）：还需要别的来源。（当时想法：先记下想法。）", memo)
+
+        # If a new goal already uses that question as its title, do not repeat it as a pending thread.
+        self.store.life.create_goal(SCOPE, "还需要别的来源。", "已经立项", "去查资料", "followup-goal")
+        self.assertEqual(self.snapshot()["curiosity_threads"], [])
+
 
 class ExpressionIntegrationTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = life_tests.LifeIntegrationTests.asyncSetUp
@@ -378,6 +576,27 @@ class ExpressionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(observed["prompt"].startswith("原人格和情绪"))
         self.assertIn(expression.MARKER, observed["prompt"])
         self.assertEqual(observed["tools"], [expression.TOOL])
+
+    async def test_blocked_autonomous_share_records_held_thought_for_next_chat(self):
+        self.enable()
+        self.config["daily_shares"] = 0
+        self.save_config()
+        self.plugin.life_runs.add("hold-run")
+        self.plugin.activity_budget().start_run(SCOPE, "hold-run", 600, self.config)
+        event = fixtures.FakeEvent(run_id="hold-run")
+        goal = self.plugin.store.life.create_goal(SCOPE, "合作建造", "想查清限制", "接着核对资料", "hold-goal")
+        self.plugin.store.life.claim_goal(SCOPE, goal["id"], "hold-run")
+        self.plugin.run_goals["hold-run"] = goal["id"]
+        with self.assertRaises(main.BudgetExceeded):
+            await self.plugin.share_thought(event, "刚才看到个很有意思的合作机关想跟你说")
+        self.delivery.send.assert_not_called()
+        snap = json.loads(await self.plugin.self_reflect(fixtures.FakeEvent()))
+        self.assertEqual(len(snap["held_thoughts"]), 1)
+        self.assertEqual(snap["held_thoughts"][0]["excerpt"], "刚才看到个很有意思的合作机关想跟你说")
+        req = self.request()
+        await self.plugin.guard_phone(fixtures.FakeEvent(), req)
+        self.assertIn("攒着没发出去的想法", req.system_prompt)
+        self.assertIn("刚才看到个很有意思的合作机关想跟你说", req.system_prompt)
 
 
 class ExpressionRunTests(unittest.IsolatedAsyncioTestCase):

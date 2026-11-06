@@ -283,9 +283,10 @@ try {
     const original=await(await fetch(base+'/api/room')).json();
     const state={data:{...original,mode:'activity',connection:'ready',age_seconds:0,...initial},posts:0,fail:false,requests:[]};
     const injection=await cdp('Page.addScriptToEvaluateOnNewDocument',{source:`
-      const interval=window.setInterval,now=performance.now.bind(performance);window.__roomElapsed=0;
-      performance.now=()=>now()+window.__roomElapsed;
+      const interval=window.setInterval,timeout=window.setTimeout,now=performance.now.bind(performance);window.__roomElapsed=0;window.__roomClock=null;
+      performance.now=()=>window.__roomClock??now()+window.__roomElapsed;
       window.setInterval=function(fn,ms,...args){if(ms===60000)window.__roomSyncTick=fn;return interval(fn,ms,...args);};
+      window.setTimeout=function(fn,ms,...args){if(fn.name==='autoTick'){window.__roomSyncTick=fn;window.__roomSyncDelay=ms;}return timeout(fn,ms,...args);};
       Object.defineProperty(document,'hidden',{configurable:true,get:()=>document.visibilityState==='hidden'});
     `});
     await cdp('Fetch.enable',{patterns:[{urlPattern:'*/api/*',requestStage:'Request'}]});
@@ -298,11 +299,11 @@ try {
       await cdp('Fetch.fulfillRequest',{requestId:p.requestId,responseCode:!allowed?403:failed?503:200,responseHeaders:[{name:'Content-Type',value:'application/json'}],body:Buffer.from(JSON.stringify(!allowed||failed?{error:'synthetic unavailable'}:state.data)).toString('base64')});
     };
     socket.addEventListener('message',handler);
-    const tick=async()=>{await evaluate('window.__roomElapsed+=60001;window.__roomSyncTick();void 0');};
+    const tick=async()=>{await evaluate('window.__roomElapsed+=60001;window.__roomSyncTick?.();void 0');};
     const settled=async()=>until(()=>evaluate('document.querySelector("#room-refresh").textContent.includes("同步近况")'),'room refresh settled');
     try{
       await evaluate('localStorage.removeItem("observatory-room-auto-sync")');
-      await cdp('Page.reload');await until(()=>evaluate('typeof window.__roomSyncTick === "function"'),'room timer installed');
+      await cdp('Page.reload');await until(()=>evaluate('document.querySelector("#room-source")?.textContent !== "正在读取来源"'),'room source loaded');
       await click('#room-motion');await run(state,tick,settled);
       assert.ok(state.requests.every(([method,url,body])=>(method==='GET'&&url==='/api/room')||(method==='POST'&&url==='/api/room/refresh'&&body==='{}')),'Only the existing read-only room boundary may be used');
     }finally{
@@ -315,6 +316,7 @@ try {
   await check('room auto sync preserves book, chapter, focus, reading anchor and camera',async()=>{
     await withRoomSync(async(state,tick,settled)=>{
       assert.equal(state.posts,0,'Loading the cached view does not read upstream again');
+      assert.equal(await evaluate('typeof window.__roomSyncTick'),'function','Configured sources must schedule their next read');
       await click('[data-zone="shelf"]');await click('.project-book[data-project="demo-project-rain"]');await click('.project-stage summary');
       const before=await evaluate(`(()=>{const s=document.querySelector('.project-stage summary');s.focus({preventScroll:true});window.scrollTo({top:scrollY+s.getBoundingClientRect().top-130,behavior:'instant'});return {top:s.getBoundingClientRect().top,key:s.parentElement.dataset.stageKey,camera:document.querySelector('#room-camera').getAttribute('transform'),action:document.querySelector('#room-character').dataset.action};})()`);
       state.data.projects.enabled=false;await tick();await settled();await waitText('.project-disabled','目前关闭');
@@ -376,6 +378,47 @@ try {
         await pause(200);assert.equal(state.posts,0);
       },initial);
     }
+  });
+  await check('room sync keeps the visible journal record when new records arrive or reads fail',async()=>{
+    await withRoomSync(async(state,tick,settled)=>{
+      const template=state.data.decisions[0];
+      state.data.decisions=Array.from({length:10},(_,i)=>({...template,id:`test-decision-${i}`,reason:`第 ${i} 条离线安排。`+'这是供滚动阅读验收使用的虚构记录。'.repeat(8),at:template.at-i*100}));
+      await click('#room-refresh');await settled();await click('[data-zone="window"]');
+      const before=await evaluate(`(()=>{const list=document.querySelector('.record-list');list.scrollTop=640;const edge=list.getBoundingClientRect().top,row=[...list.children].find(n=>n.getBoundingClientRect().bottom>edge);return {text:row.querySelector('.entry-text').textContent,offset:row.getBoundingClientRect().top-edge,scroll:list.scrollTop};})()`);
+      assert.ok(before.scroll>0,'Fixture must exercise the inner scroll container');
+      state.data.decisions.unshift({...template,id:'test-new-decision',reason:'刚刚添加的离线安排。',at:template.at+100});
+      await tick();await settled();
+      const reading=()=>evaluate(`(()=>{const list=document.querySelector('.record-list'),row=[...list.children].find(n=>n.querySelector('.entry-text').textContent===${JSON.stringify(before.text)});return {offset:row.getBoundingClientRect().top-list.getBoundingClientRect().top,scroll:list.scrollTop};})()`);
+      const after=await reading();assert.ok(Math.abs(after.offset-before.offset)<2,'New records must not displace the journal entry being read');
+      assert.ok(after.scroll>before.scroll,'The list must account for the new entry inserted above');
+      state.fail=true;await tick();await settled();await waitText('#room-source','旧快照');
+      assert.ok(Math.abs((await reading()).offset-before.offset)<2,'A stale warning must not reset inner reading position');
+    });
+  });
+  await check('room mobile journal keeps its page reading position when a new entry arrives',async()=>{
+    try{
+      await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+      await withRoomSync(async(state,tick,settled)=>{
+        const template=state.data.decisions[0];
+        state.data.decisions=Array.from({length:10},(_,i)=>({...template,id:`mobile-decision-${i}`,reason:`第 ${i} 页虚构安排。`+'这段离线文字仅用于检查手机阅读位置。'.repeat(6)}));
+        await click('#room-refresh');await settled();await click('[data-zone="window"]');
+        const before=await evaluate(`(()=>{const list=document.querySelector('.record-list'),row=list.children[3];window.scrollTo({top:scrollY+row.getBoundingClientRect().top-140,behavior:'instant'});return {text:row.querySelector('.entry-text').textContent,top:row.getBoundingClientRect().top,inner:list.scrollHeight-list.clientHeight};})()`);
+        assert.equal(before.inner,0,'The mobile list must expand into the page');
+        state.data.decisions.unshift({...template,id:'mobile-new',reason:'新到的一条离线记录。'});await tick();await settled();
+        const after=await evaluate(`[...document.querySelectorAll('.record-list .journal-item')].find(n=>n.querySelector('.entry-text').textContent===${JSON.stringify(before.text)}).getBoundingClientRect().top`);
+        assert.ok(Math.abs(after-before.top)<2,'Mobile refresh must keep the entry at its page reading offset');
+        assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
+      });
+    }finally{await cdp('Emulation.setDeviceMetricsOverride',{width:1600,height:1150,deviceScaleFactor:1,mobile:false});}
+  });
+  await check('room sync schedules the remaining delay instead of missing a cycle after timer jitter',async()=>{
+    await withRoomSync(async(state,_tick,settled)=>{
+      await evaluate('window.__roomClock=100000;window.__roomSyncTick();void 0');await settled();assert.equal(state.posts,1);
+      await evaluate('window.__roomClock=159997;window.__roomSyncTick();void 0');
+      assert.equal(state.posts,1,'An early timer must not read before the interval');
+      assert.equal(await evaluate('window.__roomSyncDelay'),3,'An early tick must reschedule the remaining 3ms, not skip a whole minute');
+      await evaluate('window.__roomClock=160000;window.__roomSyncTick();void 0');await settled();assert.equal(state.posts,2);
+    });
   });
   await check('room shows rhythm as a dated decision without starting activity',async()=>{
     const before=await evaluate('fetch("/api/room").then(r=>r.json())');

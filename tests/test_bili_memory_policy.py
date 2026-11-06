@@ -383,6 +383,8 @@ class MemoryRunTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.run_activity("periodic")
         prompt = self.plugin.agent.await_args.args[1]
         self.assertIn('"recall_phase":"gist"', prompt)
+        self.assertEqual(prompt.count('"recall_phase":"gist"'), 1)
+        self.assertIn("见下方持续活动资料中的episodes", prompt)
         self.assertNotIn("RAW-DETAIL", prompt)
         self.assertNotIn("OLD-RAW-VIDEO", prompt)
         self.assertEqual(self.plugin.store.db.execute("SELECT count(*) FROM memories").fetchone()[0], 0)

@@ -91,6 +91,67 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision["topic"], "解谜游戏")
         self.assertEqual(decision["evidence_ids"], [evidence["id"]])
 
+    def test_owner_chat_topics_and_preferences_inform_explore_without_becoming_own_topic(self):
+        self.store.life.record_user_preference(SCOPE, "12345", "m1", "我喜欢像素风游戏")
+        self.store.life.record_user_preference(SCOPE, "12345", "m2", "我不喜欢恐怖游戏")
+        self.assertIsNotNone(self.store.life.record_chat_topic(SCOPE, "12345", "m3", "最近在玩星露谷"))
+        self.assertIsNotNone(self.store.life.record_chat_topic(SCOPE, "12345", "m4", "你知道迷宫饭吗？"))
+        self.assertIsNone(self.store.life.record_chat_topic(SCOPE, "12345", "m5", "暂停自主活动"))
+        self.now = time.time() + 1
+        decision = self.choose()
+        self.assertEqual(decision["action"], "explore")
+        # User preferences/chat cues never overwrite agent-owned decision["topic"].
+        self.assertEqual(decision["topic"], "")
+        self.assertEqual(decision["evidence_ids"], [])
+        self.assertIn({"reason": "owner_chat_topic_available", "points": 4}, decision["factors"])
+        topics = [c["topic"] for c in decision["chat_topics"]]
+        self.assertEqual(topics, ["像素风游戏", "迷宫饭", "星露谷"])
+        self.assertTrue(all(c["subject_kind"] == "user" for c in decision["chat_topics"]))
+        self.assertIn("像素风游戏", decision["reason"])
+
+    def test_completed_project_followup_and_checked_read_work_seed_curiosity_when_no_video_interest(self):
+        Projects = importlib.import_module("bili_activity_test.projects").Projects
+        self.cfg.update(workshop_enabled=True, life_projects_enabled=True, project_max_stages=1)
+        goal = self.goal("read-goal")
+        source = self.store.life.record_episode(
+            SCOPE, goal_id=goal["id"], kind="read", source_id="comments-1",
+            evidence={"operation": "comments", "result_excerpt": '{"rpid":1,"message":"双人模式有延迟"}'})
+        workshop = Workshop(self.store)
+        work = workshop.create(SCOPE, goal["id"], "联机笔记", "w-read")
+        body = f"## 资料观察\n评论提到双人延迟。[E:{source['id']}]\n## 我的想法\n想确认具体机制。\n## 待核实\n联机模式延迟表现如何"
+        work = workshop.revise(SCOPE, work["id"], body, [source["id"]], 0, "rev-read")
+        self.store.life.record_episode(
+            SCOPE, goal_id=goal["id"], kind="work_checked", source_id="chk-read",
+            evidence={"work_id": work["id"], "revision": 1, "body_hash": work["body_hash"],
+                      "source_ids": work["source_ids"], "checks_passed": True})
+        self.store.life.update_goal(SCOPE, goal["id"], status="completed")
+        self.now = time.time() + 10
+        decision = self.choose()
+        self.assertEqual(decision["action"], "explore")
+        self.assertEqual(decision["topic"], "联机模式延迟表现如何")
+        self.assertEqual(decision["evidence_ids"], [source["id"]])
+        self.assertIn({"reason": "work_open_question", "points": 5}, decision["factors"])
+
+        # Now add a completed 1-stage project with a review next_question; it takes priority over work_open_question.
+        proj_goal = self.goal("proj-goal")
+        projects = Projects(self.store)
+        proj = projects.create(SCOPE, proj_goal["id"], "机关专题", "对比不同地图", self.cfg)
+        p_source = self.store.life.record_episode(
+            SCOPE, goal_id=proj_goal["id"], kind="read", source_id="info-1",
+            evidence={"operation": "info", "result_excerpt": '{"bvid":"BVproj","description":"地图机关介绍"}'})
+        p_work = workshop.create(SCOPE, proj_goal["id"], "机关阶段一", "w-proj")
+        p_body = f"## 资料观察\n机关说明。[E:{p_source['id']}]\n## 我的想法\n先记第一张图。\n## 待核实\n需要看第二张图。"
+        p_work = workshop.revise(SCOPE, p_work["id"], p_body, [p_source["id"]], 0, "rev-proj")
+        self.store.life.update_goal(SCOPE, proj_goal["id"], status="completed")
+        self.store.db.execute("UPDATE goals SET updated_at=? WHERE id=?", (time.time() - 25 * 3600, proj_goal["id"]))
+        projects.review(SCOPE, proj["id"], 1, "阶段一整理完毕", "只看了一张图", "比较不同地图下的机关差异", self.cfg)
+        self.now = time.time() + 20
+        proj_decision = self.choose()
+        self.assertEqual(proj_decision["action"], "explore")
+        self.assertEqual(proj_decision["topic"], "比较不同地图下的机关差异")
+        self.assertEqual(proj_decision["evidence_ids"], [p_source["id"]])
+        self.assertIn({"reason": "project_followup_question", "points": 6}, proj_decision["factors"])
+
     def test_own_interest_can_prioritize_a_matching_goal(self):
         matched = self.goal("matched")
         self.store.life.create_goal(SCOPE, "整理风景", "有待整理", "看看画面", "other")

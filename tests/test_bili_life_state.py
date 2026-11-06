@@ -205,7 +205,13 @@ class LifeStateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.goal("over-limit")
         self.life.update_goal(SCOPE, first["id"], status="cancelled")
+        for index in range(10):
+            done = self.goal(f"done-{index}")
+            self.life.update_goal(SCOPE, done["id"], status="cancelled")
         self.goal("replacement")
+        listed = self.life.goals(SCOPE, limit=8, include_terminal=True)
+        self.assertEqual(len(listed), 8)
+        self.assertTrue(all(g["status"] not in {"completed", "cancelled"} for g in listed))
 
     def test_old_episodes_survive_latest_video_cache_replacements(self):
         first = self.episode()

@@ -26,7 +26,7 @@
 
 [本机隔离试运行](deploy/bili_activity/PILOT_V01.md)：经主人授权，已在 WSL Ubuntu 中安装 Docker 并启动独立 AstrBot 4.29.0；本机面板 `http://127.0.0.1:16185`、插件加载、依赖及启停核对通过。[测试模型与LivingMemory](deploy/bili_activity/PILOT_MEMORY_V01.md)已预填并安装，缺少密钥、记忆引擎尚未就绪。`.life-pilot/v01/` 被Git忽略，数据独立、活动全关、QQ未启动；真实生活联动未验证。
 
-[她的小小房间 v0.2](deploy/memory_observatory/ROOM_V02.md) 使用已确认的大肥鱼鲸鱼娘女仆形象：总览待机、平滑走向书桌写字、书架阅读、窗边看景、休息角睡觉，窗景随上海时间变化。房间与星海统一浅蓝奶白风格；记忆按形状/类型分区、关联高亮、遗忘动画连续变化。真实 LivingMemory 与活动账本只读联调通过；角色表演与实际记录分开，不改变生活或记忆策略。
+[她的小小房间 v0.2](deploy/memory_observatory/ROOM_V02.md) 使用已确认的大肥鱼鲸鱼娘女仆形象：总览待机、平滑走向书桌写字、书架阅读、窗边看景、休息角睡觉，窗景随上海时间变化。房间与星海统一浅蓝奶白风格；记忆按形状/类型分区、关联高亮、遗忘动画连续变化。真实 LivingMemory 与活动账本只读联调通过；角色表演与实际记录分开，不改变生活或记忆策略。新增[房间60秒只读同步](deploy/memory_observatory/ROOM_SYNC_V01.md)，保留项目与阅读位置，隐藏页暂停；本阶段Windows98项、Chrome34项通过，真实源连续同步未验证。
 
 本分支新增[B站评论区互动 v0.5](deploy/bili_activity/INTERACT_V05.md)：在现有提议、主人批准、操作账本和回读链上扩展点赞/取消赞、投币、弹幕、互动配额与风控、回复监听和评论区观察。默认仍逐条审批，新增开关默认关闭；`verified` 与公开可见性分别报告。保留[研究方法复用](deploy/bili_activity/LIFE_V04.md)、[来源笔记与自主续写](deploy/bili_activity/LIFE_V03.md)及既有真实 smoke。v0.5 只完成本地代码和离线测试，未部署、未操作真实账号；开启、低配额建议、回滚和主人小号 smoke 见[互动文档](deploy/bili_activity/INTERACT_V05.md)。
 

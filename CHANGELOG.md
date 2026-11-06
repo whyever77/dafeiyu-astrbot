@@ -2,6 +2,33 @@
 
 > 每一次值得说的进化都会记在这里。
 
+## 未发布 · 攒着没发的话、聊天探索线索与好奇心反哺（2026-11-06）
+
+- 后台生活轮次调用 `df_share_thought` 或 `df_workshop(..., action="share")` 被联系时机/留白/每日分享额度门禁拦截时记录 `share_held` 事件；`SelfExpression.snapshot` 只读暴露最近48小时最多2条 `held_thoughts` 并在中文备忘中提示下次私聊自然提起，若随后发出/状态不确定或作品修订/来源失效则自动清除。
+- 主人私聊日常提及的在玩/在看/想聊话题通过 `LifeState.record_chat_topic` 记入 `owner_chat_topic` 事件（不写 `episodes` 或长期记忆）；`LifePlanner.choose` 的 `explore` 候选汇总正向显式偏好与近期聊天话题为 `chat_topics`（`subject_kind="user"`，+4分），保持 `decision["topic"]` 与 `own_interest_evidence` 严格归属自身观察（`subject_kind="agent"`）。
+- 跨日项目已完成阶段回看的 `next_question`（`project_followup`）与独立已完成目标核实作品的 `## 待核实`（`work_open_question`，支持 `read`/`video` 有效来源）汇总为 `curiosity_threads`，同时供 `SelfExpression` 展示与 `LifePlanner.choose` 在无未展开视频兴趣时优先作为探索方向（+6/+5分）。
+- 无网只读容器（`dafeiyu-life-pilot-astrbot`，Python 3.12）定向测试 `test_bili_self_expression.py` 40项 OK、`test_bili_planner.py` 31项 OK，全量 `test_bili_*.py` 615项 OK（1 skip：Windows junction 专属测试）。未修改人格、审批、传输或运行配置，未部署。见 [SELF_EXPRESSION_V01.md](deploy/bili_activity/SELF_EXPRESSION_V01.md)。
+
+## 未发布 · 近况回顾拟人化衔接与中文备忘（2026-11-06）
+
+- `SelfExpression.snapshot` 只读并入当前作息节律（`rhythm` 时段、原因、已活动分钟数）与跨日项目摘要（`projects` 阶段进度、回看状态、后续问题与到期任务 `review`/`advance`），未初始化项目表时不建表、不写备份。
+- 中断记录关联同轮 `trigger` 活动类型与 `goal_selected` 目标标题；当 `cancelled` 运行匹配受控白名单 `foreground_preempt` 事件时附带打断说明，并在15分钟窗口且无后续运行完成时提供 `recent_preemption`，支持被主人找她/操作打断后的自然接话。
+- `SelfExpression.context` 注入提示词由原始 JSON 改为紧凑中文备忘，剔除 `body_hash`、`check_episode_id`、`source_episode_id`、`episode_scan_limit` 等内部字段；`df_self_reflect` 工具与状态接口仍返回结构化 JSON。
+- 无网只读容器（`dafeiyu-life-pilot-astrbot`，Python 3.12）定向测试 `test_bili_self_expression.py` 37项 OK（0 skip），全量 `test_bili_*.py` 610项 OK（1 skip：Windows junction 专属测试）。未修改人格、审批、传输或运行配置，未部署。见 [SELF_EXPRESSION_V01.md](deploy/bili_activity/SELF_EXPRESSION_V01.md)。
+
+## 未发布 · 隔离记忆联查验收准备（2026-11-06）
+
+- 新增只读检查器 `python -B -m deploy.bili_activity.pilot_memory_check --pilot-dir .life-pilot/v01`：核对固定版本/模型ID、源码与活动配置哈希、QQ/活动/记忆访问与清理开关，密钥只报告是否存在。状态 `invalid_input`/`blocked_config` 退出3，`missing_keys`/`models_disabled`/`models_partly_enabled` 退出2，`config_ready` 退出0；始终 `live_verified=false`，运行时八项UNVERIFIED。
+- 审查修复：符号链接环在旧Python上抛出的RuntimeError按 `invalid_input` 处理；`invalid_input` 时清空部分检查结果与密钥状态。新增junction、链接环、部分结果清理和检查期间配置变化测试，共32项。
+- 实际结果：对隔离目录运行为 `missing_keys`（退出2），8项静态检查通过，235个源文件0不一致。定向测试 Windows 32项 OK、5 skip（符号链接/junction权限），WSL 32项 OK、1 skip。Windows全量 `test_bili_*.py` UNVERIFIED：206项中19个模块缺 `mcp` 无法导入、1项部署测试受宿主bash路径影响失败、14 skip，原测试venv已不存在。
+- 未填写密钥、未调用模型/嵌入、未写入/回读/召回记忆，未启动QQ或活动。未来联查步骤与通过条件见 [PILOT_MEMORY_ACCEPTANCE_V01.md](deploy/bili_activity/PILOT_MEMORY_ACCEPTANCE_V01.md)；验收准备完成不等于真实链路通过。
+
+## 未发布 · 房间近况同步收尾（2026-11-06）
+
+- 完成可关闭的60秒只读同步验收，页面隐藏时暂停，手动与自动读取共享在途请求；失败保留原记录与快照时间，不改变角色区域、镜头或机器人活动。
+- 修复桌面手记内层列表和手机整页在新记录到来时的读位跳动；改用按到期时间安排的单个定时器，避免轻微定时误差漏掉一轮。
+- Windows观测台98项通过；Chrome最终34项通过，包含先失败后通过的两个反例、手机阅读位置及原星海/动画回归。真实源连续同步、模型与QQ仍未验证，未部署。见 [ROOM_SYNC_V01.md](deploy/memory_observatory/ROOM_SYNC_V01.md)。
+
 ## 未发布 · 隔离实例模型与记忆安装
 
 - 在本机隔离AstrBot内安装固定LivingMemory 2.7.0-beta.2（`28698d3`），预填DeepSeek Flash和硅基流动bge-m3模型条目；密钥留空、模型禁用。保留会话/人格隔离，空白名单阻止采集与记忆工具，原活动配置不变。

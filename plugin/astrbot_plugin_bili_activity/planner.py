@@ -7,13 +7,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 
-from .life import observed_read_evidence
+from .life import observed_read_evidence, parse_work_sections
 from .rhythm import DEFAULTS as RHYTHM_DEFAULTS, snapshot as rhythm_snapshot, validate_config as validate_rhythm
-from .projects import Projects
+from .projects import Projects, enabled as projects_enabled
 
 DEFAULTS = {**RHYTHM_DEFAULTS, "life_decision_enabled": False, "life_repeat_cooldown_minutes": 180}
+
+
+def _known_time(at, now):
+    return type(at) in {int, float} and math.isfinite(at) and 0 < at <= now
 
 
 def validate_config(cfg):
@@ -50,6 +55,191 @@ class LifePlanner:
             item["run_status"] = (run["status"] if run else
                                   "rested" if item["action"] == "rest" else "not_started")
             result.append(item)
+        return result
+
+    def _observed_source(self, scope, episode_id, now):
+        if not isinstance(episode_id, str) or not episode_id:
+            return False
+        row = self.db.execute(
+            "SELECT kind,occurred_at,evidence_json FROM episodes e WHERE e.scope=? AND e.id=? "
+            "AND NOT EXISTS (SELECT 1 FROM episodes n WHERE n.supersedes_id=e.id)",
+            (scope, episode_id),
+        ).fetchone()
+        if not row or not _known_time(row["occurred_at"], now):
+            return False
+        try:
+            proof = json.loads(row["evidence_json"])
+        except (ValueError, TypeError):
+            return False
+        if row["kind"] == "read":
+            return observed_read_evidence(proof)
+        return (
+            row["kind"] in {"video", "video_note"}
+            and bool(proof.get("bvid"))
+            and bool(proof.get("cid"))
+            and bool(proof.get("observations") or proof.get("subtitles"))
+        )
+
+    def _curiosity_threads(self, scope, cfg, now, all_goal_titles, recent_topics):
+        cutoff = now - 30 * 86400
+        threads, seen = [], set()
+        if projects_enabled(cfg):
+            projects = Projects(self.store)
+            try:
+                ready = projects.ready(create=False)
+            except RuntimeError:
+                ready = False
+            if ready:
+                rows = self.db.execute(
+                    "SELECT id,updated FROM life_projects WHERE scope=? AND status='completed' "
+                    "ORDER BY updated DESC,id LIMIT 3",
+                    (scope,),
+                ).fetchall()
+                for row in rows:
+                    if not _known_time(row["updated"], now) or row["updated"] < cutoff:
+                        continue
+                    try:
+                        project = projects.read(scope, row["id"], cfg)
+                    except (ValueError, RuntimeError):
+                        continue
+                    stages = project.get("stages") or []
+                    if not stages:
+                        continue
+                    head = stages[-1]
+                    review = head.get("review")
+                    work = head.get("work") or {}
+                    source_ids = work.get("source_ids") or []
+                    q = (review.get("next_question") or "").strip() if review else ""
+                    if (not head.get("portfolio_valid") or not review or not q
+                            or not _known_time(review.get("created"), now) or review["created"] < cutoff
+                            or not source_ids
+                            or not all(self._observed_source(scope, sid, now) for sid in source_ids)
+                            or q in recent_topics or q.casefold() in all_goal_titles or q.casefold() in seen):
+                        continue
+                    seen.add(q.casefold())
+                    threads.append({
+                        "kind": "project_followup",
+                        "project_id": project["id"],
+                        "stage": head["position"],
+                        "title": project["title"],
+                        "question": q[:160],
+                        "source_ids": list(source_ids)[:8],
+                        "subject_kind": "agent",
+                    })
+        has_works = bool(
+            self.db.execute("SELECT 1 FROM sqlite_master WHERE name='creative_works' AND type='table'").fetchone()
+            and self.db.execute("SELECT 1 FROM sqlite_master WHERE name='creative_revisions' AND type='table'").fetchone()
+        )
+        if has_works:
+            project_goal_ids = set()
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='project_stages' AND type='table'").fetchone():
+                project_goal_ids = {
+                    r["goal_id"]
+                    for r in self.db.execute("SELECT goal_id FROM project_stages WHERE scope=?", (scope,))
+                    if r["goal_id"]
+                }
+            for goal_row in self.db.execute(
+                "SELECT id,title,updated_at FROM goals WHERE scope=? AND owner_kind='agent' AND status='completed' "
+                "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC,id LIMIT 5",
+                (scope, cutoff, now),
+            ).fetchall():
+                if goal_row["id"] in project_goal_ids or not _known_time(goal_row["updated_at"], now):
+                    continue
+                work = self.db.execute(
+                    "SELECT w.id,w.revision,r.body,r.body_hash,r.source_ids_json FROM creative_works w "
+                    "LEFT JOIN creative_revisions r ON r.work_id=w.id AND r.scope=w.scope AND r.revision=w.revision "
+                    "WHERE w.scope=? AND w.goal_id=?",
+                    (scope, goal_row["id"]),
+                ).fetchone()
+                if not work or not work["body"]:
+                    continue
+                try:
+                    sources = json.loads(work["source_ids_json"] or "[]")
+                except (ValueError, TypeError):
+                    continue
+                if (not sources or len(sources) > 24
+                        or not all(self._observed_source(scope, sid, now) for sid in sources)):
+                    continue
+                checked = False
+                for chk in self.db.execute(
+                    "SELECT occurred_at,evidence_json FROM episodes WHERE scope=? AND goal_id=? AND kind='work_checked' "
+                    "AND NOT EXISTS (SELECT 1 FROM episodes n WHERE n.supersedes_id=episodes.id) "
+                    "ORDER BY occurred_at DESC,id LIMIT 20",
+                    (scope, goal_row["id"]),
+                ):
+                    try:
+                        proof = json.loads(chk["evidence_json"])
+                    except (ValueError, TypeError):
+                        continue
+                    if (_known_time(chk["occurred_at"], now) and proof.get("checks_passed") is True
+                            and proof.get("work_id") == work["id"] and proof.get("revision") == work["revision"]
+                            and proof.get("body_hash") == work["body_hash"] and proof.get("source_ids") == sources):
+                        checked = True
+                        break
+                if not checked:
+                    continue
+                q = (parse_work_sections(work["body"]).get("待核实") or "").strip()
+                if not q or q in recent_topics or q.casefold() in all_goal_titles or q.casefold() in seen:
+                    continue
+                seen.add(q.casefold())
+                threads.append({
+                    "kind": "work_open_question",
+                    "goal_id": goal_row["id"],
+                    "work_id": work["id"],
+                    "title": goal_row["title"],
+                    "question": q[:160],
+                    "source_ids": list(sources)[:8],
+                    "subject_kind": "agent",
+                })
+        return threads[:3]
+
+    def _chat_topics(self, scope, now, goals, recent_topics):
+        user_interests = self.store.life.interests(scope, "user", limit=8)
+        disliked = {i["topic"] for i in user_interests if i["score"] < 0}
+        active_text = " ".join(g["title"] + " " + g["why"] + " " + g["next_step"] for g in goals)
+        result, seen = [], set()
+        for item in user_interests:
+            topic = item["topic"]
+            if item["score"] <= 0 or topic in recent_topics or topic in active_text or topic in seen:
+                continue
+            seen.add(topic)
+            result.append({
+                "topic": topic,
+                "subject_kind": "user",
+                "source": "explicit_preference",
+                "evidence_ids": list(item["evidence_ids"])[:8],
+            })
+            if len(result) == 3:
+                return result
+        cutoff = max(0, now - 14 * 86400)
+        for ev in self.db.execute(
+            "SELECT time,details FROM events WHERE scope=? AND kind='owner_chat_topic' "
+            "AND time>=? AND time<=? ORDER BY seq DESC LIMIT 20",
+            (scope, cutoff, now),
+        ):
+            if not _known_time(ev["time"], now):
+                continue
+            try:
+                details = json.loads(ev["details"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(details, dict):
+                continue
+            topic = (details.get("topic") or "").strip()[:100]
+            if not topic or topic in disliked or topic in recent_topics or topic in active_text or topic in seen:
+                continue
+            seen.add(topic)
+            entry = {
+                "topic": topic,
+                "subject_kind": "user",
+                "source": "chat_mention",
+                "evidence_ids": [],
+            }
+            if isinstance(details.get("message_id"), str) and details["message_id"]:
+                entry["message_id"] = details["message_id"]
+            result.append(entry)
+            if len(result) == 3:
+                break
         return result
 
     def choose(self, scope, cfg, *, phone_busy=False, now=None):
@@ -169,19 +359,69 @@ class LifePlanner:
             if explored:
                 excluded.append({"key": "explore", "reason": "recent_exploration"})
             else:
-                recent_topics = {h.get("topic") for h in recent}
+                recent_topics = {h.get("topic") for h in recent if h.get("topic")}
+                all_goal_titles = {
+                    r["title"].strip().casefold()
+                    for r in self.db.execute("SELECT title FROM goals WHERE scope=?", (scope,))
+                    if r["title"]
+                }
                 interest = next((i for i in interests if i["topic"] not in recent_topics), None)
-                topic = interest["topic"] if interest else ""
+                curiosity_threads = self._curiosity_threads(scope, cfg, now, all_goal_titles, recent_topics)
+                chat_topics = self._chat_topics(scope, now, goals, recent_topics)
+                project_followup = next((c for c in curiosity_threads if c["kind"] == "project_followup"), None)
+                open_question = next((c for c in curiosity_threads if c["kind"] == "work_open_question"), None)
+                topic = (
+                    interest["topic"]
+                    if interest
+                    else project_followup["question"]
+                    if project_followup
+                    else open_question["question"]
+                    if open_question
+                    else ""
+                )
+                evidence_ids = (
+                    interest["evidence_ids"]
+                    if interest
+                    else project_followup["source_ids"]
+                    if project_followup
+                    else open_question["source_ids"]
+                    if open_question
+                    else []
+                )
                 diversify = len(recent) == 3 and all(h["action"] != "explore" for h in recent)
-                score = 35 + (8 if interest else 0) + (40 if diversify else 0)
+                score = 35 + (8 if interest else 6 if project_followup else 5 if open_question else 0) + (40 if diversify else 0)
                 factors = [{"reason": "bounded_exploration", "points": 35}]
                 if interest:
                     factors.append({"reason": "own_interest_evidence", "points": 8})
+                elif project_followup:
+                    factors.append({"reason": "project_followup_question", "points": 6})
+                elif open_question:
+                    factors.append({"reason": "work_open_question", "points": 5})
+                if chat_topics:
+                    factors.append({"reason": "owner_chat_topic_available", "points": 4})
+                    score += 4
                 if diversify:
                     factors.append({"reason": "change_after_three_continuations", "points": 40})
+                if interest:
+                    reason = "从自己的兴趣找一个新问题：" + topic
+                elif project_followup:
+                    reason = "顺着已完成项目回看留下的新问题继续探索：" + topic
+                elif open_question:
+                    reason = "顺着已完成作品里待核实的问题继续探索：" + topic
+                elif chat_topics:
+                    reason = (
+                        f"看看新的资料（也可顺带了解主人聊过的「{chat_topics[0]['topic'][:60]}」，"
+                        "作为参考而非自身偏好），遇到值得弄清的问题再建立小目标"
+                    )
+                else:
+                    reason = "看看新的资料，遇到值得弄清的问题再建立小目标"
+                extra_explore = {}
+                if curiosity_threads:
+                    extra_explore["curiosity_threads"] = curiosity_threads
+                if chat_topics:
+                    extra_explore["chat_topics"] = chat_topics
                 add("explore", "explore", fingerprint(topic),
-                    ("从自己的兴趣找一个新问题：" + topic) if topic else "看看新的资料，遇到值得弄清的问题再建立小目标",
-                    score, factors, topic=topic, evidence_ids=interest["evidence_ids"] if interest else [])
+                    reason, score, factors, topic=topic, evidence_ids=evidence_ids, **extra_explore)
         else:
             excluded.append({"key": "explore", "reason": "device_busy" if phone_busy else "goal_capacity"})
 
