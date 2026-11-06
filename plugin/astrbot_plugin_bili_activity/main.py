@@ -80,6 +80,7 @@ DEFAULTS = {
     "check_jitter_minutes": 60,
     "max_videos": 3, "max_minutes": 10, "once_at": None,
     "one_shot_verified": False, "device_id": "emulator-5554",
+    "phone_screen_width": 720, "phone_screen_height": 1280,
     "life_enabled": False, "daily_minutes": 30, "max_model_calls_per_run": 20,
     "daily_model_calls": 60, "daily_shares": 3, "screenshots_per_run": 1,
     "chat_cooldown_seconds": 300, "workshop_enabled": False, "methods_enabled": False,
@@ -413,10 +414,26 @@ class GuardedPhoneTool(FunctionTool):
         if not owner:
             self.plugin.check_owner(event)
             await self.plugin.pause_background("主人使用手机")
+        cfg = self.plugin.cfg()
+        name = self.original.mcp_tool.name
+        width = int(cfg.get("phone_screen_width", 720))
+        height = int(cfg.get("phone_screen_height", 1280))
+        if name == "tap":
+            x, y = int(kwargs.get("x", -1)), int(kwargs.get("y", -1))
+            if not (0 <= x < width and 0 <= y < height):
+                raise ValueError(f"点击坐标 ({x},{y}) 超出屏幕范围 {width}x{height}；请按截图尺寸取坐标")
+        elif name == "swipe":
+            for key, limit in (("start_x", width), ("end_x", width),
+                               ("start_y", height), ("end_y", height)):
+                value = int(kwargs.get(key, -1))
+                if not 0 <= value < limit:
+                    raise ValueError(f"滑动坐标 {key}={value} 超出屏幕范围 {width}x{height}")
+        elif name == "wait":
+            kwargs["seconds"] = max(0.1, min(float(kwargs.get("seconds", 1)), 10.0))
         client = self.plugin.phone()
         if "device_id" in self.original.parameters.get("properties", {}):
-            kwargs["device_id"] = self.plugin.cfg()["device_id"]
-        return await self.plugin.gate.call(client, self.original.mcp_tool.name, kwargs, owner=owner)
+            kwargs["device_id"] = cfg["device_id"]
+        return await self.plugin.gate.call(client, name, kwargs, owner=owner)
 
 
 @register("astrbot_plugin_bili_activity", "dafeiyu-tools",

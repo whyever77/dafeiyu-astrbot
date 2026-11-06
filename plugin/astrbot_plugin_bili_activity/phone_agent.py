@@ -337,6 +337,8 @@ class PhoneAgent:
         if action not in ALLOWED_ACTIONS:
             raise ValueError(f"不支持的手机动作 {action!r}，允许动作：{sorted(ALLOWED_ACTIONS)}")
         params = dict(params or {})
+        screen_width = int(cfg.get("phone_screen_width", 720))
+        screen_height = int(cfg.get("phone_screen_height", 1280))
         allowed = cfg.get("phone_allowed_packages") or DEFAULT_ALLOWED_PACKAGES
         if run_id:
             max_steps = int(cfg.get("phone_max_steps_per_run", 15))
@@ -385,8 +387,9 @@ class PhoneAgent:
 
         if action == "tap":
             x, y = int(params["x"]), int(params["y"])
-            if not (0 <= x <= 1440 and 0 <= y <= 2560):
-                raise ValueError("点击坐标超出模拟器屏幕范围")
+            if not (0 <= x < screen_width and 0 <= y < screen_height):
+                raise ValueError(
+                    f"点击坐标 ({x},{y}) 超出模拟器屏幕范围 {screen_width}x{screen_height}")
             res = await self._call("tap", {"x": x, "y": y}, owner=owner)
             out = {"ok": True, "action": "tap", "package": pkg, "x": x, "y": y, "result": _extract_mcp_text(res)[:200]}
         elif action == "tap_element":
@@ -410,6 +413,11 @@ class PhoneAgent:
                     raise ValueError(f"不支持的滑动方向 {direction!r}")
                 x1, y1, x2, y2 = dir_map[direction]
                 coords = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+            for key, limit in (("x1", screen_width), ("x2", screen_width),
+                               ("y1", screen_height), ("y2", screen_height)):
+                if not 0 <= coords[key] < limit:
+                    raise ValueError(
+                        f"滑动坐标 {key}={coords[key]} 超出模拟器屏幕范围 {screen_width}x{screen_height}")
             duration = max(100, min(int(params.get("duration_ms", 400)), 3000))
             res = await self._call("swipe", {**coords, "duration": duration}, owner=owner)
             out = {"ok": True, "action": "swipe", "package": pkg, **coords, "result": _extract_mcp_text(res)[:200]}

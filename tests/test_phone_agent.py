@@ -157,6 +157,14 @@ class PhoneAgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError):
             await self.agent.act(SCOPE, cfg, "swipe", {"direction": "up"}, run_id="run_q")
 
+    async def test_out_of_bounds_tap_is_rejected_against_actual_screen(self):
+        cfg = self.cfg | {"phone_max_steps_per_run": 5}
+        await self.agent.act(SCOPE, cfg, "launch_app", {"app": "抖音"}, run_id="oob")
+        with self.assertRaises(ValueError):
+            await self.agent.act(SCOPE, cfg, "tap", {"x": 559, "y": 1440}, run_id="oob")
+        result = await self.agent.act(SCOPE, cfg, "tap", {"x": 360, "y": 640}, run_id="oob")
+        self.assertTrue(result["ok"])
+
     async def test_plugin_tools_df_phone_observe_and_act(self):
         plugin = main.BiliActivity.__new__(main.BiliActivity)
         plugin.folder = Path(self.folder.name)
