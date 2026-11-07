@@ -633,5 +633,61 @@ class PluginMainIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("外化通道参数预览", card)
 
 
+    def test_cross_thread_access_with_check_same_thread_false(self):
+        import threading
+        store = AffectiveStore(self.folder / "thread_db")
+        try:
+            st = new_owner_state(SCOPE, OWNER_ID)
+            store.save_owner_state(st)
+
+            errors = []
+            def worker():
+                try:
+                    for _ in range(10):
+                        with store.transaction():
+                            current = store.get_owner_state(SCOPE)
+                            current["interaction_count"] += 1
+                            store.save_owner_state(current)
+                except Exception as e:
+                    errors.append(e)
+
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            self.assertEqual(errors, [])
+            final_state = store.get_owner_state(SCOPE)
+            self.assertEqual(final_state["interaction_count"], 40)
+        finally:
+            store.close()
+
+    async def test_turn_deduplication_without_message_id(self):
+        # Event without message_obj or message_id
+        ev = MagicMock()
+        ev.unified_msg_origin = SCOPE
+        ev.get_sender_id.return_value = OWNER_ID
+        ev.get_group_id.return_value = None
+        ev.message_str = "主人来了"
+        ev.message_obj = None
+        ev.get_extra.return_value = None
+
+        key1 = self.plugin._turn_key(ev)
+        key2 = self.plugin._turn_key(ev)
+        self.assertIsNotNone(key1)
+        self.assertEqual(key1, key2)
+
+        req1 = types.SimpleNamespace(system_prompt="", contexts=[])
+        await self.plugin.inject_affective_context(ev, req1)
+        prompt1 = req1.system_prompt
+        self.assertIn("【当下心境】", prompt1)
+
+        # Immediate re-entry (e.g. tool loop continuation) for the exact same event
+        req2 = types.SimpleNamespace(system_prompt="", contexts=[])
+        await self.plugin.inject_affective_context(ev, req2)
+        self.assertEqual(req2.system_prompt, prompt1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -463,13 +463,34 @@ class AffectiveCorePlugin(Star):
             return None
 
     @staticmethod
-    def _turn_key(event: Any) -> tuple[str, str] | None:
+    def _turn_key(event: Any) -> tuple[str, str]:
         umo = str(getattr(event, "unified_msg_origin", "") or "")
         msg_obj = getattr(event, "message_obj", None)
         msg_id = getattr(msg_obj, "message_id", None) if msg_obj is not None else None
-        if msg_id is None or str(msg_id).strip() == "":
-            return None
-        return (umo, str(msg_id).strip())
+        if msg_id is not None and str(msg_id).strip():
+            return (umo, str(msg_id).strip())
+
+        # Fallback 1: check if event object already carried an assigned turn ID
+        assigned = getattr(event, "_df_affect_turn_id", None)
+        if assigned:
+            return (umo, str(assigned))
+
+        # Fallback 2: deterministic fingerprint from sender, timestamp, and message body
+        sender = str(event.get_sender_id() if hasattr(event, "get_sender_id") else "").strip()
+        msg_str = str(getattr(event, "message_str", "") or "").strip()
+        ts = getattr(msg_obj, "timestamp", None) or getattr(event, "timestamp", None) or getattr(event, "time", None)
+        if ts is not None and str(ts).strip():
+            fp = hashlib.sha256(f"{umo}:{sender}:{ts}:{msg_str[:120]}".encode("utf-8")).hexdigest()[:20]
+            turn_id = f"fp:{fp}"
+        else:
+            # Fallback 3: attach ephemeral unique turn id to event object so in-flight re-entries match
+            turn_id = f"evt:{id(event)}:{uuid.uuid4().hex[:8]}"
+
+        try:
+            setattr(event, "_df_affect_turn_id", turn_id)
+        except Exception:
+            pass
+        return (umo, turn_id)
 
     def _remember_turn(self, key: tuple[str, str], memo: str, profile: dict[str, Any]) -> None:
         self._turn_cache[key] = {"memo": memo, "profile": profile}
@@ -554,7 +575,7 @@ class AffectiveCorePlugin(Star):
 
         # Deduplicate tool-loop continuations or provider retries on the same foreground message
         tkey = self._turn_key(event)
-        if tkey is not None and tkey in self._turn_cache:
+        if tkey in self._turn_cache:
             cached = self._turn_cache[tkey]
             if conf["inject_prompt_memo"] and cached["memo"]:
                 req.system_prompt = (req.system_prompt or "") + cached["memo"]
