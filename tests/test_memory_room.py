@@ -231,7 +231,7 @@ class ReaderTests(unittest.TestCase):
             """)
             db.execute(
                 "INSERT INTO affect_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (SCOPE, "12345", 0.42, 0.68, 0.2, 0.35, 0.5, 12.0, "微喜", "none", self.now - 100, self.now - 10, "2026-11-07")
+                (SCOPE, "12345", -0.42, 0.68, 0.2, 0.35, 0.5, 12.0, "低落", "none", self.now - 100, self.now - 10, "2026-11-07")
             )
             # Active and valid
             db.execute(
@@ -260,10 +260,10 @@ class ReaderTests(unittest.TestCase):
         result = self.read()
         aff = result["affect"]
         self.assertEqual(aff["state"], "ready")
-        self.assertAlmostEqual(aff["valence"], 0.42)
+        self.assertAlmostEqual(aff["valence"], -0.42)
         self.assertAlmostEqual(aff["arousal"], 0.68)
         self.assertAlmostEqual(aff["pout"], 0.35)
-        self.assertEqual(aff["dominant_tag"], "微喜")
+        self.assertEqual(aff["dominant_tag"], "低落")
         self.assertEqual(len(aff["care_threads"]), 1)
         self.assertEqual(aff["care_threads"][0]["id"], "t1")
         self.assertEqual(aff["care_threads"][0]["topic"], "主人提起的画展")

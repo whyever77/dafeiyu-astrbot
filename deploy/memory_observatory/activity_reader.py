@@ -214,7 +214,14 @@ def read_affect(root, scope, at, cfg):
                 return fallback | {"state": "ready", "care_threads": care_threads}
 
             def _clamp(v, low, high, d):
-                n = number(v)
+                # valence is signed; the shared number() helper rejects negatives.
+                n = (
+                    v
+                    if isinstance(v, (int, float))
+                    and not isinstance(v, bool)
+                    and math.isfinite(v)
+                    else None
+                )
                 return max(low, min(high, n)) if n is not None else d
 
             return {
