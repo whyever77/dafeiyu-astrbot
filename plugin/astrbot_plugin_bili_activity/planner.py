@@ -301,7 +301,7 @@ class LifePlanner:
         projects = Projects(self.store)
         aff_profile = None
         try:
-            from plugin.astrbot_plugin_affective_core import get_bridge
+            from data.plugins.astrbot_plugin_affective_core import get_bridge
             bridge = get_bridge()
             if bridge is not None:
                 aff_profile = bridge.expression_profile(scope=scope, now=now)

@@ -777,12 +777,25 @@ class AffectiveCorePlugin(Star):
 
         lines.append("")
         lines.append("▸ 外化通道参数预览")
-        lines.append(
-            f"  语音：倍速 {exp['speech_rate']:.2f}x / 音高 {exp['pitch_rate']:.2f}x"
-            + (f"（{exp['tts_instruction']}）" if exp["tts_instruction"] else "（默认原声）")
+        sr, pr = exp.get("speech_rate"), exp.get("pitch_rate")
+        voice = (
+            "沿用用户配置"
+            if sr is None or pr is None
+            else f"倍速 {sr:.2f}x / 音高 {pr:.2f}x"
         )
         lines.append(
-            f"  排版：最多 {exp['max_bubbles']} 气泡 / 最多 {exp['max_faces']} 表情  |  记忆显著性：{exp['salience_multiplier']:.2f}x"
+            f"  语音：{voice}"
+            + (f"（{exp['tts_instruction']}）" if exp["tts_instruction"] else "（默认原声）")
+        )
+        bubbles, faces = exp.get("max_bubbles"), exp.get("max_faces")
+        layout = (
+            "沿用用户配置"
+            if bubbles is None and faces is None
+            else f"最多 {bubbles if bubbles is not None else '沿用配置'} 气泡 / "
+                 f"最多 {faces if faces is not None else '沿用配置'} 表情"
+        )
+        lines.append(
+            f"  排版：{layout}  |  记忆显著性：{exp['salience_multiplier']:.2f}x"
         )
 
         if recent:

@@ -1092,7 +1092,7 @@ class FaceConvertPlugin(Star):
         profile = None
         bridge = None
         try:
-            from plugin.astrbot_plugin_affective_core import get_bridge
+            from data.plugins.astrbot_plugin_affective_core import get_bridge
             bridge = get_bridge()
         except ImportError:
             bridge = None
@@ -1111,9 +1111,10 @@ class FaceConvertPlugin(Star):
         max_allowed_faces = 2
         suppress_cheerful = False
         if profile and isinstance(profile, dict):
-            if "max_faces" in profile:
+            max_faces_value = profile.get("max_faces")
+            if max_faces_value is not None:
                 try:
-                    max_allowed_faces = max(0, min(8, int(profile["max_faces"])))
+                    max_allowed_faces = max(0, min(8, int(max_faces_value)))
                 except (ValueError, TypeError):
                     max_allowed_faces = 2
             suppress_cheerful = bool(profile.get("suppress_cheerful_faces"))

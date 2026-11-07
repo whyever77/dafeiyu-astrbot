@@ -1342,7 +1342,7 @@ class BiliActivity(Star):
             scope = self.cfg()["owner_scope"]
             self.store.event(scope, "foreground_preempt", {"reason": reason})
             try:
-                from plugin.astrbot_plugin_affective_core import get_bridge
+                from data.plugins.astrbot_plugin_affective_core import get_bridge
                 bridge = get_bridge()
                 if bridge is not None:
                     bridge.record_life_event(scope, "foreground_preempt", {"reason": reason})
