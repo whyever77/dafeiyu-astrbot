@@ -24,7 +24,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
-from . import BRIDGE_ATTR, BRIDGE_VERSION
+from . import BRIDGE_ATTR, BRIDGE_VERSION, set_bridge
 from .appraisal import appraise_owner_message
 from .core import DEFAULTS, AffectiveStore, normalize_config, valid_timestamp
 from .dynamics import (
@@ -206,6 +206,7 @@ class AffectiveCorePlugin(Star):
         self._last_turn_context: dict[str, Any] = {}
         self._bg_tasks: set[asyncio.Task] = set()
         self.bridge = AffectiveBridge(self)
+        set_bridge(self.bridge)
         if self.context is not None:
             setattr(self.context, BRIDGE_ATTR, self.bridge)
 

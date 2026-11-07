@@ -320,11 +320,26 @@ class RespondStage(Stage):
                 # 表情转换会把一句话拆成 Plain/Face/Plain 三个组件；原逻辑
                 # 会因此连发三条。这里把同一句的非 Plain 段并回气泡，且首条
                 # 不再等待，后续气泡之间才保持短暂间隔。
+                effective_max_bubbles = self.max_bubbles
+                bridge = getattr(self.ctx, "_dafeiyu_affective_bridge", None)
+                if bridge is None:
+                    try:
+                        from plugin.astrbot_plugin_affective_core import get_bridge
+                        bridge = get_bridge()
+                    except ImportError:
+                        bridge = None
+                if bridge is not None:
+                    try:
+                        prof = bridge.expression_profile(scope=event.unified_msg_origin)
+                        if prof and isinstance(prof.get("max_bubbles"), int) and prof["max_bubbles"] > 0:
+                            effective_max_bubbles = min(self.max_bubbles, prof["max_bubbles"])
+                    except Exception:
+                        pass
                 bubbles = group_bubbles(
                     result.chain,
                     Comp.Plain,
                     Comp.Record,
-                    self.max_bubbles,
+                    effective_max_bubbles,
                 )
                 for index, bubble in enumerate(bubbles):
                     if index > 0:

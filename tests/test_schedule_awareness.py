@@ -40,6 +40,7 @@ def _register(*args, **kwargs):
 
 
 class _Filter:
+    EventMessageType = types.SimpleNamespace(ALL="ALL")
     def __getattr__(self, _):
         def deco(*args, **kwargs):
             def wrap(fn):
@@ -54,7 +55,7 @@ logging.basicConfig(level=logging.CRITICAL)
 _stub("astrbot", api=types.ModuleType("astrbot.api"))
 _stub("astrbot.api", logger=logging.getLogger("t"))
 _stub("astrbot.api.event", AstrMessageEvent=object, filter=_Filter())
-_stub("astrbot.api.star", Context=object, Star=_Star, register=_register)
+_stub("astrbot.api.star", Context=object, Star=_Star, register=_register, StarTools=types.SimpleNamespace(get_data_dir=lambda *a, **k: "/tmp"))
 
 spec = importlib.util.spec_from_file_location("schedule_plugin", MAIN)
 mod = importlib.util.module_from_spec(spec)
