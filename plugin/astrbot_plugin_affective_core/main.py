@@ -444,15 +444,22 @@ class AffectiveCorePlugin(Star):
     async def _analysis_provider(self, event: Any, conf: dict[str, Any]) -> Any:
         if self.context is None:
             return None
-        pid = conf.get("appraisal_provider_id") or ""
-        if pid and hasattr(self.context, "get_provider_by_id"):
-            prov = self.context.get_provider_by_id(pid)
-            if prov:
-                return prov
-        if hasattr(self.context, "get_using_provider_async"):
-            umo = getattr(event, "unified_msg_origin", "")
-            return await self.context.get_using_provider_async(umo)
-        return None
+        try:
+            pid = conf.get("appraisal_provider_id") or ""
+            if pid and hasattr(self.context, "get_provider_by_id"):
+                prov = self.context.get_provider_by_id(pid)
+                if prov:
+                    return prov
+            if hasattr(self.context, "get_using_provider_async"):
+                umo = getattr(event, "unified_msg_origin", "")
+                return await self.context.get_using_provider_async(umo)
+            return None
+        except Exception as exc:  # noqa: BLE001 - degrade to fast screen, never break chat
+            logger.warning(
+                "[affective_core] provider lookup degraded: %s",
+                type(exc).__name__,
+            )
+            return None
 
     @staticmethod
     def _turn_key(event: Any) -> tuple[str, str] | None:
@@ -812,5 +819,6 @@ class AffectiveCorePlugin(Star):
             task.cancel()
         if self.context is not None and getattr(self.context, BRIDGE_ATTR, None) is self.bridge:
             delattr(self.context, BRIDGE_ATTR)
+        set_bridge(None)
         self.store.close()
         logger.info("[affective_core] terminated cleanly")
