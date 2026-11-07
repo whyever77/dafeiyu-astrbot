@@ -209,6 +209,14 @@ class Store:
             self.db.execute("UPDATE proposals SET status=?,decision_event=? WHERE id=?",
                             (status, event_id, row["id"]))
         self.event(scope, "user_decision", {"proposal_id": row["id"], "decision": answer, "event_id": event_id})
+        try:
+            from data.plugins.astrbot_plugin_affective_core import get_bridge
+            bridge = get_bridge()
+            if bridge is not None:
+                ev_kind = "proposal_approved" if answer == "approve" else "proposal_rejected"
+                bridge.record_life_event(scope, ev_kind, {"proposal_id": row["id"], "event_id": event_id})
+        except Exception:
+            pass
         return {**dict(row), "status": status, "args": json.loads(row["args"])}
 
     def finish_proposal(self, pid, result):

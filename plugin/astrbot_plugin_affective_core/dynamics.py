@@ -586,10 +586,10 @@ def expression_profile(
             "scope_kind": "social_or_default",
             "mode": "calm",
             "tts_instruction": "",
-            "speech_rate": 1.0,
-            "pitch_rate": 1.0,
-            "max_bubbles": 3,
-            "max_faces": 8,
+            "speech_rate": None,
+            "pitch_rate": None,
+            "max_bubbles": None,
+            "max_faces": None,
             "suppress_cheerful_faces": False,
             "salience_multiplier": 1.0,
             "felt_tone": "平常心境",
@@ -616,10 +616,10 @@ def expression_profile(
     mode = compute_dominant_tag(state, sleeping=circ["sleeping"], care_due=care_due)
 
     tts_instruction = ""
-    speech_rate = 1.0
-    pitch_rate = 1.0
-    max_bubbles = 3
-    max_faces = 8
+    speech_rate = None
+    pitch_rate = None
+    max_bubbles = None
+    max_faces = None
     suppress_cheerful = False
 
     if mode in {"eager_share", "joyful"}:

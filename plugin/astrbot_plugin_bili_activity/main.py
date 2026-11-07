@@ -1339,7 +1339,15 @@ class BiliActivity(Star):
     async def pause_background(self, reason):
         task = getattr(self, "live", None)
         if task and not task.done() and task is not asyncio.current_task():
-            self.store.event(self.cfg()["owner_scope"], "foreground_preempt", {"reason": reason})
+            scope = self.cfg()["owner_scope"]
+            self.store.event(scope, "foreground_preempt", {"reason": reason})
+            try:
+                from data.plugins.astrbot_plugin_affective_core import get_bridge
+                bridge = get_bridge()
+                if bridge is not None:
+                    bridge.record_life_event(scope, "foreground_preempt", {"reason": reason})
+            except Exception:
+                pass
             task.cancel()
             # Do not release the device to a second caller while cleanup is in flight.
             await asyncio.wait_for(asyncio.shield(asyncio.gather(task, return_exceptions=True)), 50)

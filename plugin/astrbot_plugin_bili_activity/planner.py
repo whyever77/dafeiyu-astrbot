@@ -299,6 +299,18 @@ class LifePlanner:
         recent = history[:3]
         candidates, excluded = [], []
         projects = Projects(self.store)
+        aff_profile = None
+        try:
+            from data.plugins.astrbot_plugin_affective_core import get_bridge
+            bridge = get_bridge()
+            if bridge is not None:
+                aff_profile = bridge.expression_profile(scope=scope, now=now)
+        except Exception:
+            aff_profile = None
+        planner_bias = (aff_profile.get("planner_bias") if isinstance(aff_profile, dict) else None) or {}
+        study_write_delta = int(planner_bias.get("study_write_delta") or 0)
+        prefer_light_or_rest = bool(planner_bias.get("prefer_light_or_rest"))
+        cooldown_topics = set(planner_bias.get("cooldown_topics") or [])
 
         def add(action, key, signature, reason, score, factors, **fields):
             if rhythm["enabled"]:
@@ -316,6 +328,21 @@ class LifePlanner:
             repeated = sum(h["key"] == key for h in recent)
             if repeated:
                 factors.append({"reason": "recent_repetition", "points": -12 * repeated})
+            if cooldown_topics:
+                topic_val = str(fields.get("topic") or "").strip()
+                if topic_val and any(ct in topic_val or topic_val in ct for ct in cooldown_topics):
+                    excluded.append({"key": key, "reason": "affective_topic_cooldown"})
+                    return
+            if study_write_delta and action in {"research", "writing", "project_review"}:
+                factors.append({"reason": "affective_study_write_bias", "points": study_write_delta})
+                score += study_write_delta
+            if prefer_light_or_rest:
+                if action in {"explore", "rest"}:
+                    factors.append({"reason": "affective_prefer_light_or_rest", "points": 4})
+                    score += 4
+                elif action in {"research", "writing"}:
+                    factors.append({"reason": "affective_low_energy_reduction", "points": -4})
+                    score -= 4
             candidates.append({"action": action, "key": key, "fingerprint": signature,
                                "reason": reason, "score": score - 12 * repeated,
                                "factors": factors, "goal_id": None, "work_id": None,

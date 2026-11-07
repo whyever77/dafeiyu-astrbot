@@ -74,9 +74,28 @@ class MemoryPolicy:
         if goal and goal["status"] not in {"completed", "cancelled"}:
             return "protected", "未完成目标仍需原始证据"
         days = (now - occurred) / 86400
-        if days < cfg["life_memory_detail_days"]:
+        salience = 1.0
+        opinion = row.get("interpretation") or {}
+        affect_tag = row.get("affect_tag") or opinion.get("affect_tag") or {}
+        if isinstance(affect_tag, dict) and "salience" in affect_tag:
+            try:
+                salience = float(affect_tag["salience"])
+            except (ValueError, TypeError):
+                salience = 1.0
+        elif "salience_multiplier" in row:
+            try:
+                salience = float(row["salience_multiplier"])
+            except (ValueError, TypeError):
+                salience = 1.0
+        elif "salience_multiplier" in opinion:
+            try:
+                salience = float(opinion["salience_multiplier"])
+            except (ValueError, TypeError):
+                salience = 1.0
+        salience = max(1.0, min(4.0, salience))
+        if days < cfg["life_memory_detail_days"] * salience:
             return "detail", "近期经历"
-        if days < cfg["life_memory_dormant_days"]:
+        if days < cfg["life_memory_dormant_days"] * salience:
             return "gist", "细节淡出，保留概要与来源"
         return "dormant", "已淡出默认回忆；关键词仍可找概要，ID可查原始证据"
 
@@ -92,6 +111,11 @@ class MemoryPolicy:
             result["agent_interpretation_not_fact"] = thought[:160]
         if isinstance(interest, dict):
             result["attributed_interest"] = {k: interest[k] for k in ("topic", "polarity") if k in interest}
+        felt_tone = row.get("felt_tone") or opinion.get("felt_tone")
+        if not felt_tone and isinstance(opinion.get("affect_tag"), dict):
+            felt_tone = opinion["affect_tag"].get("felt_tone")
+        if felt_tone and isinstance(felt_tone, str) and felt_tone.strip():
+            result["felt_tone"] = felt_tone.strip()[:60]
         return result
 
     def recall(self, scope, cfg, query="", goal_id=None, *, episode_id="", limit=8, now=None):

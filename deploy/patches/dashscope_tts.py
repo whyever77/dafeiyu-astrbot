@@ -45,18 +45,76 @@ class ProviderDashscopeTTSAPI(TTSProvider):
         self.timeout_ms = float(provider_config.get("timeout", 20)) * 1000
         dashscope.api_key = self.chosen_api_key
 
-    async def get_audio(self, text: str) -> str:
+    async def get_audio(
+        self,
+        text: str,
+        *,
+        scope: str | None = None,
+        expression_profile: dict | None = None,
+        **kwargs,
+    ) -> str:
         model = self.get_model()
         if not model:
             raise RuntimeError("Dashscope TTS model is not configured.")
+
+        # Resolve dynamic expression profile if present (M2 affective bridge)
+        cur_instruction = self.instruction
+        cur_speech_rate = self.speech_rate
+        cur_pitch_rate = self.pitch_rate
+
+        profile = expression_profile
+        if profile is None:
+            bridge = None
+            try:
+                from data.plugins.astrbot_plugin_affective_core import get_bridge
+                bridge = get_bridge()
+            except ImportError:
+                bridge = None
+            if bridge is None and getattr(self, "context", None) is not None:
+                raw_b = getattr(self.context, "_dafeiyu_affective_bridge", None)
+                if raw_b is not None and hasattr(raw_b, "expression_profile"):
+                    bridge = raw_b
+            if bridge is not None:
+                try:
+                    profile = bridge.expression_profile(scope=scope)
+                except Exception as exc:  # noqa: BLE001
+                    logging.debug("Failed to retrieve affective expression profile: %s", exc)
+                    profile = None
+
+        if profile and isinstance(profile, dict):
+            dyn_inst = str(profile.get("tts_instruction") or "").strip()
+            if dyn_inst:
+                cur_instruction = f"{dyn_inst}，{self.instruction}" if self.instruction.strip() else dyn_inst
+            if "speech_rate" in profile and profile["speech_rate"] is not None:
+                try:
+                    cur_speech_rate = float(profile["speech_rate"])
+                except (ValueError, TypeError):
+                    pass
+            if "pitch_rate" in profile and profile["pitch_rate"] is not None:
+                try:
+                    cur_pitch_rate = float(profile["pitch_rate"])
+                except (ValueError, TypeError):
+                    pass
 
         temp_dir = get_astrbot_temp_path()
         os.makedirs(temp_dir, exist_ok=True)
 
         if self._is_qwen_tts_model(model):
-            audio_bytes, ext = await self._synthesize_with_qwen_tts(model, text)
+            audio_bytes, ext = await self._synthesize_with_qwen_tts(
+                model,
+                text,
+                instruction=cur_instruction,
+                speech_rate=cur_speech_rate,
+                pitch_rate=cur_pitch_rate,
+            )
         else:
-            audio_bytes, ext = await self._synthesize_with_cosyvoice(model, text)
+            audio_bytes, ext = await self._synthesize_with_cosyvoice(
+                model,
+                text,
+                instruction=cur_instruction,
+                speech_rate=cur_speech_rate,
+                pitch_rate=cur_pitch_rate,
+            )
 
         if not audio_bytes:
             raise RuntimeError(
@@ -74,20 +132,29 @@ class ProviderDashscopeTTSAPI(TTSProvider):
             raise RuntimeError("Audio synthesis returned a file that is too small to decode.")
         return path
 
-    def _style_instruction(self) -> str:
+    def _style_instruction(
+        self,
+        instruction: str | None = None,
+        speech_rate: float | None = None,
+        pitch_rate: float | None = None,
+    ) -> str:
         """把情绪/语速/音高转成模型能理解的文字指令。
 
         不是所有模型都接受 speed/pitch 数值：qwen-audio-3.1 走自然语言
         instruction，CosyVoice 才支持数值参数。统一在这里做能力映射。
         """
+        inst = self.instruction if instruction is None else instruction
+        sr = self.speech_rate if speech_rate is None else speech_rate
+        pr = self.pitch_rate if pitch_rate is None else pitch_rate
+
         parts: list[str] = []
-        if self.instruction.strip():
-            parts.append(self.instruction.strip())
-        if abs(self.speech_rate - 1.0) > 0.01:
-            parts.append(f"语速约为常速的 {self.speech_rate:.2f} 倍")
-        if abs(self.pitch_rate - 1.0) > 0.01:
+        if inst and inst.strip():
+            parts.append(inst.strip())
+        if abs(sr - 1.0) > 0.01:
+            parts.append(f"语速约为常速的 {sr:.2f} 倍")
+        if abs(pr - 1.0) > 0.01:
             parts.append(
-                "音调比默认略高" if self.pitch_rate > 1.0 else "音调比默认略低"
+                "音调比默认略高" if pr > 1.0 else "音调比默认略低"
             )
         return "，".join(parts)
 
@@ -108,7 +175,15 @@ class ProviderDashscopeTTSAPI(TTSProvider):
             return ".mp3"
         return ".wav"
 
-    def _call_qwen_tts(self, model: str, text: str):
+    def _call_qwen_tts(
+        self,
+        model: str,
+        text: str,
+        *,
+        instruction: str | None = None,
+        speech_rate: float | None = None,
+        pitch_rate: float | None = None,
+    ):
         if MultiModalConversation is None:
             raise RuntimeError(
                 "dashscope SDK missing MultiModalConversation. Please upgrade the dashscope package to use Qwen TTS models.",
@@ -124,7 +199,11 @@ class ProviderDashscopeTTSAPI(TTSProvider):
         }
         # qwen3-tts-instruct-* 用 instructions（自然语言风格控制）；
         # 普通 qwen-tts 不支持该字段，传了反而可能报参数错误。
-        style = self._style_instruction()
+        style = self._style_instruction(
+            instruction=instruction,
+            speech_rate=speech_rate,
+            pitch_rate=pitch_rate,
+        )
         if style and "instruct" in model.lower():
             kwargs["instructions"] = style
         if self.language_type:
@@ -139,12 +218,25 @@ class ProviderDashscopeTTSAPI(TTSProvider):
         self,
         model: str,
         text: str,
+        *,
+        instruction: str | None = None,
+        speech_rate: float | None = None,
+        pitch_rate: float | None = None,
     ) -> tuple[bytes | None, str]:
         loop = asyncio.get_running_loop()
         timeout = max(self.timeout_ms / 1000, 1) if self.timeout_ms else 20
         try:
             response = await asyncio.wait_for(
-                loop.run_in_executor(None, self._call_qwen_tts, model, text),
+                loop.run_in_executor(
+                    None,
+                    lambda: self._call_qwen_tts(
+                        model,
+                        text,
+                        instruction=instruction,
+                        speech_rate=speech_rate,
+                        pitch_rate=pitch_rate,
+                    ),
+                ),
                 timeout=timeout,
             )
         except asyncio.TimeoutError as exc:
@@ -219,7 +311,14 @@ class ProviderDashscopeTTSAPI(TTSProvider):
         self,
         model: str,
         text: str,
+        *,
+        instruction: str | None = None,
+        speech_rate: float | None = None,
+        pitch_rate: float | None = None,
     ) -> tuple[bytes | None, str]:
+        sr = self.speech_rate if speech_rate is None else speech_rate
+        pr = self.pitch_rate if pitch_rate is None else pitch_rate
+
         synth_kwargs = {
             "headers": {
                 name.lower(): value for name, value in self.request_headers.items()
@@ -227,13 +326,17 @@ class ProviderDashscopeTTSAPI(TTSProvider):
             "model": model,
             "voice": self.voice,
             "format": AudioFormat.WAV_24000HZ_MONO_16BIT,
-            "instruction": self._style_instruction() or None,
+            "instruction": self._style_instruction(
+                instruction=instruction,
+                speech_rate=sr,
+                pitch_rate=pr,
+            ) or None,
         }
         # qwen-audio 走自然语言 instruction；数值 speech_rate/pitch_rate 只对
         # CosyVoice 系列有意义，避免给不支持该参数的模型硬塞。
         if not model.lower().startswith("qwen-audio"):
-            synth_kwargs["speech_rate"] = self.speech_rate
-            synth_kwargs["pitch_rate"] = self.pitch_rate
+            synth_kwargs["speech_rate"] = sr
+            synth_kwargs["pitch_rate"] = pr
         synthesizer = SpeechSynthesizer(**synth_kwargs)
         loop = asyncio.get_running_loop()
         timeout = max(self.timeout_ms / 1000, 1) if self.timeout_ms else 20

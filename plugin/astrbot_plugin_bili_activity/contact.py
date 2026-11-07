@@ -81,8 +81,20 @@ class ContactLedger:
             raise ContactBlocked("主动联系仅用于已配置的主人私聊")
         if cfg["dnd_ranges"] is None or quiet_now(cfg["dnd_ranges"], datetime.fromtimestamp(now, ZoneInfo("Asia/Shanghai"))):
             raise ContactBlocked("现在是免打扰时间")
+        aff_profile = None
+        try:
+            from data.plugins.astrbot_plugin_affective_core import get_bridge
+            bridge = get_bridge()
+            if bridge is not None:
+                aff_profile = bridge.expression_profile(scope=scope, now=now)
+        except Exception:
+            aff_profile = None
+        contact_drive = float(aff_profile.get("contact_drive", 0.0)) if isinstance(aff_profile, dict) else 0.0
+        quiet_multiplier = 0.75 if contact_drive >= 0.60 else (1.25 if 0.0 < contact_drive < 0.15 else 1.0)
+        effective_quiet = cfg["contact_owner_quiet_minutes"] * 60 * quiet_multiplier
+        effective_cooldown = cfg["contact_cooldown_minutes"] * 60 * quiet_multiplier
         last_owner = self.owner_time(scope)
-        if last_owner and now - last_owner < cfg["contact_owner_quiet_minutes"] * 60:
+        if last_owner and now - last_owner < effective_quiet:
             raise ContactBlocked("主人刚在聊天，先留出空闲")
         rows = self.db.execute("SELECT * FROM contact_attempts WHERE scope=? AND id<>? "
             "AND status<>'cancelled' AND (day=? OR coalesce(finished,dispatched,created)>?)",
@@ -91,7 +103,7 @@ class ContactLedger:
         if len(today) >= cfg["contact_daily_limit"]:
             raise ContactBlocked("今天的主动联系额度已用完")
         latest = max((r["finished"] or r["dispatched"] or r["created"] for r in rows), default=0)
-        if latest and now - latest < cfg["contact_cooldown_minutes"] * 60:
+        if latest and now - latest < effective_cooldown:
             raise ContactBlocked("刚主动联系过，先等一会儿")
         if sum((r["dispatched"] or r["created"]) > last_owner for r in today) >= cfg["contact_unanswered_limit"]:
             raise ContactBlocked("这几次还没有收到主人回复，今天先安静些")
@@ -109,6 +121,16 @@ class ContactLedger:
         if not isinstance(key, str) or not 1 <= len(key) <= 300 or not re.fullmatch(r"[a-f0-9]{64}", fingerprint):
             raise ValueError("invalid contact key or fingerprint")
         ticket = digest([scope, source, key])
+        aff_profile = None
+        try:
+            from data.plugins.astrbot_plugin_affective_core import get_bridge
+            bridge = get_bridge()
+            if bridge is not None:
+                aff_profile = bridge.expression_profile(scope=scope, now=now)
+        except Exception:
+            aff_profile = None
+        if aff_profile and aff_profile.get("suppress_ordinary_share") and kind in {"thought", "screenshot"}:
+            raise ContactBlocked("心里正惦记着牵挂，暂不发送普通分享")
         with self.store.transaction():
             self._expire(now)
             old = self.db.execute("SELECT * FROM contact_attempts WHERE id=?", (ticket,)).fetchone()

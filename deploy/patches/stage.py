@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import random
 import re
 import time
@@ -18,6 +19,19 @@ from astrbot.core.star.star_handler import EventType, star_handlers_registry
 from ..chat_layout import is_valid_audio_file, make_tts_text
 from ..context import PipelineContext
 from ..stage import Stage, register_stage, registered_stages
+
+
+async def _safe_tts_get_audio(provider, text, scope=None):
+    kwargs = {}
+    try:
+        params = inspect.signature(provider.get_audio).parameters
+        if "scope" in params or any(
+            param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+        ):
+            kwargs["scope"] = scope
+    except (TypeError, ValueError):
+        pass
+    return await provider.get_audio(text, **kwargs)
 
 
 @register_stage
@@ -354,7 +368,11 @@ class ResultDecorateStage(Stage):
                         try:
                             logger.info(f"TTS request (whole reply): {tts_text[:200]}")
                             audio_path = await asyncio.wait_for(
-                                tts_provider.get_audio(tts_text),
+                                _safe_tts_get_audio(
+                                    tts_provider,
+                                    tts_text,
+                                    scope=event.unified_msg_origin,
+                                ),
                                 timeout=self.tts_timeout_s,
                             )
                             logger.info(f"TTS result: {audio_path}")

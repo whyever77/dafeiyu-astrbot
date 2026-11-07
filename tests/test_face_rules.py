@@ -26,7 +26,23 @@ def _stub(name, **attrs):
 
 class _Star:
     def __init__(self, *a, **k):
-        pass
+        self.context = a[0] if a else None
+
+
+class _Plain:
+    def __init__(self, text: str = ""):
+        self.text = text
+
+
+class _Face:
+    def __init__(self, id: int = 0):
+        self.id = id
+
+
+class _Record:
+    def __init__(self, file: str = "", text: str = ""):
+        self.file = file
+        self.text = text
 
 
 def _register(*a, **k):
@@ -59,16 +75,16 @@ _aiohttp_stub = _stub(
 _stub("astrbot", api=types.ModuleType("astrbot.api"))
 _stub("astrbot.api", logger=logging.getLogger("t"))
 _stub("astrbot.api.event", AstrMessageEvent=object, filter=_Filter())
-_stub("astrbot.api.star", Context=object, Star=_Star, register=_register)
+_stub("astrbot.api.star", Context=object, Star=_Star, register=_register, StarTools=types.SimpleNamespace(get_data_dir=lambda *a, **k: "/tmp"))
 _stub("astrbot.core")
 _stub("astrbot.core.message")
 _stub(
     "astrbot.core.message.components",
     At=object,
-    Face=object,
+    Face=_Face,
     Image=object,
-    Plain=object,
-    Record=object,
+    Plain=_Plain,
+    Record=_Record,
     Reply=object,
     Video=object,
 )

@@ -28,6 +28,10 @@ from astrbot.core.star.session_llm_manager import SessionServiceManager
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_REPLACE = 8  # 单条消息最多替换几个表情，防刷屏
+CHEERFUL_FACE_NAMES = {
+    "旺柴", "呲牙", "偷笑", "大笑", "憨笑", "调皮", "笑哭", "滑稽",
+    "嘿哈", "机智", "捂脸", "斜眼笑", "可爱", "得意", "坏笑",
+}
 
 # 中文标点归一：模型偶尔拿顿号当逗号、拿「」当引号。
 # 只做低风险替换；代码块由调用方切出去，不在这里处理。
@@ -1085,6 +1089,36 @@ class FaceConvertPlugin(Star):
             result.chain = meta_chain or [Plain("……")]
             logger.info("[face_convert] 已清扫 meta 口癖/标点（结果关口）")
 
+        profile = None
+        bridge = None
+        try:
+            from data.plugins.astrbot_plugin_affective_core import get_bridge
+            bridge = get_bridge()
+        except ImportError:
+            bridge = None
+
+        if bridge is None and getattr(self, "context", None) is not None:
+            raw_b = getattr(self.context, "_dafeiyu_affective_bridge", None)
+            if raw_b is not None and hasattr(raw_b, "expression_profile"):
+                bridge = raw_b
+
+        if bridge is not None:
+            try:
+                profile = bridge.expression_profile(scope=event.unified_msg_origin)
+            except Exception:
+                profile = None
+
+        max_allowed_faces = 2
+        suppress_cheerful = False
+        if profile and isinstance(profile, dict):
+            max_faces_value = profile.get("max_faces")
+            if max_faces_value is not None:
+                try:
+                    max_allowed_faces = max(0, min(8, int(max_faces_value)))
+                except (ValueError, TypeError):
+                    max_allowed_faces = 2
+            suppress_cheerful = bool(profile.get("suppress_cheerful_faces"))
+
         new_chain = []
         changed = 0
         stripped = 0
@@ -1118,7 +1152,13 @@ class FaceConvertPlugin(Star):
                     self.cfg.get("face_cooldown_minutes", 10)
                 ) * 60
                 hist[:] = [t for t in hist if t[1] >= _cutoff]
-                if per_msg >= 2 or fid in [t[0] for t in hist[-2:]]:
+                if suppress_cheerful and name in CHEERFUL_FACE_NAMES:
+                    if m.start() > pos:
+                        new_chain.append(Plain(text[pos : m.start()]))
+                    pos = m.end()
+                    dropped_faces += 1
+                    continue
+                if per_msg >= max_allowed_faces or fid in [t[0] for t in hist[-2:]]:
                     if m.start() > pos:
                         new_chain.append(Plain(text[pos : m.start()]))
                     pos = m.end()

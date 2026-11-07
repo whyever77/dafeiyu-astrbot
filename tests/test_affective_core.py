@@ -25,6 +25,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PLUGIN_ROOT = os.path.join(REPO_ROOT, "plugin")
+if PLUGIN_ROOT not in sys.path:
+    sys.path.insert(0, PLUGIN_ROOT)
+
 # Mock astrbot framework imports if not present in test environment
 if "astrbot" not in sys.modules:
     class FilterMock:
@@ -58,21 +63,21 @@ if "astrbot" not in sys.modules:
         vars(mod).update(mval)
         sys.modules[mname] = mod
 
-from plugin.astrbot_plugin_affective_core import BRIDGE_ATTR, BRIDGE_VERSION
-from plugin.astrbot_plugin_affective_core.appraisal import (
+from astrbot_plugin_affective_core import BRIDGE_ATTR, BRIDGE_VERSION
+from astrbot_plugin_affective_core.appraisal import (
     build_appraisal_prompt,
     parse_appraisal_json,
     should_skip_llm_appraisal,
     appraise_owner_message,
 )
-from plugin.astrbot_plugin_affective_core.core import (
+from astrbot_plugin_affective_core.core import (
     AffectiveStore,
     GLOBAL_SOCIAL_SCOPE,
     normalize_config,
     sanitize_label,
     topics_overlap,
 )
-from plugin.astrbot_plugin_affective_core.dynamics import (
+from astrbot_plugin_affective_core.dynamics import (
     apply_life_event,
     apply_owner_turn,
     awake_seconds_between,
@@ -88,12 +93,12 @@ from plugin.astrbot_plugin_affective_core.dynamics import (
     update_social_turn,
     wake_cycle_day,
 )
-from plugin.astrbot_plugin_affective_core.main import (
+from astrbot_plugin_affective_core.main import (
     AffectiveCorePlugin,
     clean_legacy_contexts,
     scrub_affective_leaks,
 )
-from plugin.astrbot_plugin_affective_core.migration import (
+from astrbot_plugin_affective_core.migration import (
     compute_migrated_valence,
     compute_migrated_warmth,
     migrate_from_emotionai,
