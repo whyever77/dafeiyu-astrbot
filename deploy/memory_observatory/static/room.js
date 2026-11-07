@@ -78,6 +78,7 @@ function renderContent(){
       pill.hidden=false;const tag=aff.dominant_tag||'平常陪伴';$('#room-affect-tag').textContent=tag;
       const dot=$('#room-affect-dot'),moodKind=(aff.pout>0.3)?'pout':(aff.valence>0.3&&aff.arousal>0.5)?'joy':(aff.valence>0.1)?'calm':(aff.arousal<0.35)?'tender':'calm';
       dot.dataset.mood=moodKind;const hasCares=aff.care_threads&&aff.care_threads.length>0;$('#room-care-badge').hidden=!hasCares;
+      if(hasCares)$('#room-care-badge').setAttribute('aria-label',`牵挂事项：${aff.care_threads.length} 件`);
       pill.title=`心境：${tag} · 愉悦 ${Math.round(aff.valence*100)}% · 精力 ${Math.round(aff.arousal*100)}%`+(hasCares?` · 惦记着 ${aff.care_threads.length} 件事`:'');
     }
     if(card){
@@ -89,7 +90,7 @@ function renderContent(){
       if(caresBox&&careList){if(cares.length>0){caresBox.hidden=false;careList.replaceChildren();for(const c of cares)careList.append(node('li','',c.topic));}else caresBox.hidden=true;}
     }
     scene.setAffect(aff);
-  }else{if(pill)pill.hidden=true;if(card)card.hidden=true;}
+  }else{if(pill)pill.hidden=true;if(card)card.hidden=true;scene.setAffect(null);}
   const {as_of,age_seconds,...content}=s,signature=JSON.stringify([zone,content]);
   if(signature===journalSignature)return;
   journalSignature=signature;

@@ -94,7 +94,7 @@ function renderDetail(){
     const head=el('div','affect-box-head');
     head.append(el('span','affect-box-label','心绪余味'));
     if(m.affect_tag&&typeof m.affect_tag.salience==='number'){
-      head.append(el('span','affect-salience',`情绪显著度 ${(m.affect_tag.salience*100).toFixed(0)}%`));
+      head.append(el('span','affect-salience',`情绪显著度 ${m.affect_tag.salience.toFixed(1)}x`));
     }
     affectBox.append(head);
     if(m.felt_tone){

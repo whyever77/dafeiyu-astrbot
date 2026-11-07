@@ -156,6 +156,8 @@ def read_affect(root, scope, at, cfg):
         "care_threads": [],
     }
     candidate_paths = []
+    # affective_data_dir is a trusted local path configured in control.json.
+    # We resolve strictly to ensure it points to a valid file/directory without expanding attack surface.
     if cfg.get("affective_data_dir"):
         candidate_paths.append(Path(cfg["affective_data_dir"]) / "affective.db")
     candidate_paths.append(root / "affective.db")
@@ -180,6 +182,8 @@ def read_affect(root, scope, at, cfg):
             adb.execute("PRAGMA query_only=ON")
             allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_TRANSACTION}
             adb.set_authorizer(lambda code, *_: sqlite3.SQLITE_OK if code in allowed else sqlite3.SQLITE_DENY)
+            deadline = time.monotonic() + 3
+            adb.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
             adb.execute("BEGIN")
             atables = {r[0] for r in adb.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not {"affect_states", "care_threads"} <= atables:
@@ -199,16 +203,18 @@ def read_affect(root, scope, at, cfg):
                 (scope, at),
             ).fetchall()
 
-            care_threads = [
-                {
-                    "id": clean(cr["id"], 64),
-                    "topic": clean(cr["topic"], 80),
-                    "category": clean(cr["category"], 40),
-                    "salience": number(cr["salience"]) or 1.0,
-                    "created_at": number(cr["created_at"]),
-                }
-                for cr in care_rows
-            ]
+            care_threads = []
+            for cr in care_rows:
+                sn = number(cr["salience"])
+                care_threads.append(
+                    {
+                        "id": clean(cr["id"], 64),
+                        "topic": clean(cr["topic"], 80),
+                        "category": clean(cr["category"], 40),
+                        "salience": sn if sn is not None else 1.0,
+                        "created_at": number(cr["created_at"]),
+                    }
+                )
 
             if not row:
                 return fallback | {"state": "ready", "care_threads": care_threads}
