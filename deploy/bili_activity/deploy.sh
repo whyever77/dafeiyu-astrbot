@@ -13,6 +13,9 @@ data_dir="$deploy_root/astrbot/data/plugin_data/astrbot_plugin_bili_activity"
 source_affective="$repo_root/plugin/astrbot_plugin_affective_core"
 target_affective="$deploy_root/astrbot/data/plugins/astrbot_plugin_affective_core"
 data_affective="$deploy_root/astrbot/data/plugin_data/astrbot_plugin_affective_core"
+if [[ -d "$deploy_root/astrbot/data/plugins/astrbot_plugin_emotionai" ]]; then
+    echo "WARNING: legacy astrbot_plugin_emotionai is still installed; disable it before enabling AffectiveCore." >&2
+fi
 [[ -f "$source_plugin/main.py" ]] || { echo "Plugin source incomplete: $source_plugin" >&2; exit 1; }
 [[ -d "$deploy_root/astrbot/data" ]] || { echo "AstrBot deployment not found: $deploy_root/astrbot/data" >&2; exit 1; }
 python="${PYTHON:-python3}"

@@ -445,24 +445,52 @@ class AffectiveCorePlugin(Star):
     async def _analysis_provider(self, event: Any, conf: dict[str, Any]) -> Any:
         if self.context is None:
             return None
-        pid = conf.get("appraisal_provider_id") or ""
-        if pid and hasattr(self.context, "get_provider_by_id"):
-            prov = self.context.get_provider_by_id(pid)
-            if prov:
-                return prov
-        if hasattr(self.context, "get_using_provider_async"):
-            umo = getattr(event, "unified_msg_origin", "")
-            return await self.context.get_using_provider_async(umo)
-        return None
+        try:
+            pid = conf.get("appraisal_provider_id") or ""
+            if pid and hasattr(self.context, "get_provider_by_id"):
+                prov = self.context.get_provider_by_id(pid)
+                if prov:
+                    return prov
+            if hasattr(self.context, "get_using_provider_async"):
+                umo = getattr(event, "unified_msg_origin", "")
+                return await self.context.get_using_provider_async(umo)
+            return None
+        except Exception as exc:  # noqa: BLE001 - degrade to fast screen, never break chat
+            logger.warning(
+                "[affective_core] provider lookup degraded: %s",
+                type(exc).__name__,
+            )
+            return None
 
     @staticmethod
-    def _turn_key(event: Any) -> tuple[str, str] | None:
+    def _turn_key(event: Any) -> tuple[str, str]:
         umo = str(getattr(event, "unified_msg_origin", "") or "")
         msg_obj = getattr(event, "message_obj", None)
         msg_id = getattr(msg_obj, "message_id", None) if msg_obj is not None else None
-        if msg_id is None or str(msg_id).strip() == "":
-            return None
-        return (umo, str(msg_id).strip())
+        if msg_id is not None and str(msg_id).strip():
+            return (umo, str(msg_id).strip())
+
+        # Fallback 1: check if event object already carried an assigned turn ID
+        assigned = getattr(event, "_df_affect_turn_id", None)
+        if assigned:
+            return (umo, str(assigned))
+
+        # Fallback 2: deterministic fingerprint from sender, timestamp, and message body
+        sender = str(event.get_sender_id() if hasattr(event, "get_sender_id") else "").strip()
+        msg_str = str(getattr(event, "message_str", "") or "").strip()
+        ts = getattr(msg_obj, "timestamp", None) or getattr(event, "timestamp", None) or getattr(event, "time", None)
+        if ts is not None and str(ts).strip():
+            fp = hashlib.sha256(f"{umo}:{sender}:{ts}:{msg_str[:120]}".encode("utf-8")).hexdigest()[:20]
+            turn_id = f"fp:{fp}"
+        else:
+            # Fallback 3: attach ephemeral unique turn id to event object so in-flight re-entries match
+            turn_id = f"evt:{id(event)}:{uuid.uuid4().hex[:8]}"
+
+        try:
+            setattr(event, "_df_affect_turn_id", turn_id)
+        except Exception:
+            pass
+        return (umo, turn_id)
 
     def _remember_turn(self, key: tuple[str, str], memo: str, profile: dict[str, Any]) -> None:
         self._turn_cache[key] = {"memo": memo, "profile": profile}
@@ -547,7 +575,7 @@ class AffectiveCorePlugin(Star):
 
         # Deduplicate tool-loop continuations or provider retries on the same foreground message
         tkey = self._turn_key(event)
-        if tkey is not None and tkey in self._turn_cache:
+        if tkey in self._turn_cache:
             cached = self._turn_cache[tkey]
             if conf["inject_prompt_memo"] and cached["memo"]:
                 req.system_prompt = (req.system_prompt or "") + cached["memo"]
@@ -777,12 +805,25 @@ class AffectiveCorePlugin(Star):
 
         lines.append("")
         lines.append("▸ 外化通道参数预览")
-        lines.append(
-            f"  语音：倍速 {exp['speech_rate']:.2f}x / 音高 {exp['pitch_rate']:.2f}x"
-            + (f"（{exp['tts_instruction']}）" if exp["tts_instruction"] else "（默认原声）")
+        sr, pr = exp.get("speech_rate"), exp.get("pitch_rate")
+        voice = (
+            "沿用用户配置"
+            if sr is None or pr is None
+            else f"倍速 {sr:.2f}x / 音高 {pr:.2f}x"
         )
         lines.append(
-            f"  排版：最多 {exp['max_bubbles']} 气泡 / 最多 {exp['max_faces']} 表情  |  记忆显著性：{exp['salience_multiplier']:.2f}x"
+            f"  语音：{voice}"
+            + (f"（{exp['tts_instruction']}）" if exp["tts_instruction"] else "（默认原声）")
+        )
+        bubbles, faces = exp.get("max_bubbles"), exp.get("max_faces")
+        layout = (
+            "沿用用户配置"
+            if bubbles is None and faces is None
+            else f"最多 {bubbles if bubbles is not None else '沿用配置'} 气泡 / "
+                 f"最多 {faces if faces is not None else '沿用配置'} 表情"
+        )
+        lines.append(
+            f"  排版：{layout}  |  记忆显著性：{exp['salience_multiplier']:.2f}x"
         )
 
         if recent:
@@ -813,5 +854,6 @@ class AffectiveCorePlugin(Star):
             task.cancel()
         if self.context is not None and getattr(self.context, BRIDGE_ATTR, None) is self.bridge:
             delattr(self.context, BRIDGE_ATTR)
+        set_bridge(None)
         self.store.close()
         logger.info("[affective_core] terminated cleanly")

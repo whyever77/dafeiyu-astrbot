@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import random
 import re
 import time
@@ -21,10 +22,16 @@ from ..stage import Stage, register_stage, registered_stages
 
 
 async def _safe_tts_get_audio(provider, text, scope=None):
+    kwargs = {}
     try:
-        return await provider.get_audio(text, scope=scope)
-    except TypeError:
-        return await provider.get_audio(text)
+        params = inspect.signature(provider.get_audio).parameters
+        if "scope" in params or any(
+            param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+        ):
+            kwargs["scope"] = scope
+    except (TypeError, ValueError):
+        pass
+    return await provider.get_audio(text, **kwargs)
 
 
 @register_stage

@@ -66,7 +66,7 @@ class ProviderDashscopeTTSAPI(TTSProvider):
         if profile is None:
             bridge = None
             try:
-                from plugin.astrbot_plugin_affective_core import get_bridge
+                from data.plugins.astrbot_plugin_affective_core import get_bridge
                 bridge = get_bridge()
             except ImportError:
                 bridge = None

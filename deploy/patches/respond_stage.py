@@ -321,10 +321,11 @@ class RespondStage(Stage):
                 # 会因此连发三条。这里把同一句的非 Plain 段并回气泡，且首条
                 # 不再等待，后续气泡之间才保持短暂间隔。
                 effective_max_bubbles = self.max_bubbles
-                bridge = getattr(self.ctx, "_dafeiyu_affective_bridge", None)
+                bridge = getattr(getattr(self.ctx, "plugin_manager", None), "context", None)
+                bridge = getattr(bridge, "_dafeiyu_affective_bridge", None)
                 if bridge is None:
                     try:
-                        from plugin.astrbot_plugin_affective_core import get_bridge
+                        from data.plugins.astrbot_plugin_affective_core import get_bridge
                         bridge = get_bridge()
                     except ImportError:
                         bridge = None

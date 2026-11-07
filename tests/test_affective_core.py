@@ -25,6 +25,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PLUGIN_ROOT = os.path.join(REPO_ROOT, "plugin")
+if PLUGIN_ROOT not in sys.path:
+    sys.path.insert(0, PLUGIN_ROOT)
+
 # Mock astrbot framework imports if not present in test environment
 if "astrbot" not in sys.modules:
     class FilterMock:
@@ -58,21 +63,21 @@ if "astrbot" not in sys.modules:
         vars(mod).update(mval)
         sys.modules[mname] = mod
 
-from plugin.astrbot_plugin_affective_core import BRIDGE_ATTR, BRIDGE_VERSION
-from plugin.astrbot_plugin_affective_core.appraisal import (
+from astrbot_plugin_affective_core import BRIDGE_ATTR, BRIDGE_VERSION
+from astrbot_plugin_affective_core.appraisal import (
     build_appraisal_prompt,
     parse_appraisal_json,
     should_skip_llm_appraisal,
     appraise_owner_message,
 )
-from plugin.astrbot_plugin_affective_core.core import (
+from astrbot_plugin_affective_core.core import (
     AffectiveStore,
     GLOBAL_SOCIAL_SCOPE,
     normalize_config,
     sanitize_label,
     topics_overlap,
 )
-from plugin.astrbot_plugin_affective_core.dynamics import (
+from astrbot_plugin_affective_core.dynamics import (
     apply_life_event,
     apply_owner_turn,
     awake_seconds_between,
@@ -88,12 +93,12 @@ from plugin.astrbot_plugin_affective_core.dynamics import (
     update_social_turn,
     wake_cycle_day,
 )
-from plugin.astrbot_plugin_affective_core.main import (
+from astrbot_plugin_affective_core.main import (
     AffectiveCorePlugin,
     clean_legacy_contexts,
     scrub_affective_leaks,
 )
-from plugin.astrbot_plugin_affective_core.migration import (
+from astrbot_plugin_affective_core.migration import (
     compute_migrated_valence,
     compute_migrated_warmth,
     migrate_from_emotionai,
@@ -626,6 +631,62 @@ class PluginMainIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("愉悦度", card)
         self.assertIn("想念度", card)
         self.assertIn("外化通道参数预览", card)
+
+
+    def test_cross_thread_access_with_check_same_thread_false(self):
+        import threading
+        store = AffectiveStore(self.folder / "thread_db")
+        try:
+            st = new_owner_state(SCOPE, OWNER_ID)
+            store.save_owner_state(st)
+
+            errors = []
+            def worker():
+                try:
+                    for _ in range(10):
+                        with store.transaction():
+                            current = store.get_owner_state(SCOPE)
+                            current["interaction_count"] += 1
+                            store.save_owner_state(current)
+                except Exception as e:
+                    errors.append(e)
+
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            self.assertEqual(errors, [])
+            final_state = store.get_owner_state(SCOPE)
+            self.assertEqual(final_state["interaction_count"], 40)
+        finally:
+            store.close()
+
+    async def test_turn_deduplication_without_message_id(self):
+        # Event without message_obj or message_id
+        ev = MagicMock()
+        ev.unified_msg_origin = SCOPE
+        ev.get_sender_id.return_value = OWNER_ID
+        ev.get_group_id.return_value = None
+        ev.message_str = "主人来了"
+        ev.message_obj = None
+        ev.get_extra.return_value = None
+
+        key1 = self.plugin._turn_key(ev)
+        key2 = self.plugin._turn_key(ev)
+        self.assertIsNotNone(key1)
+        self.assertEqual(key1, key2)
+
+        req1 = types.SimpleNamespace(system_prompt="", contexts=[])
+        await self.plugin.inject_affective_context(ev, req1)
+        prompt1 = req1.system_prompt
+        self.assertIn("【当下心境】", prompt1)
+
+        # Immediate re-entry (e.g. tool loop continuation) for the exact same event
+        req2 = types.SimpleNamespace(system_prompt="", contexts=[])
+        await self.plugin.inject_affective_context(ev, req2)
+        self.assertEqual(req2.system_prompt, prompt1)
 
 
 if __name__ == "__main__":

@@ -210,7 +210,7 @@ class Store:
                             (status, event_id, row["id"]))
         self.event(scope, "user_decision", {"proposal_id": row["id"], "decision": answer, "event_id": event_id})
         try:
-            from plugin.astrbot_plugin_affective_core import get_bridge
+            from data.plugins.astrbot_plugin_affective_core import get_bridge
             bridge = get_bridge()
             if bridge is not None:
                 ev_kind = "proposal_approved" if answer == "approve" else "proposal_rejected"

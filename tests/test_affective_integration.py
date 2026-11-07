@@ -14,12 +14,17 @@ import os
 import sys
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 # Ensure repo root is on sys.path
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+
+PLUGIN_ROOT = os.path.join(REPO_ROOT, "plugin")
+if PLUGIN_ROOT not in sys.path:
+    sys.path.insert(0, PLUGIN_ROOT)
 
 # Minimal astrbot stubs for offline execution
 for mod_name in [
@@ -192,7 +197,14 @@ def setUpModule():
     _ensure_runtime_stubs()
 
 # Import target components
-from plugin.astrbot_plugin_affective_core import get_bridge, set_bridge
+from astrbot_plugin_affective_core import get_bridge, set_bridge
+import astrbot_plugin_affective_core as _affective_pkg
+for _name in ("data", "data.plugins"):
+    if _name not in sys.modules:
+        _mod = types.ModuleType(_name)
+        _mod.__path__ = []
+        sys.modules[_name] = _mod
+sys.modules["data.plugins.astrbot_plugin_affective_core"] = _affective_pkg
 from deploy.patches import chat_layout
 
 # Load dashscope_tts as astrbot.core.provider.sources.dashscope_tts
@@ -512,6 +524,32 @@ class ContactChannelTests(unittest.TestCase):
                 self.now,
             )
         self.assertIn("牵挂", str(ctx.exception))
+
+
+
+class ProductionImportPathTests(unittest.TestCase):
+    def test_no_repo_package_path_in_production_code(self):
+        offenders = []
+        root = Path(REPO_ROOT)
+        for base in (root / "plugin", root / "deploy" / "patches"):
+            for path in base.rglob("*.py"):
+                source = path.read_text(encoding="utf-8")
+                if ("plugin.astrbot_plugin_affective_core" in source
+                        or "from astrbot_plugin_affective_core import get_bridge" in source):
+                    offenders.append(str(path.relative_to(root)))
+        self.assertEqual(offenders, [])
+
+
+
+class NeutralProfileCompatibilityTests(unittest.TestCase):
+    def test_neutral_profile_does_not_override_user_config(self):
+        from astrbot_plugin_affective_core.dynamics import expression_profile
+        profile = expression_profile(None)
+        self.assertIsNone(profile["speech_rate"])
+        self.assertIsNone(profile["pitch_rate"])
+        self.assertIsNone(profile["max_bubbles"])
+        self.assertIsNone(profile["max_faces"])
+        self.assertEqual(profile["tts_instruction"], "")
 
 
 if __name__ == "__main__":
