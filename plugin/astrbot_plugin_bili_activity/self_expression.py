@@ -344,6 +344,19 @@ class SelfExpression:
             "AND time>=? AND time<=? ORDER BY seq DESC LIMIT 24",
             (scope, cutoff, now),
         ).fetchall()
+        ack_rows = self.db.execute(
+            "SELECT details FROM events WHERE scope=? AND kind='held_thought_acknowledged' "
+            "AND time>=? AND time<=?",
+            (scope, cutoff, now),
+        ).fetchall()
+        acknowledged_held_ids = set()
+        for ack in ack_rows:
+            try:
+                d = json.loads(ack["details"])
+                if isinstance(d, dict) and d.get("held_id"):
+                    acknowledged_held_ids.add(d["held_id"])
+            except (ValueError, TypeError):
+                pass
         has_deliveries = bool(
             self.db.execute("SELECT 1 FROM sqlite_master WHERE name='deliveries' AND type='table'").fetchone()
         )
@@ -382,6 +395,10 @@ class SelfExpression:
                 scope, details.get("work_id"), details.get("revision"), now
             ):
                 continue
+            held_id = digest([kind, fp or excerpt, details.get("work_id") if kind == "work" else None,
+                              details.get("revision") if kind == "work" else None])
+            if held_id in acknowledged_held_ids:
+                continue
             dedup_key = (kind, fp or excerpt)
             if dedup_key in seen:
                 continue
@@ -393,9 +410,12 @@ class SelfExpression:
                 "reason": reason,
                 "explanation": HELD_SHARE_REASONS[reason],
                 "qq_sent": False,
-                "held_id": digest([kind, fp or excerpt, details.get("work_id") if kind == "work" else None,
-                                   details.get("revision") if kind == "work" else None]),
+                "held_id": held_id,
             }
+            if delivery_id:
+                item["delivery_id"] = delivery_id
+            if fp:
+                item["fingerprint"] = fp
             gid = details.get("goal_id")
             if isinstance(gid, str) and gid:
                 goal = self.store.life.get_goal(scope, gid)

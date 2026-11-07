@@ -1,6 +1,7 @@
 """Offline foreground thought cadence: exposure is not a delivery receipt."""
 import importlib
 import json
+import types
 import unittest
 from unittest.mock import patch
 
@@ -261,6 +262,77 @@ class ExpressionCadenceTests(unittest.TestCase):
                                  evidence={"operation": "info", "result_excerpt": '{"ok":false}'})
         self.assertNotIn("来源待核对笔记", self.context("work-message", now=NOW + 1))
 
+    def test_thought_mentioned_matches_various_phrasings_and_rejects_unrelated(self):
+        c = {"excerpt": FIRST, "goal_title": "合作建造"}
+        self.assertTrue(cadence.thought_mentioned(c, "主人我刚才看视频，有个双人机关观察特别巧妙！"))
+        self.assertTrue(cadence.thought_mentioned(c, "关于合作建造，我留了一段双人机关的想法"))
+        self.assertFalse(cadence.thought_mentioned(c, "好的，我先去修个 bug：TypeError: NoneType"))
+        self.assertFalse(cadence.thought_mentioned(c, "今天天气真好，出去散步吧"))
+        self.assertFalse(cadence.thought_mentioned(c, ""))
+        self.assertFalse(cadence.thought_mentioned(None, "双人机关观察"))
+
+    def test_discussed_thought_is_acknowledged_and_permanently_cleared(self):
+        held(self.store)
+        prompt = self.context("message-one")
+        self.assertIn(FIRST, prompt)
+        cad = cadence.ExpressionCadence(self.store)
+        reply = "主人，我之前看到一个双人机关观察，里面的配合好默契啊！"
+        ack = cad.acknowledge_if_discussed(SCOPE, reply, now=NOW + 1)
+        self.assertTrue(ack)
+
+        ack_rows = self.store.db.execute(
+            "SELECT time, details FROM events WHERE scope=? AND kind=?",
+            (SCOPE, cadence.ACK_EVENT_KIND),
+        ).fetchall()
+        self.assertEqual(len(ack_rows), 1)
+        details = json.loads(ack_rows[0]["details"])
+        self.assertEqual(details["excerpt"], FIRST)
+
+        self.assertEqual(self.snapshot(now=NOW + 2)["held_thoughts"], [])
+        self.assertNotIn(FIRST, self.context("message-later", now=NOW + 6 * 3600 + 1))
+
+    def test_unmentioned_thought_remains_held_for_later_retry(self):
+        held(self.store)
+        self.assertIn(FIRST, self.context("message-one"))
+        cad = cadence.ExpressionCadence(self.store)
+        reply = "好的，这是二分查找的实现：def binary_search(): ..."
+        ack = cad.acknowledge_if_discussed(SCOPE, reply, now=NOW + 1)
+        self.assertFalse(ack)
+
+        self.assertEqual(len(self.snapshot(now=NOW + 2)["held_thoughts"]), 1)
+        self.assertNotIn(FIRST, self.context("during-cooldown", now=NOW + 3600))
+        self.assertIn(FIRST, self.context("after-cooldown", now=NOW + 6 * 3600))
+
+    def test_work_thought_acknowledged_and_cleared_with_delivery_update(self):
+        source, work, _ = self.checked_work()
+        held(self.store, "整理好啦 — 《小笔记》第1版摘录", work["body_hash"], kind="work",
+             work_id=work["id"], revision=1, goal_id=work["goal_id"],
+             delivery_id=f"work:{work['id']}:1")
+        self.store.db.execute("INSERT OR REPLACE INTO deliveries VALUES(?,?,?,?,?,?,?,?)",
+                              (f"work:{work['id']}:1", SCOPE, "work", work["body_hash"], "blocked", NOW - 10, None, "{}"))
+        self.assertIn("整理好啦 — 《小笔记》第1版摘录", self.context("work-message"))
+        cad = cadence.ExpressionCadence(self.store)
+        reply = "主人，我整理好啦，这是小笔记的草稿你看看怎么样"
+        ack = cad.acknowledge_if_discussed(SCOPE, reply, now=NOW + 1)
+        self.assertTrue(ack)
+
+        row = self.store.db.execute("SELECT status FROM deliveries WHERE id=?", (f"work:{work['id']}:1",)).fetchone()
+        self.assertEqual(row["status"], "sent")
+        self.assertEqual(self.snapshot(now=NOW + 2)["held_thoughts"], [])
+
+    def test_event_attribute_attachment_and_cleanup(self):
+        held(self.store)
+        event = fixtures.FakeEvent(event_id="evt-with-attr")
+        self.assertIn(FIRST, cadence.ExpressionCadence(self.store).context(SCOPE, self.cfg, "evt-with-attr", now=NOW, event=event))
+        self.assertTrue(hasattr(event, "_df_cadence_selected"))
+        self.assertEqual(event._df_cadence_selected["excerpt"], FIRST)
+
+        cad = cadence.ExpressionCadence(self.store)
+        ack = cad.acknowledge_if_discussed(SCOPE, "这是那个双人机关观察", event=event, now=NOW + 1)
+        self.assertTrue(ack)
+        self.assertFalse(hasattr(event, "_df_cadence_selected"))
+
+
 
 class ExpressionCadenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = life_tests.LifeIntegrationTests.asyncSetUp
@@ -352,6 +424,63 @@ class ExpressionCadenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(offers(self.plugin.store)), 1)
         self.assertEqual(self.calls, [])
         self.delivery.send.assert_not_called()
+
+    async def test_decorating_result_acknowledges_discussed_thought(self):
+        self.seed()
+        event = fixtures.FakeEvent(event_id="chat-turn")
+        req = self.request()
+        cadence_globals = fixtures.main.ExpressionCadence.context.__globals__
+        with patch.object(expression, "_clock", return_value=NOW), \
+                patch.object(cadence, "_clock", return_value=NOW), \
+                patch.dict(cadence_globals, {"_clock": lambda _: NOW}):
+            await self.plugin.guard_phone(event, req)
+        self.assertIn(FIRST, req.system_prompt)
+        self.assertTrue(hasattr(event, "_df_cadence_selected"))
+
+        result = types.SimpleNamespace(
+            is_llm_result=lambda: True,
+            get_plain_text=lambda: "主人，我之前看到一段双人机关观察，想和你聊聊！",
+        )
+        event.get_result = lambda: result
+        with patch.object(expression, "_clock", return_value=NOW + 1), \
+                patch.object(cadence, "_clock", return_value=NOW + 1), \
+                patch.dict(cadence_globals, {"_clock": lambda _: NOW + 1}):
+            await self.plugin.check_held_thoughts_discussed(event)
+
+        view = cadence.SelfExpression(self.plugin.store)
+        self.assertEqual(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 2)["held_thoughts"], [])
+
+        req2 = self.request()
+        with patch.object(expression, "_clock", return_value=NOW + 6 * 3600 + 1), \
+                patch.object(cadence, "_clock", return_value=NOW + 6 * 3600 + 1), \
+                patch.dict(cadence_globals, {"_clock": lambda _: NOW + 6 * 3600 + 1}):
+            await self.plugin.guard_phone(fixtures.FakeEvent(event_id="later-chat"), req2)
+        self.assertNotIn(FIRST, req2.system_prompt)
+
+    async def test_decorating_result_ignores_unrelated_reply(self):
+        self.seed()
+        event = fixtures.FakeEvent(event_id="chat-turn-unrelated")
+        req = self.request()
+        cadence_globals = fixtures.main.ExpressionCadence.context.__globals__
+        with patch.object(expression, "_clock", return_value=NOW), \
+                patch.object(cadence, "_clock", return_value=NOW), \
+                patch.dict(cadence_globals, {"_clock": lambda _: NOW}):
+            await self.plugin.guard_phone(event, req)
+        self.assertIn(FIRST, req.system_prompt)
+
+        result = types.SimpleNamespace(
+            is_llm_result=lambda: True,
+            get_plain_text=lambda: "好的，我已经帮你处理好了这个文件。",
+        )
+        event.get_result = lambda: result
+        with patch.object(expression, "_clock", return_value=NOW + 1), \
+                patch.object(cadence, "_clock", return_value=NOW + 1), \
+                patch.dict(cadence_globals, {"_clock": lambda _: NOW + 1}):
+            await self.plugin.check_held_thoughts_discussed(event)
+
+        view = cadence.SelfExpression(self.plugin.store)
+        self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 2)["held_thoughts"]), 1)
+
 
 
 if __name__ == "__main__":
