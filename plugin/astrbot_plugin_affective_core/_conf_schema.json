@@ -1,0 +1,78 @@
+{
+  "enabled": {
+    "description": "启用心境中枢插件",
+    "type": "bool",
+    "default": true
+  },
+  "inject_prompt_memo": {
+    "description": "向主对话系统提示词注入克制体感提示与牵挂提醒（零数值外露）",
+    "type": "bool",
+    "default": true
+  },
+  "appraisal_mode": {
+    "description": "共情评估模式：sync_pre（回复前实时共情评估）、async_post（回复后异步评估）、math_only（纯数学+本地快筛）",
+    "type": "string",
+    "options": ["sync_pre", "async_post", "math_only"],
+    "default": "sync_pre"
+  },
+  "appraisal_provider_id": {
+    "description": "可选独立快模型 Provider ID；留空则复用当前会话主聊天模型",
+    "type": "string",
+    "default": ""
+  },
+  "appraisal_timeout_seconds": {
+    "description": "回复前实时共情评估硬超时秒数（超时自动静默降级为纯数学动力学）",
+    "type": "float",
+    "default": 2.5
+  },
+  "appraisal_max_tokens": {
+    "description": "共情评估最大输出 token 数",
+    "type": "int",
+    "default": 180
+  },
+  "owner_scope": {
+    "description": "主人私聊会话标识（unified_msg_origin），留空将自动从现有配置识别",
+    "type": "string",
+    "default": ""
+  },
+  "owner_id": {
+    "description": "主人 QQ 号，留空将自动从现有配置识别",
+    "type": "string",
+    "default": ""
+  },
+  "wake_hour": {
+    "description": "上海时间日常起床整点（0-23）",
+    "type": "int",
+    "default": 8
+  },
+  "sleep_hour": {
+    "description": "上海时间日常入睡整点（0-23）",
+    "type": "int",
+    "default": 23
+  },
+  "pout_half_life_minutes": {
+    "description": "傲娇小别扭半衰期（分钟）",
+    "type": "float",
+    "default": 45.0
+  },
+  "neg_valence_tau_hours": {
+    "description": "负向心境回归时间常数（小时）",
+    "type": "float",
+    "default": 3.0
+  },
+  "pos_valence_tau_hours": {
+    "description": "正向心境余温回归时间常数（小时）",
+    "type": "float",
+    "default": 8.0
+  },
+  "care_active_limit": {
+    "description": "同时挂起的活跃牵挂事项上限（1-5）",
+    "type": "int",
+    "default": 3
+  },
+  "blacklist_enabled": {
+    "description": "启用访客黑名单消息拦截（承接旧 EmotionAI 黑名单）",
+    "type": "bool",
+    "default": true
+  }
+}

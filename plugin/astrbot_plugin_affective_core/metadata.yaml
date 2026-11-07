@@ -1,0 +1,7 @@
+name: astrbot_plugin_affective_core
+display_name: 大肥鱼心境中枢
+desc: 三层情感动力学、回复前实时共情评估、跨天牵挂账本与多通道情绪表达桥接
+version: v0.1.0
+author: dafeiyu-tools
+support_platforms:
+  - aiocqhttp
