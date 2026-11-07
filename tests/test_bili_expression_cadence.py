@@ -1,7 +1,9 @@
 """Offline foreground thought cadence: exposure is not a delivery receipt."""
 import importlib
 import json
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import test_bili_activity as fixtures
@@ -104,6 +106,54 @@ class ExpressionCadenceTests(unittest.TestCase):
         self.assertEqual(len(offers(self.store)), 2)
         self.assertIn(SECOND, self.context("next-message", now=NOW + 3))
 
+    def test_initial_empty_choice_survives_new_candidate_and_restart(self):
+        self.assertNotIn(FIRST, self.context("initially-empty"))
+        held(self.store, at=NOW + 1)
+        self.store.close()
+        self.store = core.Store(self.temp.name)
+        self.assertNotIn(FIRST, self.context("initially-empty", now=NOW + 2))
+        self.assertEqual(len(offers(self.store)), 1)
+        self.assertIsNone(offers(self.store)[0][1]["held_id"])
+        self.assertIn(FIRST, self.context("new-message", now=NOW + 2))
+
+    def test_replay_preserves_choice_crowded_out_of_two_item_snapshot(self):
+        held(self.store)
+        self.assertIn(FIRST, self.context("selected-first"))
+        held(self.store, SECOND, "second", at=NOW + 1)
+        held(self.store, "刚才新想到的第三件事", "third", at=NOW + 2)
+        before = list(self.store.db.iterdump())
+        snapshot = self.snapshot(now=NOW + 3)
+        self.assertEqual(len(snapshot["held_thoughts"]), 2)
+        self.assertNotIn(FIRST, [item["excerpt"] for item in snapshot["held_thoughts"]])
+        replay = self.context("selected-first", now=NOW + 3)
+        self.assertIn(FIRST, replay)
+        self.assertNotIn(SECOND, replay)
+        self.assertNotIn("刚才新想到的第三件事", replay)
+        self.assertEqual(list(self.store.db.iterdump()), before)
+        # Widening replay lookup must still respect the delivery ledger.
+        self.store.delivery(SCOPE, "later-delivery", "thought", "first", {}, True)
+        self.store.delivered("later-delivery", {"message_id": 202})
+        self.assertNotIn(FIRST, self.context("selected-first", now=NOW + 4))
+        self.assertEqual(len(offers(self.store)), 1)
+
+    def test_concurrent_connections_cannot_offer_same_candidate_twice(self):
+        held(self.store)
+        ready = threading.Barrier(2)
+
+        def request(message_id):
+            store = core.Store(self.temp.name)
+            try:
+                ready.wait(timeout=5)
+                return cadence.ExpressionCadence(store).context(SCOPE, self.cfg, message_id, now=NOW)
+            finally:
+                store.close()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(request, ("parallel-one", "parallel-two")))
+        self.assertEqual(sum(FIRST in result for result in results), 1)
+        self.assertEqual(len(offers(self.store)), 2)
+        self.assertEqual(sum(row[1]["held_id"] is not None for row in offers(self.store)), 1)
+
     def test_six_hour_candidate_cooldown_boundary(self):
         self.assertEqual(cadence.COOLDOWN_SECONDS, 6 * 3600)
         held(self.store)
@@ -157,9 +207,7 @@ class ExpressionCadenceTests(unittest.TestCase):
         self.assertIn(FIRST, self.context("x" * 256, now=NOW + 6 * 3600))
         self.assertEqual(len(offers(self.store)), 2)
 
-    def test_disabled_review_and_empty_history_do_not_write_events(self):
-        self.assertNotIn(FIRST, self.context("no-history"))
-        self.assertEqual(offers(self.store), [])
+    def test_disabled_review_does_not_write_events(self):
         held(self.store)
         for cfg in (main.DEFAULTS, self.cfg | {"self_expression_enabled": False},
                     self.cfg | {"life_enabled": False}):
@@ -229,7 +277,12 @@ class ExpressionCadenceTests(unittest.TestCase):
         after_window = NOW + 48 * 3600 + 1
         self.assertNotIn(FIRST, self.context("original", now=after_window))
         self.assertNotIn(FIRST, self.context("fresh", now=after_window))
-        self.assertEqual(len(offers(self.store)), 1)
+        # The bounded replay window has elapsed. Both messages now retain an
+        # empty choice, while the original held record is not resurrected.
+        self.assertEqual(len(offers(self.store)), 3)
+        self.assertTrue(all(row[1]["held_id"] is None for row in offers(self.store)[1:]))
+        self.assertNotIn(FIRST, self.context("original", now=after_window + 1))
+        self.assertEqual(len(offers(self.store)), 3)
         self.assertEqual(self.store.db.execute(
             "SELECT count(*) FROM events WHERE kind='share_held'").fetchone()[0], 1)
 
@@ -307,6 +360,19 @@ class ExpressionCadenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
         value = await self.hook(event)
         self.assertNotIn(FIRST, value)
         self.assertEqual(offers(self.plugin.store), [])
+
+    async def test_empty_foreground_turn_does_not_switch_after_tool_continuation(self):
+        self.enable()
+        initial = await self.hook(fixtures.FakeEvent(event_id="empty-chat"))
+        held(self.plugin.store)
+        continuation = await self.hook(fixtures.FakeEvent(event_id="empty-chat"))
+        self.assertNotIn(FIRST, initial)
+        self.assertNotIn(FIRST, continuation)
+        self.assertEqual(len(offers(self.plugin.store)), 1)
+        self.assertIn(FIRST, await self.hook(fixtures.FakeEvent(event_id="next-chat")))
+        self.assertEqual(self.calls, [])
+        self.delivery.send.assert_not_called()
+        self.plugin.flush_memory.assert_not_called()
 
     async def test_background_and_reply_runs_never_expose_or_record_held_thoughts(self):
         self.seed()

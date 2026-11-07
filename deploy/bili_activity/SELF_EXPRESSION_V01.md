@@ -70,15 +70,29 @@
 
 ### 2026-11-06 增量：攒着的话择机带出
 
-前台主人私聊的自动上下文改用 `expression_cadence.py`：每条消息最多提供1条有效摘录，同一候选6小时内不再次自动提供。候选仍只来自最近48小时的被拦分享，最多考察只读快照中的2条。重复记录相同内容的被拦分享不能绕过冷却；作品头版本改变或来源失效后，旧版摘录不再提供。
+前台主人私聊的自动上下文改用 `expression_cadence.py`：每条消息最多提供1条有效摘录，同一候选6小时内不再次自动提供。候选仍只来自最近48小时的被拦分享，首次选择考察只读快照中的2条；同消息续轮在最多24条来源内复核原选择。重复记录相同内容的被拦分享不能绕过冷却；作品头版本改变或来源失效后，旧版摘录不再提供。
 
-稳定的消息ID与候选指纹只以摘要写入 `events.kind=held_thought_context`，状态固定为 `context_only`。同一消息的工具续轮复用原选择，不重复计账；若原候选已失效则不提供，也不换成另一条。挑选和记账使用原有SQLite事务，防止两个并发请求同时挑中同一候选。账本重开后仍遵守冷却。
+稳定的消息ID与候选指纹只以摘要写入 `events.kind=held_thought_context`，状态固定为 `context_only`。在48小时记录窗口内，同一消息的工具续轮复用原选择，不重复计账；若原候选已失效则不提供，也不换成另一条。挑选和记账使用原有SQLite事务，防止两个并发请求同时挑中同一候选。账本重开后仍遵守冷却。
 
 这不是送达或消费确认：模型可能没采用摘录，生成也可能失败，均不删除原记录、不标记已说过、不重发QQ消息。`qq_sent=false` 仅描述原先被拦的主动分享；普通聊天是否提过、是否送达均未知。中文备忘明确区分这层含义。
 
-`SelfExpression.snapshot/context`、`df_self_reflect` 和状态查询继续只读。主人主动问近况时仍可查询全部有效候选，不受自动提供的6小时冷却限制。生活/回复等后台轮次、缺稳定消息ID、活动关闭时不自动提供这些摘录；DND、生活暂停、非主人或其他会话不产生曝光记录。没有候选时也不记账。
+`SelfExpression.snapshot/context`、`df_self_reflect` 和状态查询继续只读。主人主动问近况时仍可查询快照中的有效候选，不受自动提供的6小时冷却限制。生活/回复等后台轮次、缺稳定消息ID、活动关闭时不自动提供这些摘录；DND、生活暂停、非主人或其他会话不产生选择记录。
 
-事件不复制聊天正文或摘录，不写长期记忆，不改变联系额度、审批、发送路径或活动开关。固定扫描最近48小时最多500条曝光事件，超过上限或账本内容损坏时保守省略自动摘录，显式只读查询仍可用；未来时间的曝光记录也不会被当作已过冷却。无新增配置，沿用 `life_enabled` / `self_expression_enabled`，默认关闭。
+事件不复制聊天正文或摘录，不写长期记忆，不改变联系额度、审批、发送路径或活动开关。固定扫描最近48小时最多500条消息选择事件（含空选择），超过上限或账本内容损坏时保守省略自动摘录，显式只读查询仍可用；未来时间的曝光记录也不会被当作已过冷却。无新增配置，沿用 `life_enabled` / `self_expression_enabled`，默认关闭。
+
+2026-11-07续轮修复：有效前台消息首次没有候选时也保存 `held_id=null`，防止后来新增的念头在同一消息的工具续轮突然出现；冷却中无可选候选也同样保存空选择。已有选择复用时，从原有最多24条 `share_held` 来源中重新校验，不再因普通快照只展示最新2条而消失。若记录已过48小时、被超过24条更新来源挤出、已发送/不确定或作品版本/来源失效，仍保守不提供；不扩大历史扫描或复活旧摘录。
+
+本次在 `7a33080` 基线上独立重跑，使用 WSL Ubuntu 的 `dafeiyu-life-pilot-astrbot` 镜像、Python 3.12；容器 `--network none --read-only --tmpfs /tmp`，只读挂载仓库 `plugin`、`deploy`、`tests` 到 `/workspace`，没有挂载账号、配置或真实状态。工作目录 `/workspace`，定向模块组合设置 `PYTHONPATH=/workspace:/workspace/tests`。
+
+| 命令 / 阶段 | 实际结果 |
+| --- | --- |
+| `python -B -m unittest discover -s tests -p test_bili_expression_cadence.py -q`，修改前原测试 | 26项 OK |
+| 同命令，先加入反例，未修业务代码 | 30项，3 FAIL：初始空选择/重启、前台工具续轮、已选候选被两条新记录挤出 |
+| `python -B -m unittest discover -s tests -p test_bili_*.py -q`，最终代码 | 661项 OK，1 skip（Windows junction 专属）；含全部30项节奏测试 |
+| `python -B -m unittest test_bili_expression_cadence test_bili_self_expression test_bili_planner test_douyin_activity test_phone_agent test_knowledge_gate -q`，最终代码 | 120项 OK，0 skip |
+| `git diff --check` | 通过；Git仅提示后续LF/CRLF自动转换，无空白错误 |
+
+新增并发测试使用两个临时SQLite连接核对同一候选只提供一次；旧候选被挤出的测试同时验证扩大复核范围后仍排除已送达记录。Windows原生全量未重跑：当前Python 3.14.7缺 `mcp`（导入可用性检查为false）。真实模型是否采用摘录、QQ送达、长期表达效果仍为UNVERIFIED；未改隔离实例或云端、未读取真实cookie。
 
 ## 接入和行为边界
 

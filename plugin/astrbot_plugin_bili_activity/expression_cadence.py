@@ -43,8 +43,6 @@ class ExpressionCadence:
             value = self.view.snapshot(scope, cfg, now=now)
             candidates = value["held_thoughts"]
             value["held_thoughts"] = []
-            if not candidates:
-                return self.view.render_context(value)
             rows = self.db.execute(
                 "SELECT time,details FROM events WHERE scope=? AND kind=? AND time>=? "
                 "ORDER BY seq DESC LIMIT ?",
@@ -67,13 +65,19 @@ class ExpressionCadence:
                 if record["message_key"] == message_key:
                     # A sent, expired or revised candidate is not resurrected,
                     # and a continuation must never switch to another thought.
-                    value["held_thoughts"] = [c for c in candidates if c["held_id"] == held_id][:1]
+                    # Recheck the bounded source history, not only the newest
+                    # two display items: newer thoughts must not evict a choice.
+                    replay_candidates = self.view._held_thoughts(
+                        scope, now, value["window_days"], limit=24) if held_id else []
+                    value["held_thoughts"] = [c for c in replay_candidates if c["held_id"] == held_id][:1]
                     return self.view.render_context(value)
                 if row["time"] > now - COOLDOWN_SECONDS:
                     recent.add(held_id)
             selected = next((c for c in candidates if c["held_id"] not in recent), None)
             value["held_thoughts"] = [selected] if selected else []
             context = self.view.render_context(value)
+            # Even an initially empty choice belongs to this message. A later
+            # tool continuation must not acquire a newly arrived thought.
             self.db.execute(
                 "INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)",
                 (now, scope, EVENT_KIND, canonical({"message_key": message_key,

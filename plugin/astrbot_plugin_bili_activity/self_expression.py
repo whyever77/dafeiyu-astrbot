@@ -337,7 +337,7 @@ class SelfExpression:
                 and all(isinstance(sid, str) and sid for sid in sources)
                 and all(self._observed(self.memory.source(scope, sid), now) for sid in sources))
 
-    def _held_thoughts(self, scope, now, days):
+    def _held_thoughts(self, scope, now, days, *, limit=2):
         cutoff = max(0, now - min(days * 86400, HELD_THOUGHT_WINDOW_SECONDS))
         rows = self.db.execute(
             "SELECT seq,time,details FROM events WHERE scope=? AND kind='share_held' "
@@ -406,7 +406,7 @@ class SelfExpression:
                 item["work_id"] = details["work_id"]
                 item["revision"] = details["revision"]
             result.append(item)
-            if len(result) == 2:
+            if len(result) == limit:
                 break
         return result
 
