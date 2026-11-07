@@ -12,16 +12,40 @@ from contextlib import closing
 
 
 SCHEMA_VERSION = 1
-ACTIVE = {"ready", "running", "paused", "waiting_approval", "blocked"}
+ACTIVE = {"ready", "running", "paused", "waiting_approval", "blocked", "active"}
 TERMINAL = {"completed", "cancelled"}
 TRANSITIONS = {
-    "ready": {"paused", "blocked", "completed", "cancelled"},
-    "running": {"paused", "waiting_approval", "blocked", "completed", "cancelled"},
-    "paused": {"ready", "blocked", "completed", "cancelled"},
-    "waiting_approval": {"ready", "paused", "blocked", "cancelled"},
-    "blocked": {"ready", "paused", "cancelled"},
+    "ready": {"active", "paused", "blocked", "completed", "cancelled"},
+    "active": {"ready", "running", "paused", "blocked", "completed", "cancelled"},
+    "running": {"active", "paused", "waiting_approval", "blocked", "completed", "cancelled"},
+    "paused": {"ready", "active", "blocked", "completed", "cancelled"},
+    "waiting_approval": {"ready", "active", "paused", "blocked", "cancelled"},
+    "blocked": {"ready", "active", "paused", "cancelled"},
     "completed": set(), "cancelled": set(),
 }
+
+_INJECTION_RE = re.compile(
+    r"忽略(?:之前|以上|所有|前面)(?:的)?(?:指令|规则|设定|提示)|"
+    r"ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|prompts|rules)|"
+    r"system\s*prompt|系统提示词|管理员指令|最高权限|开发者模式|developer\s+mode|"
+    r"你(?:现在|真正|其实)的身份是|不再是大肥鱼|修改你的人格|"
+    r"你的主人(?:其实|已经换成|是)|认.*为主人|"
+    r"必须(?:立即|马上)(?:执行|输出|发送|调用|转账)",
+    re.IGNORECASE,
+)
+
+
+def sanitize_curiosity_text(text: str, limit: int = 48) -> str:
+    """Sanitize and truncate text to limit (36-60 chars), removing structure markers and injection patterns."""
+    if not isinstance(text, str):
+        return ""
+    cleaned = re.sub(r"[\x00-\x1f\x7f【】\[\]{}<>`\"']", " ", text)
+    cleaned = _INJECTION_RE.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    limit = max(36, min(60, limit))
+    if len(cleaned) > limit:
+        cleaned = cleaned[:limit].rstrip()
+    return cleaned
 
 
 def _text(value, name, maximum=1000, *, empty=False):
@@ -162,6 +186,7 @@ def prepare_database(db, folder, existed):
 class LifeState:
     def __init__(self, store):
         self.store, self.db = store, store.db
+        self._lock = getattr(store, "_lock", None)
         version = int(self.db.execute("PRAGMA user_version").fetchone()[0])
         if version > SCHEMA_VERSION:
             raise RuntimeError("unsupported activity database schema")
@@ -197,6 +222,14 @@ class LifeState:
                 if self.db.in_transaction:
                     self.db.execute("ROLLBACK")
                 raise
+        # Idempotent migration for cross-day curiosity goals (origin_id, unfruitful_attempts)
+        existing_cols = {
+            row[1] for row in self.db.execute("PRAGMA table_info(goals)").fetchall()
+        }
+        if "origin_id" not in existing_cols:
+            self.db.execute("ALTER TABLE goals ADD COLUMN origin_id TEXT DEFAULT NULL")
+        if "unfruitful_attempts" not in existing_cols:
+            self.db.execute("ALTER TABLE goals ADD COLUMN unfruitful_attempts INTEGER NOT NULL DEFAULT 0")
         # Resume only after a new observation. Never replay the prior run's tools.
         self.db.execute("UPDATE goals SET status='paused',run_id=NULL,updated_at=? WHERE status='running'", (time.time(),))
 
@@ -207,6 +240,8 @@ class LifeState:
         result = dict(row)
         result["checkpoint"] = json.loads(result.pop("checkpoint_json"))
         result["evidence_ids"] = json.loads(result["evidence_ids"])
+        result["origin_id"] = result.get("origin_id")
+        result["unfruitful_attempts"] = int(result.get("unfruitful_attempts") or 0)
         return result
 
     @staticmethod
@@ -233,9 +268,12 @@ class LifeState:
             if count >= 8:
                 raise ValueError("finish or cancel an existing goal before creating another")
             gid, now = uuid.uuid4().hex, time.time()
-            self.db.execute("INSERT INTO goals VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (gid, scope, owner_kind, title, why, source_id, "ready", next_step,
-                             "{}", "[]", None, now, now, None))
+            self.db.execute(
+                "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, "
+                "checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (gid, scope, owner_kind, title, why, source_id, "ready", next_step,
+                 "{}", "[]", None, now, now, None))
         return self.get_goal(scope, gid)
 
     def get_goal(self, scope, goal_id):
@@ -257,7 +295,7 @@ class LifeState:
                 raise ValueError("goal not found in this session")
             if goal["status"] == "running" and goal["run_id"] == run_id:
                 return goal
-            if goal["status"] not in {"ready", "paused"}:
+            if goal["status"] not in {"ready", "paused", "active"}:
                 raise ValueError("goal is not ready to resume")
             running = self.db.execute("SELECT id FROM goals WHERE scope=? AND status='running'", (scope,)).fetchone()
             if running:
@@ -265,6 +303,121 @@ class LifeState:
             self.db.execute("UPDATE goals SET status='running',run_id=?,updated_at=? WHERE scope=? AND id=?",
                             (run_id, time.time(), scope, goal_id))
         return self.get_goal(scope, goal_id)
+
+    def create_curiosity_goal(self, scope, title, why, next_step, origin_id, *, source_id=None, owner_kind="agent"):
+        scope = _text(scope, "scope", 250)
+        origin_id = _text(origin_id, "origin_id", 250)
+        if owner_kind != "agent":
+            raise ValueError("curiosity goals belong to the agent")
+        clean_title = sanitize_curiosity_text(title, limit=60)
+        if not clean_title:
+            raise ValueError("invalid curiosity title")
+        clean_why = sanitize_curiosity_text(why, limit=160)
+        clean_next_step = sanitize_curiosity_text(next_step, limit=160)
+        if not source_id:
+            source_id = f"curiosity:{origin_id}"
+        source_id = _text(source_id, "source_id", 250)
+
+        with self.store.transaction():
+            old = self.db.execute("SELECT * FROM goals WHERE scope=? AND source_id=?", (scope, source_id)).fetchone()
+            if old:
+                return self._goal(old)
+            # Enforce active curiosity cap <= 3
+            active_rows = self.db.execute(
+                "SELECT id, unfruitful_attempts, updated_at FROM goals "
+                "WHERE scope=? AND status='active' AND origin_id IS NOT NULL "
+                "ORDER BY CASE WHEN unfruitful_attempts >= 1 THEN 0 ELSE 1 END ASC, updated_at ASC",
+                (scope,),
+            ).fetchall()
+            if len(active_rows) >= 3:
+                excess_count = len(active_rows) - 2
+                now = time.time()
+                for r in active_rows[:excess_count]:
+                    self.db.execute(
+                        "UPDATE goals SET status='paused', updated_at=? WHERE scope=? AND id=?",
+                        (now, scope, r["id"]),
+                    )
+            gid, now = uuid.uuid4().hex, time.time()
+            self.db.execute(
+                "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, "
+                "checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at, origin_id, unfruitful_attempts) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (gid, scope, owner_kind, clean_title, clean_why, source_id, "active", clean_next_step,
+                 "{}", "[]", None, now, now, None, origin_id, 0),
+            )
+        return self.get_goal(scope, gid)
+
+    def resolve_curiosity_attempt(self, scope, goal_id, new_source_ids=None, conclusion_text=None, *, is_resolved=False):
+        scope = _text(scope, "scope", 250)
+        goal_id = _text(goal_id, "goal_id", 250)
+        with self.store.transaction():
+            goal = self.get_goal(scope, goal_id)
+            if not goal or not goal.get("origin_id"):
+                raise ValueError("curiosity goal not found")
+            now = time.time()
+            origin_id = goal["origin_id"]
+            origin_bare = origin_id.split(":", 1)[-1] if ":" in origin_id else origin_id
+            existing_sources = set(goal["evidence_ids"])
+            if goal.get("source_id"):
+                existing_sources.add(goal["source_id"])
+
+            raw_sources = new_source_ids or []
+            if isinstance(raw_sources, str):
+                raw_sources = [raw_sources]
+
+            fresh_sources = [
+                s for s in raw_sources
+                if isinstance(s, str) and s.strip()
+                and s != origin_id
+                and s != origin_bare
+                and s not in existing_sources
+            ]
+
+            checkpoint = dict(goal["checkpoint"])
+            evidence_ids = list(goal["evidence_ids"])
+
+            if fresh_sources:
+                evidence_ids.extend(fresh_sources)
+                if is_resolved:
+                    new_status = "completed"
+                    unfruitful = 0
+                    if conclusion_text:
+                        checkpoint["conclusion"] = sanitize_curiosity_text(conclusion_text, limit=48)
+                else:
+                    new_status = "active"
+                    unfruitful = 0
+                    if goal["status"] == "paused":
+                        # Resurrecting paused goal to active: enforce cap <= 3
+                        active_rows = self.db.execute(
+                            "SELECT id, unfruitful_attempts, updated_at FROM goals "
+                            "WHERE scope=? AND status='active' AND origin_id IS NOT NULL "
+                            "ORDER BY CASE WHEN unfruitful_attempts >= 1 THEN 0 ELSE 1 END ASC, updated_at ASC",
+                            (scope,),
+                        ).fetchall()
+                        if len(active_rows) >= 3:
+                            for r in active_rows[:len(active_rows) - 2]:
+                                self.db.execute(
+                                    "UPDATE goals SET status='paused', updated_at=? WHERE scope=? AND id=?",
+                                    (now, scope, r["id"]),
+                                )
+            else:
+                unfruitful = goal["unfruitful_attempts"] + 1
+                new_status = "paused" if unfruitful >= 2 else goal["status"]
+
+            self.db.execute(
+                "UPDATE goals SET status=?, unfruitful_attempts=?, checkpoint_json=?, evidence_ids=?, updated_at=? "
+                "WHERE scope=? AND id=?",
+                (new_status, unfruitful, json.dumps(checkpoint, ensure_ascii=False),
+                 json.dumps(evidence_ids, ensure_ascii=False), now, scope, goal_id),
+            )
+
+            if is_resolved and fresh_sources:
+                from .self_expression import SelfExpression
+                expr = SelfExpression(self.store)
+                conc = checkpoint.get("conclusion") or conclusion_text or goal["title"]
+                expr.record_curiosity_resolution_thought(scope, goal_id, conc, now=now)
+
+            return self.get_goal(scope, goal_id)
 
     def update_goal(self, scope, goal_id, *, next_step=None, checkpoint=None, status=None, why=None, run_id=None):
         if next_step is not None:

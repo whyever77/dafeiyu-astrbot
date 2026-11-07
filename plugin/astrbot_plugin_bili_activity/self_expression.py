@@ -67,6 +67,7 @@ HELD_SHARE_REASONS = {
     "这几次还没有收到主人回复，今天先安静些": "当时前几条消息主人还没回，先留着没发",
     "主动联系协调已关闭，本次安排取消": "当时主动联系协调已关闭，未发送",
     "daily_shares exhausted": "当时今日主动分享次数已满，留着没发",
+    "好奇心探索有新发现，留着闲聊时提": "前几天好奇的问题有了新进展，留着下次聊",
 }
 _HEADING_RE = re.compile(r"(?m)^##[ \t]+([^\r\n]+)[ \t]*$")
 _CITATION_RE = re.compile(r"\[E:[0-9a-f]{32}\]")
@@ -410,6 +411,28 @@ class SelfExpression:
                 break
         return result
 
+    def record_curiosity_resolution_thought(self, scope, goal_id, conclusion_text=None, *, now=None):
+        now = time.time() if now is None else now
+        goal = self.store.life.get_goal(scope, goal_id)
+        if not goal or goal.get("status") != "completed" or not goal.get("origin_id"):
+            return None
+        text = conclusion_text or (goal.get("checkpoint") or {}).get("conclusion") or goal.get("title")
+        from .life import sanitize_curiosity_text
+        cleaned = sanitize_curiosity_text(text, limit=48)
+        if not cleaned:
+            return None
+        fp = digest(["curiosity_thought", goal_id, cleaned])
+        details = {
+            "kind": "thought",
+            "reason": "好奇心探索有新发现，留着闲聊时提",
+            "excerpt": cleaned,
+            "goal_id": goal_id,
+            "origin_id": goal["origin_id"],
+            "fingerprint": fp,
+        }
+        self.store.event(scope, "share_held", details)
+        return details
+
     def _curiosity_threads(self, scope, now, days, projects_view, completed_view):
         cutoff = now - days * 86400
         all_goal_titles = {
@@ -509,6 +532,54 @@ class SelfExpression:
                     "source_ids": list(sources)[:8],
                     "subject_kind": "agent",
                     "meaning": "互联网单源见闻留下的待核实假设；尚未经多源印证，不代表已证实事实或主人偏好",
+                })
+        # Active curiosity goals
+        for cgoal in self.db.execute(
+            "SELECT id,title,why,next_step,evidence_ids,updated_at,origin_id FROM goals "
+            "WHERE scope=? AND status='active' AND origin_id IS NOT NULL "
+            "ORDER BY updated_at DESC LIMIT 3",
+            (scope,),
+        ).fetchall():
+            q = (cgoal["title"] or "").strip()
+            if not q or q.casefold() in seen:
+                continue
+            seen.add(q.casefold())
+            threads.append({
+                "kind": "curiosity_goal",
+                "goal_id": cgoal["id"],
+                "title": q[:120],
+                "question": q[:160],
+                "reflection": (cgoal["why"] or "")[:160],
+                "recorded_at": cgoal["updated_at"],
+                "source_ids": json.loads(cgoal["evidence_ids"] or "[]")[:8],
+                "origin_id": cgoal["origin_id"],
+                "subject_kind": "agent",
+                "meaning": "跨日存留的小疑问探索；基于已有线索，不代表已证实结论",
+            })
+        # Channel B: At most 1 paused curiosity goal within 48h
+        paused_cutoff = now - 48 * 3600
+        paused_row = self.db.execute(
+            "SELECT id,title,why,evidence_ids,updated_at,origin_id FROM goals "
+            "WHERE scope=? AND status='paused' AND origin_id IS NOT NULL AND unfruitful_attempts>=2 "
+            "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC LIMIT 1",
+            (scope, paused_cutoff, now),
+        ).fetchone()
+        if paused_row:
+            q_title = (paused_row["title"] or "").strip()
+            q_text = f"[暂搁] {q_title}"[:160]
+            if q_text.casefold() not in seen:
+                seen.add(q_text.casefold())
+                threads.append({
+                    "kind": "curiosity_paused",
+                    "goal_id": paused_row["id"],
+                    "title": q_title[:120],
+                    "question": q_text,
+                    "reflection": (paused_row["why"] or "")[:160],
+                    "recorded_at": paused_row["updated_at"],
+                    "source_ids": json.loads(paused_row["evidence_ids"] or "[]")[:8],
+                    "origin_id": paused_row["origin_id"],
+                    "subject_kind": "agent",
+                    "meaning": "探索两次暂无新线索而搁置的小疑问；仅供主人深聊时参考，不主动发起话题或抱怨",
                 })
         return sorted(threads, key=lambda r: (-r["recorded_at"], r["title"]))[:3]
 
