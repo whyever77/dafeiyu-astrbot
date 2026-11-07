@@ -88,6 +88,25 @@ function renderDetail(){
   $('#memory-index').textContent=String(state.data.memories.indexOf(m)+1).padStart(2,'0');
   const kind=el('div','memory-kind');kind.append(el('i',`dot ${m.kind}`),el('span','',KINDS[m.kind]),el('span','',date(m.created_at)));
   const gist=el('div','gist-box');gist.append(el('small','','留下的意义'),document.createTextNode(m.gist));
+  let affectBox=null;
+  if(m.felt_tone||m.affect_tag){
+    affectBox=el('div','affect-box');
+    const head=el('div','affect-box-head');
+    head.append(el('span','affect-box-label','心绪余味'));
+    if(m.affect_tag&&typeof m.affect_tag.salience==='number'){
+      head.append(el('span','affect-salience',`情绪显著度 ${(m.affect_tag.salience*100).toFixed(0)}%`));
+    }
+    affectBox.append(head);
+    if(m.felt_tone){
+      affectBox.append(el('p','affect-box-tone',m.felt_tone));
+    }
+    if(m.affect_tag){
+      const t=m.affect_tag,dims=[];
+      if(typeof t.valence==='number')dims.push(t.valence>0.2?`愉悦 +${Math.round(t.valence*100)}%`:t.valence<-0.2?`低落 ${Math.round(t.valence*100)}%`:'心境平和');
+      if(typeof t.arousal==='number')dims.push(t.arousal>0.55?'雀跃活跃':t.arousal<0.3?'恬静安宁':'舒缓自然');
+      if(dims.length)affectBox.append(el('small','affect-box-sub',dims.join(' · ')));
+    }
+  }
   const scores=el('div','detail-score');scores.append(scoreCell('细节可及度 · 模拟',m.detail),scoreCell('来源可信度',m.confidence));
   const curveLabel=el('div','curve-label','时间里的轮廓');curveLabel.append(el('span','',`稳定度 ${m.stability_days} 天${m.stability_assumed?' · 假设值':''}`));
   const key=el('div','curve-key');for(const text of ['细节','意义 · 较慢衰减']){const span=el('span');span.append(el('i'),document.createTextNode(text));key.append(span);}
@@ -98,7 +117,7 @@ function renderDetail(){
     button.addEventListener('click',()=>{if(set.has(m.id))set.delete(m.id);else set.add(m.id);refresh();});actions.append(button);
   }
   const source=el('div','source-box');source.append(el('span','','记忆来源'),document.createTextNode(m.source),el('small','',`作用域：${state.data.connection?.scopes?.[m.scope]?.label||m.scope} · 可信度来自来源字段`));
-  target.append(kind,el('h2','detail-title',m.title),el('p','detail-text',m.text),gist,scores,curveLabel,curveSVG(m),key,actions,el('p','experiment-note','实验仅改变当前视图，浏览不会强化记忆。'),source);
+  target.append(kind,el('h2','detail-title',m.title),el('p','detail-text',m.text),gist,...(affectBox?[affectBox]:[]),scores,curveLabel,curveSVG(m),key,actions,el('p','experiment-note','实验仅改变当前视图，浏览不会强化记忆。'),source);
   if(m.upstream){const u=m.upstream;const facts=el('div','upstream-facts');facts.append(el('h3','','原库记录 · 观测值'));const lines=[`类型：${u.atom_type||u.record_type} · 状态：${u.status}`];if(u.access_count!==undefined)lines.push(`原库访问次数：${u.access_count}（此页面不增加）`);if(u.reinforcement_count!==undefined)lines.push(`原库强化次数：${u.reinforcement_count}`);if(u.ttl_days!==undefined)lines.push(`原库 TTL：${u.ttl_days} 天；不是模拟半衰期`);if(u.expires_at)lines.push(`原库过期时间：${date(u.expires_at)}`);if(u.atom_type==='planned')lines.push('这是计划，不代表已经发生。');if(u.truncated)lines.push('正文超过展示上限，当前仅展示前 4,000 字符。');if(!u.access_time_known)lines.push('缺少可用的访问时间；模拟年龄暂从创建时间计算。');for(const line of lines)facts.append(el('p','',line));if(u.relations?.length){facts.append(el('h3','','原图谱关系 · 来源抽取，非事实核验'));for(const relation of u.relations)facts.append(el('p','',`${relation.source} → ${relation.relation} → ${relation.target}`));}target.append(facts);}
   const related=state.data.edges.filter(e=>e.source===m.id||e.target===m.id).slice(0,3);
   if(related.length)target.append(el('h3','related-title','沿着微光，继续想起'));

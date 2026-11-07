@@ -138,6 +138,15 @@ def normalize(payload, *, allow_empty=False):
         })
         if "upstream" in item:
             memories[-1]["upstream"] = upstream_metadata(item["upstream"])
+        if "felt_tone" in item and item["felt_tone"]:
+            memories[-1]["felt_tone"] = string(item["felt_tone"], "felt_tone", 120)
+        if "affect_tag" in item and isinstance(item["affect_tag"], dict):
+            tag = item["affect_tag"]
+            memories[-1]["affect_tag"] = {
+                "valence": number(tag.get("valence", 0.0), "valence", -1.0, 1.0),
+                "arousal": number(tag.get("arousal", 0.0), "arousal", 0.0, 1.0),
+                "salience": number(tag.get("salience", 1.0), "salience", 0.0, 10.0),
+            }
     by_id = {m["id"]: m for m in memories}
     edges, pairs = [], set()
     explicit = payload.get("edges", [])

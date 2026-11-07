@@ -157,6 +157,26 @@ class SnapshotContractTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidSnapshot, "接入文档"):
             normalize({"documents": [{"text": "a"}]})
 
+    def test_felt_tone_and_affect_tag_are_preserved_and_validated(self):
+        data = fixture()
+        data["memories"][0]["felt_tone"] = "温柔的安心感"
+        data["memories"][0]["affect_tag"] = {"valence": 0.35, "arousal": 0.4, "salience": 0.6}
+        out = normalize(data)
+        self.assertEqual(out["memories"][0]["felt_tone"], "温柔的安心感")
+        self.assertEqual(out["memories"][0]["affect_tag"], {"valence": 0.35, "arousal": 0.4, "salience": 0.6})
+
+        # Test overly long felt_tone
+        bad_long = fixture()
+        bad_long["memories"][0]["felt_tone"] = "超长" * 100
+        with self.assertRaises(InvalidSnapshot):
+            normalize(bad_long)
+
+        # Test out of range affect_tag
+        bad_affect = fixture()
+        bad_affect["memories"][0]["affect_tag"] = {"valence": 5.0, "arousal": 0.5}
+        with self.assertRaises(InvalidSnapshot):
+            normalize(bad_affect)
+
     def test_demo_is_explicitly_fictional_and_multiscope(self):
         demo = demo_snapshot()
         self.assertEqual(len(demo["memories"]), 35)

@@ -141,6 +141,101 @@ def project_shelf(db, tables, scope, cfg):
         return result | {"state": "unsupported", "items": [], "total": 0, "truncated": False}
 
 
+def read_affect(root, scope, at, cfg):
+    """Read bounded affect state and active care threads strictly read-only."""
+    fallback = {
+        "state": "unavailable",
+        "valence": 0.0,
+        "arousal": 0.5,
+        "longing": 0.0,
+        "pout": 0.0,
+        "share_urge": 0.0,
+        "warmth_bond": 0.0,
+        "dominant_tag": "",
+        "softened_mode": "none",
+        "care_threads": [],
+    }
+    candidate_paths = []
+    if cfg.get("affective_data_dir"):
+        candidate_paths.append(Path(cfg["affective_data_dir"]) / "affective.db")
+    candidate_paths.append(root / "affective.db")
+    candidate_paths.append(root.parent / "astrbot_plugin_affective_core" / "affective.db")
+
+    affect_path = None
+    for p in candidate_paths:
+        try:
+            if p.is_file():
+                affect_path = p.resolve(strict=True)
+                break
+        except Exception:
+            continue
+
+    if not affect_path:
+        return fallback
+
+    try:
+        adb = sqlite3.connect(affect_path.as_uri() + "?mode=ro", uri=True, timeout=2)
+        adb.row_factory = sqlite3.Row
+        try:
+            adb.execute("PRAGMA query_only=ON")
+            allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_TRANSACTION}
+            adb.set_authorizer(lambda code, *_: sqlite3.SQLITE_OK if code in allowed else sqlite3.SQLITE_DENY)
+            adb.execute("BEGIN")
+            atables = {r[0] for r in adb.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {"affect_states", "care_threads"} <= atables:
+                return fallback
+
+            row = adb.execute(
+                "SELECT valence, arousal, longing, pout, share_urge, warmth_bond, "
+                "dominant_tag, softened_mode, last_interaction_at "
+                "FROM affect_states WHERE scope=? LIMIT 1",
+                (scope,),
+            ).fetchone()
+
+            care_rows = adb.execute(
+                "SELECT id, topic, category, salience, created_at FROM care_threads "
+                "WHERE scope=? AND status='active' AND expires_at>? "
+                "ORDER BY salience DESC, created_at DESC LIMIT 3",
+                (scope, at),
+            ).fetchall()
+
+            care_threads = [
+                {
+                    "id": clean(cr["id"], 64),
+                    "topic": clean(cr["topic"], 80),
+                    "category": clean(cr["category"], 40),
+                    "salience": number(cr["salience"]) or 1.0,
+                    "created_at": number(cr["created_at"]),
+                }
+                for cr in care_rows
+            ]
+
+            if not row:
+                return fallback | {"state": "ready", "care_threads": care_threads}
+
+            def _clamp(v, low, high, d):
+                n = number(v)
+                return max(low, min(high, n)) if n is not None else d
+
+            return {
+                "state": "ready",
+                "valence": _clamp(row["valence"], -1.0, 1.0, 0.0),
+                "arousal": _clamp(row["arousal"], 0.0, 1.0, 0.5),
+                "longing": _clamp(row["longing"], 0.0, 1.0, 0.0),
+                "pout": _clamp(row["pout"], 0.0, 1.0, 0.0),
+                "share_urge": _clamp(row["share_urge"], 0.0, 1.0, 0.0),
+                "warmth_bond": _clamp(row["warmth_bond"], 0.0, 1000.0, 0.0),
+                "dominant_tag": clean(row["dominant_tag"], 40),
+                "softened_mode": clean(row["softened_mode"], 40),
+                "last_interaction_at": number(row["last_interaction_at"]),
+                "care_threads": care_threads,
+            }
+        finally:
+            adb.close()
+    except Exception:
+        return fallback
+
+
 def read_activity(folder, *, now=None):
     at = time.time() if now is None else number(now)
     if at is None:
@@ -231,6 +326,7 @@ def read_activity(folder, *, now=None):
                 "scope_label": "已配置的主人私聊 · 活动账本", "state": state, "zone": zone,
                 "flags": flags, "paused": paused, "goals": goals, "decisions": decisions, "works": works,
                 "pending": pending, "contacts": contacts, "projects": project_shelf(db, tables, scope, cfg),
+                "affect": read_affect(root, scope, at, cfg),
                 "notice": "选择记录是意图，运行结束不等于目标完成。房间是记录的可视化，不是实时在线证明；不推断人格或关联其他记忆会话。"}
         finally:
             db.close()

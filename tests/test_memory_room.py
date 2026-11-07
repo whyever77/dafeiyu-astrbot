@@ -17,6 +17,9 @@ from unittest.mock import Mock
 from deploy.memory_observatory.activity import SSHActivitySource, demo_room
 from deploy.memory_observatory.activity_reader import ActivityError, read_activity
 from deploy.memory_observatory.server import ObservatoryServer
+TESTS_DIR = str(Path(__file__).resolve().parent)
+if TESTS_DIR not in sys.path:
+    sys.path.insert(0, TESTS_DIR)
 import test_memory_observatory as existing
 
 PACKAGE = "room_fixture_plugin"
@@ -184,6 +187,87 @@ class ReaderTests(unittest.TestCase):
         self.store.db.execute("UPDATE events SET details='broken private payload',time=?",(self.now,))
         with self.assertRaisesRegex(ActivityError, "无法读取活动账本") as error: self.read()
         self.assertNotIn("private",str(error.exception))
+
+    def test_read_activity_includes_affect_fallback_when_db_absent(self):
+        result = self.read()
+        self.assertIn("affect", result)
+        self.assertEqual(result["affect"]["state"], "unavailable")
+        self.assertEqual(result["affect"]["valence"], 0.0)
+        self.assertEqual(result["affect"]["care_threads"], [])
+
+    def test_read_activity_reads_affective_db_and_care_threads(self):
+        aff_db_path = self.root / "affective.db"
+        db = sqlite3.connect(aff_db_path)
+        try:
+            db.execute("""
+                CREATE TABLE affect_states (
+                    scope TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    valence REAL NOT NULL,
+                    arousal REAL NOT NULL,
+                    longing REAL NOT NULL,
+                    pout REAL NOT NULL,
+                    share_urge REAL NOT NULL,
+                    warmth_bond REAL NOT NULL,
+                    dominant_tag TEXT NOT NULL,
+                    softened_mode TEXT NOT NULL,
+                    last_settled_at REAL NOT NULL,
+                    last_interaction_at REAL NOT NULL,
+                    last_sleep_reset_day TEXT NOT NULL
+                )
+            """)
+            db.execute("""
+                CREATE TABLE care_threads (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    salience REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                )
+            """)
+            db.execute(
+                "INSERT INTO affect_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (SCOPE, "12345", 0.42, 0.68, 0.2, 0.35, 0.5, 12.0, "微喜", "none", self.now - 100, self.now - 10, "2026-11-07")
+            )
+            # Active and valid
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t1", SCOPE, "主人提起的画展", "interest", 0.8, "active", self.now - 100, self.now, self.now + 3600)
+            )
+            # Expired
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t2", SCOPE, "过期的事情", "task", 0.5, "active", self.now - 200, self.now, self.now - 10)
+            )
+            # Resolved
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t3", SCOPE, "已解决的事情", "task", 0.5, "resolved", self.now - 100, self.now, self.now + 3600)
+            )
+            # Other scope
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t4", "qq:FriendMessage:9999", "别人的事", "other", 0.5, "active", self.now - 100, self.now, self.now + 3600)
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        result = self.read()
+        aff = result["affect"]
+        self.assertEqual(aff["state"], "ready")
+        self.assertAlmostEqual(aff["valence"], 0.42)
+        self.assertAlmostEqual(aff["arousal"], 0.68)
+        self.assertAlmostEqual(aff["pout"], 0.35)
+        self.assertEqual(aff["dominant_tag"], "微喜")
+        self.assertEqual(len(aff["care_threads"]), 1)
+        self.assertEqual(aff["care_threads"][0]["id"], "t1")
+        self.assertEqual(aff["care_threads"][0]["topic"], "主人提起的画展")
+        self.assertEqual(aff["care_threads"][0]["category"], "interest")
 
     def test_ssh_uses_fixed_stdin_reader_and_sanitizes_failures(self):
         run = Mock(return_value=types.SimpleNamespace(returncode=0,stdout=json.dumps({"ok":True,"snapshot":demo_room()})))
