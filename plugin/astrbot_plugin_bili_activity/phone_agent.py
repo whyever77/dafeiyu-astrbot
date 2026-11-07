@@ -83,6 +83,28 @@ ALLOWED_ACTIONS = frozenset({
     "wait",
 })
 
+# PhoneMCP 实际暴露的是 press_home / press_back；插件对模型保留 go_home / go_back
+# 这两个动作名，调用 MCP 时在这里做一次别名映射。
+PHONE_TOOL_ALIASES = {
+    "go_home": "press_home",
+    "go_back": "press_back",
+}
+
+LAUNCHER_APP_NAMES = frozenset({"system home", "home", "launcher", "桌面", "主屏幕"})
+
+
+def _resolve_app_name(value: str) -> str:
+    """PhoneMCP 的 get_current_app 返回应用名（如 bilibili），这里映射回包名。"""
+    name = str(value or "").strip()
+    if not name:
+        return name
+    mapped = APP_ALIASES.get(name) or APP_ALIASES.get(name.lower())
+    if mapped:
+        return mapped
+    if name.lower() in LAUNCHER_APP_NAMES:
+        return "com.android.launcher3"
+    return name[:120]
+
 SAFE_KEYCODES = frozenset({
     "BACK", "HOME", "ENTER", "SEARCH", "SPACE", "DEL",
     "KEYCODE_BACK", "KEYCODE_HOME", "KEYCODE_ENTER", "KEYCODE_SEARCH",
@@ -149,6 +171,9 @@ def _parse_package_name(raw_app_info: Any) -> str:
         for k in ("package", "package_name", "packageName", "app"):
             if isinstance(raw_app_info.get(k), str) and raw_app_info[k].strip():
                 return raw_app_info[k].strip()
+        app_name = raw_app_info.get("app_name") or raw_app_info.get("name")
+        if isinstance(app_name, str) and app_name.strip():
+            return _resolve_app_name(app_name)
         text = json.dumps(raw_app_info, ensure_ascii=False)
     else:
         text = str(raw_app_info or "").strip()
@@ -158,6 +183,7 @@ def _parse_package_name(raw_app_info: Any) -> str:
                 return _parse_package_name(parsed)
         except Exception:
             pass
+        text = _resolve_app_name(text)
     m = re.search(r"\b([a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,})\b", text, re.IGNORECASE)
     return m.group(1) if m else text[:120]
 
@@ -208,8 +234,9 @@ class PhoneAgent:
         self._run_steps: dict[str, int] = {}
 
     async def _call(self, name: str, args: dict[str, Any] | None = None, owner: str | None = None):
+        mcp_name = PHONE_TOOL_ALIASES.get(name, name)
         payload = {"device_id": self.device_id, **(args or {})}
-        return await self.gate.call(self.phone_client_factory(), name, payload, owner=owner)
+        return await self.gate.call(self.phone_client_factory(), mcp_name, payload, owner=owner)
 
     async def current_package(self, owner: str | None = None) -> str:
         res = await self._call("get_current_app", {}, owner=owner)
