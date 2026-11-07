@@ -335,13 +335,16 @@ def merge_appraisal_with_fast_screen(
     if not llm_result:
         return fast_result
     merged = dict(llm_result)
-    # Never miss an obvious code/debugging request or coaxing/apology/distress cue
-    if merged.get("intent") == "casual" and fast_result.get("intent") in {
+    fast_intent = fast_result.get("intent")
+    # Never miss an obvious code/debugging request or coaxing/apology/distress cue.
+    if fast_intent == "serious_task" and merged.get("intent") != "serious_task":
+        merged["intent"] = "serious_task"
+    elif merged.get("intent") == "casual" and fast_intent in {
         "serious_task",
         "apology_or_busy_explain",
         "coaxing_affection",
     }:
-        merged["intent"] = fast_result["intent"]
+        merged["intent"] = fast_intent
     merged["user_distress"] = max(
         float(merged.get("user_distress") or 0.0),
         float(fast_result.get("user_distress") or 0.0),
@@ -351,6 +354,9 @@ def merge_appraisal_with_fast_screen(
         *(fast_result.get("care_resolved_ids") or []),
     ]))
     merged["care_resolved_ids"] = resolved
+    # A deterministic distress cue must not be lost when the LLM returns null.
+    if not merged.get("care_open") and fast_result.get("care_open"):
+        merged["care_open"] = fast_result["care_open"]
     return merged
 
 
