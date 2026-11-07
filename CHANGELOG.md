@@ -2,6 +2,16 @@
 
 > 每一次值得说的进化都会记在这里。
 
+## v3.1.0 · 心境中枢 M1/M2/M3：情感动力学、表达桥与观测台接线（2026-11-08，插件 v3.0.3 / affective core v0.1.0）
+
+- **M1 心境中枢插件**：新增 `plugin/astrbot_plugin_affective_core`：独立 SQLite 情感状态/牵挂账本、三层连续动力学、回复前 2.5s 共情评估（超时/坏 JSON/异常回退确定性快筛）、软心门控、跨天牵挂、群聊/访客隔离、旧 EmotionAI 只读迁移、出站泄漏清洗与主人 `/心情`。
+- **M2 表达通道**：TTS 语气/语速/音高、气泡上限、表情抑制、生活决策/联系、记忆显著性/`felt_tone` 接入进程内 bridge；生产模块路径修正为 `data.plugins.astrbot_plugin_affective_core`；中性 profile 返回 None，避免覆盖用户 TTS/气泡/表情配置；AffectiveStore `check_same_thread=False` + 全量 RLock。
+- **M3 观测台**：小小房间/记忆星海只读展示 affect 状态与 care threads；独立 `affective.db` 使用 `mode=ro` + `query_only` + authorizer；修复负 valence 被 0 吞掉；前端 aria/reduced-motion/setAffect 重置/aura 缓存等低项。
+- **PhoneMCP 适配**（PR #27）：`get_current_app` 的 `app_name` → 包名映射；`go_home`/`go_back` → `press_home`/`press_back` 别名，修复 `df_phone_observe`/`df_phone_act` 失败。
+- **部署**：v3.1.0 部署云端；旧 `astrbot_plugin_emotionai` 移出 `data/plugins` 并备份，启用心境中枢。
+- **未包含**：held-thought turnover（PR #29 的 `6ebf68a`）仍在修复，不随本版发布。
+- 测试：全量 854 tests OK / 20 skip；发布预检通过。
+
 ## v3.0.3 · 工具文本上下文折叠、前台手机单轮限流与抖音笔记兼容（2026-11-06）
 
 - 新增 `trim_tool_text_contexts` 与 `trim_tool_text_history`：保留最近工具结果原文，将较早的 `role="tool"` 结果折叠为短占位符并保留 `tool_call_id` 配对结构，同时清理内联长串图片 base64；在 `ToolLoopAgentRunner._sanitize_contexts_for_provider` 与 `guard_phone`（`on_llm_request`）中同裁截图与工具文本，`handle_api_error` 超限重试先 `strip_image_parts` 再折叠工具结果，且后续重试无变化时委托原生错误处理器避免空转。

@@ -8,6 +8,8 @@
 
 [记忆星海 v0.3](deploy/memory_observatory/README.md)：深蓝星域记忆星图、相机透视与环视、时间线、遗忘模拟和来源检查。已接通运行中的 LivingMemory 2.7.0-beta.2，只读展示真实文档、记忆原子和来源关系，支持手动和每 60 秒自动同步；曲线与线索检索仍为本地模拟，不修改 QQ 中的记忆行为。使用已有运维 SSH 配置，在仓库根目录运行 `python -B -m deploy.memory_observatory.server --port 8767 --livingmemory-ssh`，打开 `http://127.0.0.1:8767`。不加 `--livingmemory-ssh` 则使用虚构演示数据。实测与边界见[接入验收](deploy/memory_observatory/LIVINGMEMORY_V02.md)。
 
+[心境中枢 v0.1](plugin/astrbot_plugin_affective_core/)（M1/M2/M3，代码已合并；云端启用前先停用旧 EmotionAI）：新增自研 affective core 插件——三层情感动力学、回复前 2.5 秒共情评估、牵挂账本与跨天软心门控；TTS 语气/语速、气泡上限、表情抑制、生活决策/联系、记忆显著性和 `felt_tone` 走进程内只读 bridge。小小房间与记忆星海新增当前心境/牵挂展示；affect 数据使用独立 `affective.db` 的 `mode=ro` + `query_only` + authorizer 只读读取。旧 EmotionAI 数据只读迁移，但旧插件必须先在面板停用或移出 `data/plugins`，否则两套情绪 hook 会同时注入。本次发布（v3.1.0）部署云端。
+
 [生活决策 v0.1](deploy/bili_activity/LIFE_DECISION_V01.md)：复用已有调度、目标与预算，根据自己的兴趣、未完成项目和近期尝试选择研究、写作、探索或休息，记录理由并支持主人查询。2026-10-29 已部署并开启，首轮真实决策为 writing；休息不调用模型、不发消息、不写入虚构经历。
 
 [主动联系协调 v0.1](deploy/bili_activity/CONTACT_V01.md)：生活分享与 proactive_chat 共用联系额度、间隔和未回应记录，主人正在聊天时先让出时间。2026-10-30 已部署云端并开启，社区补丁已安装，额度 1/120/5/1；真实 QQ 联动 smoke 尚未执行。
@@ -42,6 +44,7 @@
 | 🔊 说 | 语音条（含自定义音色） | 百炼音色复刻 + qwen-audio-3.1-tts-flash |
 | 😀 表情 | 真 QQ 表情（326 张脸） | 自研插件把 `[旺柴]` 变成真实表情段 |
 | 🧠 记 | 长期记忆 | livingmemory + bge-m3 嵌入（本地 Ollama / 硅基流动托管） |
+| 🫀 心境 | 三层情感状态、回复前共情评估、牵挂账本；TTS/气泡/表情/生活决策/记忆通道 | affective core（独立 affective.db，只读观测） |
 | 📚 知识 | 功能手册 / 热梗词典（聊天里现查现答） | AstrBot 知识库 + bge-m3 嵌入 |
 | 🏠 群聊 | 进群聊天：@ / 引用 / 喊「大肥鱼」都能唤醒 | NapCat 群消息 + 唤醒词 |
 | 👥 认人 | 分得清谁在说话：群里看昵称、访客标「朋友」 | 插件注入身份标记（对方不可见） |
@@ -59,6 +62,7 @@
 plugin/astrbot_plugin_face_convert/   ← 核心插件（AstrBot 插件，直接可装）
 plugin/astrbot_plugin_schedule_awareness/ ← 🧭 把她的定时任务实时注入系统提示词
 plugin/astrbot_plugin_bili_activity/   ← 自主浏览、持续目标、截图、来源笔记与研究方法
+plugin/astrbot_plugin_affective_core/  ← 🫀 心境中枢：情感动力学、共情评估、牵挂账本与表达桥
 persona/大肥鱼-人格.md                 ← 人格提示词（可直接导入 AstrBot）
 persona/课程记忆-模板.md               ← "让她自己悟"的教学记忆模板
 docs/部署指南.md                       ← 从零搭建的路线图
