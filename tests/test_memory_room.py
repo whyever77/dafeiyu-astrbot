@@ -41,7 +41,7 @@ class ReaderTests(unittest.TestCase):
         self.write_config()
         self.store = core.Store(self.root)
         self.now = time.time()
-        self.store.db.execute("INSERT INTO goals VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+        self.store.db.execute("INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
             "goal", SCOPE, "self", "研究海里的光", "出于好奇", "source-1", "paused", "核对第二份资料", "{}", "[]", None, self.now-60, self.now-30, None))
 
     def write_config(self):

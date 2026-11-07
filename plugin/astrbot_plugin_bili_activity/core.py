@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -87,7 +88,8 @@ class Store:
         self.folder.mkdir(parents=True, exist_ok=True)
         path = self.folder / "activity.sqlite3"
         existed = path.exists()
-        self.db = sqlite3.connect(path, isolation_level=None)
+        self._lock = threading.RLock()
+        self.db = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         try:
             self.schema_backup = prepare_database(self.db, self.folder, existed)
@@ -97,9 +99,10 @@ class Store:
             raise
 
     def _initialize(self):
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA busy_timeout=5000")
-        self.db.executescript("""
+        with self._lock:
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA busy_timeout=5000")
+            self.db.executescript("""
         CREATE TABLE IF NOT EXISTS proposals (
           id TEXT PRIMARY KEY, scope TEXT NOT NULL, actor TEXT NOT NULL,
           action TEXT NOT NULL, args TEXT NOT NULL, fingerprint TEXT NOT NULL,
@@ -129,34 +132,38 @@ class Store:
           scope TEXT NOT NULL, actor TEXT NOT NULL, event_id TEXT NOT NULL,
           proposal_id TEXT NOT NULL, PRIMARY KEY(scope,actor,event_id));
         """)
-        self.life = LifeState(self)
-        # An interrupted non-idempotent call must never be blindly resubmitted.
-        self.db.execute("UPDATE proposals SET status='uncertain' WHERE status='executing'")
-        self.db.execute("UPDATE deliveries SET status='uncertain' WHERE status='sending'")
-        self.db.execute("UPDATE memories SET status='uncertain' WHERE status='sending'")
-        self.db.execute("UPDATE runs SET status='interrupted',ended=? WHERE status='running'", (time.time(),))
+            self.life = LifeState(self)
+            # An interrupted non-idempotent call must never be blindly resubmitted.
+            self.db.execute("UPDATE proposals SET status='uncertain' WHERE status='executing'")
+            self.db.execute("UPDATE deliveries SET status='uncertain' WHERE status='sending'")
+            self.db.execute("UPDATE memories SET status='uncertain' WHERE status='sending'")
+            self.db.execute("UPDATE runs SET status='interrupted',ended=? WHERE status='running'", (time.time(),))
 
     @contextmanager
     def transaction(self):
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
-            yield
-        except BaseException:
-            self.db.execute("ROLLBACK")
-            raise
-        else:
-            self.db.execute("COMMIT")
+        with self._lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+            else:
+                self.db.execute("COMMIT")
 
     def event(self, scope, kind, details):
-        self.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)",
-                        (time.time(), scope, kind, canonical(details)))
+        with self._lock:
+            self.db.execute("INSERT INTO events(time,scope,kind,details) VALUES(?,?,?,?)",
+                            (time.time(), scope, kind, canonical(details)))
 
     def get_setting(self, key, default=None):
-        row = self.db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-        return json.loads(row[0]) if row else default
+        with self._lock:
+            row = self.db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            return json.loads(row[0]) if row else default
 
     def setting(self, key, value):
-        self.db.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (key, canonical(value)))
+        with self._lock:
+            self.db.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (key, canonical(value)))
 
     def propose(self, scope, actor, action, args, ttl=3600, request_key=None):
         if action not in WRITES:
