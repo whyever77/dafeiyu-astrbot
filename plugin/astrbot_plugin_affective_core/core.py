@@ -1,7 +1,7 @@
 """Durable SQLite storage and bounded ledgers for Affective Core.
 
 Independent of AstrBot runtime imports so offline tests and CLI tools can open
-and inspect ``affective.db`` directly. Never stores raw chat message bodies.
+and inspect ``affective.db`` directly. Strictly protects user privacy: never stores raw conversational transcripts or full chat message bodies; only persists numerical affective state coordinates and bounded, sanitized semantic labels (such as model-extracted care topic summaries bounded to 36-60 chars, mood tags, and event metadata).
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import math
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -173,116 +174,126 @@ class AffectiveStore:
         self.folder.mkdir(parents=True, exist_ok=True)
         self.db_path = self.folder / "affective.db"
         self._tx_depth = 0
-        self.db = sqlite3.connect(self.db_path, isolation_level=None)
+        self._lock = threading.RLock()
+        self.db = sqlite3.connect(
+            self.db_path,
+            isolation_level=None,
+            check_same_thread=False,
+        )
         self.db.row_factory = sqlite3.Row
         try:
             self._initialize()
         except BaseException:
-            self.db.close()
+            with self._lock:
+                self.db.close()
             raise
 
     def close(self) -> None:
-        self.db.close()
+        with self._lock:
+            self.db.close()
 
     @contextmanager
     def transaction(self):
-        if self._tx_depth > 0:
-            self._tx_depth += 1
+        with self._lock:
+            if self._tx_depth > 0:
+                self._tx_depth += 1
+                try:
+                    yield
+                finally:
+                    self._tx_depth -= 1
+                return
+            self.db.execute("BEGIN IMMEDIATE")
+            self._tx_depth = 1
             try:
                 yield
-            finally:
-                self._tx_depth -= 1
-            return
-        self.db.execute("BEGIN IMMEDIATE")
-        self._tx_depth = 1
-        try:
-            yield
-        except BaseException:
-            self._tx_depth = 0
-            self.db.execute("ROLLBACK")
-            raise
-        else:
-            self._tx_depth = 0
-            self.db.execute("COMMIT")
+            except BaseException:
+                self._tx_depth = 0
+                self.db.execute("ROLLBACK")
+                raise
+            else:
+                self._tx_depth = 0
+                self.db.execute("COMMIT")
 
     def _initialize(self) -> None:
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA busy_timeout=5000")
-        self.db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value_json TEXT NOT NULL,
-                updated_at REAL NOT NULL
-            );
+        with self._lock:
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA busy_timeout=5000")
+            self.db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS affect_states (
-                scope TEXT PRIMARY KEY,
-                owner_id TEXT NOT NULL,
-                valence REAL NOT NULL,
-                arousal REAL NOT NULL,
-                longing REAL NOT NULL,
-                pout REAL NOT NULL,
-                share_urge REAL NOT NULL,
-                warmth_bond REAL NOT NULL,
-                dominant_tag TEXT NOT NULL,
-                softened_mode TEXT NOT NULL,
-                last_settled_at REAL NOT NULL,
-                last_interaction_at REAL NOT NULL,
-                last_sleep_reset_day TEXT NOT NULL,
-                consecutive_rejects INTEGER NOT NULL DEFAULT 0,
-                consecutive_neg_stimuli INTEGER NOT NULL DEFAULT 0,
-                interaction_count INTEGER NOT NULL DEFAULT 0,
-                extra_json TEXT NOT NULL DEFAULT '{}'
-            );
+                CREATE TABLE IF NOT EXISTS affect_states (
+                    scope TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    valence REAL NOT NULL,
+                    arousal REAL NOT NULL,
+                    longing REAL NOT NULL,
+                    pout REAL NOT NULL,
+                    share_urge REAL NOT NULL,
+                    warmth_bond REAL NOT NULL,
+                    dominant_tag TEXT NOT NULL,
+                    softened_mode TEXT NOT NULL,
+                    last_settled_at REAL NOT NULL,
+                    last_interaction_at REAL NOT NULL,
+                    last_sleep_reset_day TEXT NOT NULL,
+                    consecutive_rejects INTEGER NOT NULL DEFAULT 0,
+                    consecutive_neg_stimuli INTEGER NOT NULL DEFAULT 0,
+                    interaction_count INTEGER NOT NULL DEFAULT 0,
+                    extra_json TEXT NOT NULL DEFAULT '{}'
+                );
 
-            CREATE TABLE IF NOT EXISTS social_states (
-                scope TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                familiarity REAL NOT NULL,
-                vibe REAL NOT NULL,
-                is_blacklisted INTEGER NOT NULL DEFAULT 0,
-                interaction_count INTEGER NOT NULL DEFAULT 0,
-                last_interaction_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                PRIMARY KEY (scope, user_id)
-            );
+                CREATE TABLE IF NOT EXISTS social_states (
+                    scope TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    familiarity REAL NOT NULL,
+                    vibe REAL NOT NULL,
+                    is_blacklisted INTEGER NOT NULL DEFAULT 0,
+                    interaction_count INTEGER NOT NULL DEFAULT 0,
+                    last_interaction_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (scope, user_id)
+                );
 
-            CREATE TABLE IF NOT EXISTS care_threads (
-                id TEXT PRIMARY KEY,
-                scope TEXT NOT NULL,
-                topic TEXT NOT NULL,
-                category TEXT NOT NULL,
-                salience REAL NOT NULL,
-                status TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                expires_at REAL NOT NULL,
-                last_prompted_at REAL NOT NULL DEFAULT 0,
-                prompt_count INTEGER NOT NULL DEFAULT 0,
-                resolved_at REAL,
-                resolution_note TEXT NOT NULL DEFAULT ''
-            );
-            CREATE INDEX IF NOT EXISTS idx_care_scope_status
-                ON care_threads(scope, status, expires_at);
+                CREATE TABLE IF NOT EXISTS care_threads (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    salience REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    last_prompted_at REAL NOT NULL DEFAULT 0,
+                    prompt_count INTEGER NOT NULL DEFAULT 0,
+                    resolved_at REAL,
+                    resolution_note TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_care_scope_status
+                    ON care_threads(scope, status, expires_at);
 
-            CREATE TABLE IF NOT EXISTS affect_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                time REAL NOT NULL,
-                scope TEXT NOT NULL,
-                source TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                details_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_affect_events_scope_time
-                ON affect_events(scope, time DESC);
-            """
-        )
-        if self.get_meta("schema_version") is None:
-            self.set_meta("schema_version", SCHEMA_VERSION)
+                CREATE TABLE IF NOT EXISTS affect_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    time REAL NOT NULL,
+                    scope TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    details_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_affect_events_scope_time
+                    ON affect_events(scope, time DESC);
+                """
+            )
+            if self.get_meta("schema_version") is None:
+                self.set_meta("schema_version", SCHEMA_VERSION)
 
     def get_meta(self, key: str, default: Any = None) -> Any:
-        row = self.db.execute("SELECT value_json FROM meta WHERE key=?", (key,)).fetchone()
+        with self._lock:
+            row = self.db.execute("SELECT value_json FROM meta WHERE key=?", (key,)).fetchone()
         if not row:
             return default
         try:
@@ -292,7 +303,8 @@ class AffectiveStore:
 
     def set_meta(self, key: str, value: Any, *, now: float | None = None) -> None:
         stamp = valid_timestamp(now)
-        self.db.execute(
+        with self._lock:
+            self.db.execute(
             "INSERT INTO meta(key, value_json, updated_at) VALUES(?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at",
             (key, canonical(value), stamp),
@@ -311,11 +323,13 @@ class AffectiveStore:
     def get_owner_state(self, scope: str) -> dict[str, Any] | None:
         if not scope:
             return None
-        row = self.db.execute("SELECT * FROM affect_states WHERE scope=?", (scope,)).fetchone()
+        with self._lock:
+            row = self.db.execute("SELECT * FROM affect_states WHERE scope=?", (scope,)).fetchone()
         return self._decode_owner_row(row) if row else None
 
     def list_owner_states(self) -> list[dict[str, Any]]:
-        rows = self.db.execute("SELECT * FROM affect_states ORDER BY last_settled_at DESC").fetchall()
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM affect_states ORDER BY last_settled_at DESC").fetchall()
         return [self._decode_owner_row(r) for r in rows]
 
     def save_owner_state(self, state: dict[str, Any]) -> dict[str, Any]:
@@ -339,7 +353,8 @@ class AffectiveStore:
             "extra": state.get("extra") if isinstance(state.get("extra"), dict) else {},
         }
         extra_json = canonical(clean["extra"])
-        self.db.execute(
+        with self._lock:
+            self.db.execute(
             """
             INSERT INTO affect_states(
                 scope, owner_id, valence, arousal, longing, pout, share_urge, warmth_bond,
@@ -389,20 +404,21 @@ class AffectiveStore:
 
     def get_social_state(self, scope: str, user_id: str) -> dict[str, Any]:
         uid = str(user_id or "")
-        row = self.db.execute(
-            "SELECT * FROM social_states WHERE scope=? AND user_id=?",
-            (scope, uid),
-        ).fetchone()
-        if row:
-            return dict(row)
-        global_row = self.db.execute(
-            "SELECT * FROM social_states WHERE scope=? AND user_id=?",
-            (GLOBAL_SOCIAL_SCOPE, uid),
-        ).fetchone()
-        if global_row:
-            seeded = dict(global_row)
-            seeded["scope"] = scope
-            return seeded
+        with self._lock:
+            row = self.db.execute(
+                "SELECT * FROM social_states WHERE scope=? AND user_id=?",
+                (scope, uid),
+            ).fetchone()
+            if row:
+                return dict(row)
+            global_row = self.db.execute(
+                "SELECT * FROM social_states WHERE scope=? AND user_id=?",
+                (GLOBAL_SOCIAL_SCOPE, uid),
+            ).fetchone()
+            if global_row:
+                seeded = dict(global_row)
+                seeded["scope"] = scope
+                return seeded
         return {
             "scope": scope,
             "user_id": uid,
@@ -416,10 +432,11 @@ class AffectiveStore:
 
     def is_user_blacklisted(self, scope: str, user_id: str) -> bool:
         uid = str(user_id or "")
-        row = self.db.execute(
-            "SELECT 1 FROM social_states WHERE user_id=? AND scope IN (?, ?) AND is_blacklisted=1 LIMIT 1",
-            (uid, scope, GLOBAL_SOCIAL_SCOPE),
-        ).fetchone()
+        with self._lock:
+            row = self.db.execute(
+                "SELECT 1 FROM social_states WHERE user_id=? AND scope IN (?, ?) AND is_blacklisted=1 LIMIT 1",
+                (uid, scope, GLOBAL_SOCIAL_SCOPE),
+            ).fetchone()
         return bool(row)
 
     def save_social_state(self, state: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
@@ -434,41 +451,43 @@ class AffectiveStore:
             "last_interaction_at": valid_timestamp(state.get("last_interaction_at"), 0.0),
             "updated_at": stamp,
         }
-        self.db.execute(
-            """
-            INSERT INTO social_states(
-                scope, user_id, familiarity, vibe, is_blacklisted,
-                interaction_count, last_interaction_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(scope, user_id) DO UPDATE SET
-                familiarity=excluded.familiarity,
-                vibe=excluded.vibe,
-                is_blacklisted=excluded.is_blacklisted,
-                interaction_count=excluded.interaction_count,
-                last_interaction_at=excluded.last_interaction_at,
-                updated_at=excluded.updated_at
-            """,
-            (
-                clean["scope"],
-                clean["user_id"],
-                clean["familiarity"],
-                clean["vibe"],
-                clean["is_blacklisted"],
-                clean["interaction_count"],
-                clean["last_interaction_at"],
-                clean["updated_at"],
-            ),
-        )
+        with self._lock:
+            self.db.execute(
+                """
+                INSERT INTO social_states(
+                    scope, user_id, familiarity, vibe, is_blacklisted,
+                    interaction_count, last_interaction_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(scope, user_id) DO UPDATE SET
+                    familiarity=excluded.familiarity,
+                    vibe=excluded.vibe,
+                    is_blacklisted=excluded.is_blacklisted,
+                    interaction_count=excluded.interaction_count,
+                    last_interaction_at=excluded.last_interaction_at,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    clean["scope"],
+                    clean["user_id"],
+                    clean["familiarity"],
+                    clean["vibe"],
+                    clean["is_blacklisted"],
+                    clean["interaction_count"],
+                    clean["last_interaction_at"],
+                    clean["updated_at"],
+                ),
+            )
         return clean
 
     def expire_care_threads(self, scope: str, *, now: float | None = None) -> int:
         stamp = valid_timestamp(now)
-        cur = self.db.execute(
-            "UPDATE care_threads SET status='expired', updated_at=? "
-            "WHERE scope=? AND status='active' AND expires_at<=?",
-            (stamp, scope, stamp),
-        )
-        return cur.rowcount
+        with self._lock:
+            cur = self.db.execute(
+                "UPDATE care_threads SET status='expired', updated_at=? "
+                "WHERE scope=? AND status='active' AND expires_at<=?",
+                (stamp, scope, stamp),
+            )
+            return cur.rowcount
 
     def active_care_threads(
         self,
@@ -480,13 +499,14 @@ class AffectiveStore:
         if not scope:
             return []
         stamp = valid_timestamp(now)
-        self.expire_care_threads(scope, now=stamp)
-        rows = self.db.execute(
-            "SELECT * FROM care_threads WHERE scope=? AND status='active' AND expires_at>? "
-            "ORDER BY salience DESC, updated_at DESC LIMIT ?",
-            (scope, stamp, max(1, min(10, int(limit)))),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        with self._lock:
+            self.expire_care_threads(scope, now=stamp)
+            rows = self.db.execute(
+                "SELECT * FROM care_threads WHERE scope=? AND status='active' AND expires_at>? "
+                "ORDER BY salience DESC, updated_at DESC LIMIT ?",
+                (scope, stamp, max(1, min(10, int(limit)))),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def upsert_care_thread(
         self,
@@ -583,11 +603,12 @@ class AffectiveStore:
 
     def mark_care_prompted(self, scope: str, thread_id: str, *, now: float | None = None) -> None:
         stamp = valid_timestamp(now)
-        self.db.execute(
-            "UPDATE care_threads SET last_prompted_at=?, prompt_count=prompt_count+1, updated_at=? "
-            "WHERE id=? AND scope=? AND status='active'",
-            (stamp, stamp, thread_id, scope),
-        )
+        with self._lock:
+            self.db.execute(
+                "UPDATE care_threads SET last_prompted_at=?, prompt_count=prompt_count+1, updated_at=? "
+                "WHERE id=? AND scope=? AND status='active'",
+                (stamp, stamp, thread_id, scope),
+            )
 
     def record_event(
         self,
@@ -600,27 +621,29 @@ class AffectiveStore:
     ) -> None:
         stamp = valid_timestamp(now)
         payload = details if isinstance(details, dict) else {}
-        self.db.execute(
-            "INSERT INTO affect_events(time, scope, source, kind, details_json) VALUES(?, ?, ?, ?, ?)",
-            (stamp, str(scope or ""), str(source)[:40], str(kind)[:60], canonical(payload)),
-        )
-        max_id_row = self.db.execute("SELECT MAX(id) AS m FROM affect_events").fetchone()
-        if max_id_row and max_id_row["m"] and int(max_id_row["m"]) > MAX_AFFECT_EVENTS + 100:
-            cutoff_id = int(max_id_row["m"]) - MAX_AFFECT_EVENTS
-            self.db.execute("DELETE FROM affect_events WHERE id<=?", (cutoff_id,))
+        with self._lock:
+            self.db.execute(
+                "INSERT INTO affect_events(time, scope, source, kind, details_json) VALUES(?, ?, ?, ?, ?)",
+                (stamp, str(scope or ""), str(source)[:40], str(kind)[:60], canonical(payload)),
+            )
+            max_id_row = self.db.execute("SELECT MAX(id) AS m FROM affect_events").fetchone()
+            if max_id_row and max_id_row["m"] and int(max_id_row["m"]) > MAX_AFFECT_EVENTS + 100:
+                cutoff_id = int(max_id_row["m"]) - MAX_AFFECT_EVENTS
+                self.db.execute("DELETE FROM affect_events WHERE id<=?", (cutoff_id,))
 
     def recent_events(self, scope: str | None = None, *, limit: int = 5) -> list[dict[str, Any]]:
         lim = max(1, min(50, int(limit)))
-        if scope:
-            rows = self.db.execute(
-                "SELECT * FROM affect_events WHERE scope=? ORDER BY id DESC LIMIT ?",
-                (scope, lim),
-            ).fetchall()
-        else:
-            rows = self.db.execute(
-                "SELECT * FROM affect_events ORDER BY id DESC LIMIT ?",
-                (lim,),
-            ).fetchall()
+        with self._lock:
+            if scope:
+                rows = self.db.execute(
+                    "SELECT * FROM affect_events WHERE scope=? ORDER BY id DESC LIMIT ?",
+                    (scope, lim),
+                ).fetchall()
+            else:
+                rows = self.db.execute(
+                    "SELECT * FROM affect_events ORDER BY id DESC LIMIT ?",
+                    (lim,),
+                ).fetchall()
         items = []
         for row in rows:
             item = dict(row)

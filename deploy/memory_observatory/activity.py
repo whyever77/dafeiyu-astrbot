@@ -36,6 +36,8 @@ def empty_room(state="unconfigured"):
         "scope_label": "活动来源尚未连接", "state": "unknown", "zone": "window", "flags": {},
         "paused": False, "goals": [], "works": [], "decisions": [], "contacts": [], "pending": 0,
         "projects": {"state": "unavailable", "enabled": False, "items": [], "total": 0, "truncated": False},
+        "affect": {"state": "unavailable", "valence": 0.0, "arousal": 0.5, "longing": 0.0, "pout": 0.0,
+                   "share_urge": 0.0, "warmth_bond": 0.0, "dominant_tag": "", "softened_mode": "none", "care_threads": []},
         "notice": "没有活动记录可供判断。房间布景不表示她正在生活、休息或在线。"}
 
 
@@ -53,6 +55,9 @@ def demo_room():
             {"id": "demo-2", "at": at - 8000, "action": "rest", "reason": "刚才的问题还没有新资料，先留一点安静。", "goal_id": "", "topic": "", "run_status": "rested", "started": None, "ended": None},
             {"id": "demo-1", "at": at - 86000, "action": "research", "reason": "对海里的光有点好奇，先看看它从哪里来。", "goal_id": "demo-goal", "topic": "深海微光", "run_status": "completed", "started": at - 86000, "ended": at - 85600}],
         "contacts": [{"source": "life", "kind": "thought", "status": "sent", "created": at - 150}],
+        "affect": {"state": "demo", "valence": 0.38, "arousal": 0.65, "longing": 0.12, "pout": 0.0,
+                   "share_urge": 0.45, "warmth_bond": 320.0, "dominant_tag": "雀跃", "softened_mode": "none",
+                   "care_threads": [{"id": "demo-care-1", "topic": "收集深海微光的线索", "category": "stress_or_work", "salience": 2.2, "created_at": at - 3600}]},
         "projects": {"state": "ready", "enabled": True, "total": 2, "truncated": False, "items": [
             {"id": "demo-project-light", "title": "收集海里的光", "why": "从一小束微光出发，慢慢弄清深海生物怎样找到彼此。",
              "status": "active", "max_stages": 3, "updated": at-200, "stages": [

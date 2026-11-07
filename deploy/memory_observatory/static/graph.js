@@ -238,6 +238,25 @@ export class Constellation{
   c.setLineDash([]);
  }
 
+ getAuraSprite(bucket){
+  if(!this._auraSprites)this._auraSprites={};
+  if(this._auraSprites[bucket])return this._auraSprites[bucket];
+  const size=128,half=size/2,can=document.createElement('canvas');
+  can.width=size;can.height=size;
+  const ctx=can.getContext('2d');
+  const auraColor=(bucket==='pos')?'#ffd175':(bucket==='neg')?'#9ec5ff':'#e8b0ff';
+  const g=ctx.createRadialGradient(half,half,0,half,half,half);
+  g.addColorStop(0,rgba(auraColor,.28));
+  g.addColorStop(.6,rgba(auraColor,.10));
+  g.addColorStop(1,rgba(auraColor,0));
+  ctx.fillStyle=g;
+  ctx.beginPath();
+  ctx.arc(half,half,half,0,TAU);
+  ctx.fill();
+  this._auraSprites[bucket]=can;
+  return can;
+ }
+
  drawNodes(placed){
   const c=this.ctx,list=[...placed].sort((a,b)=>b.zc-a.zc);
   for(const p of list){
@@ -250,10 +269,25 @@ export class Constellation{
    const emphasis=isSelected||isRelated?1:(this.selected?.72:.92);
    const alpha=clamp((.20+.80*p.shownDetail)*fade*emphasis,.12,1);
    const halo=r*(2.0+3.8*p.shownDetail);
+   if(p.felt_tone||p.affect_tag){
+    const aff=p.affect_tag||{},v=(typeof aff.valence==='number')?aff.valence:0;
+    const bucket=(v>=0.15)?'pos':(v<=-0.15)?'neg':'neu';
+    const auraR=r*(3.2+2.0*p.shownDetail);
+    const sprite=this.getAuraSprite(bucket);
+    const prevAlpha=c.globalAlpha;
+    c.globalAlpha=prevAlpha*fade;
+    c.drawImage(sprite,p.x-auraR,p.y-auraR,auraR*2,auraR*2);
+    c.globalAlpha=prevAlpha;
+   }
    const glow=c.createRadialGradient(p.x,p.y,0,p.x,p.y,halo);
    glow.addColorStop(0,rgba(color,.24*p.shownDetail*fade));glow.addColorStop(.55,rgba(color,.08*p.shownDetail*fade));glow.addColorStop(1,rgba(color,0));
    c.fillStyle=glow;c.beginPath();c.arc(p.x,p.y,halo,0,TAU);c.fill();
    this.shape(p,r,color,alpha);
+   if(p.felt_tone||p.affect_tag){
+    const aff=p.affect_tag||{},v=(typeof aff.valence==='number')?aff.valence:0;
+    const ringCol=(v>=0.15)?'rgba(255,209,117,.45)':(v<=-0.15)?'rgba(158,197,255,.45)':'rgba(232,176,255,.35)';
+    c.strokeStyle=ringCol;c.lineWidth=1;c.beginPath();c.arc(p.x,p.y,r+2.5,0,TAU);c.stroke();
+   }
    if(isRelated&&!isSelected){c.strokeStyle=rgba(color,.72);c.lineWidth=1.3;c.beginPath();c.arc(p.x,p.y,r+5,0,TAU);c.stroke();}
    if(p.protected){c.strokeStyle=rgba('#d6bd8a',.58);c.lineWidth=1;c.beginPath();c.arc(p.x,p.y,r+4,0,TAU);c.stroke();}
   }

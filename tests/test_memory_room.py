@@ -17,6 +17,9 @@ from unittest.mock import Mock
 from deploy.memory_observatory.activity import SSHActivitySource, demo_room
 from deploy.memory_observatory.activity_reader import ActivityError, read_activity
 from deploy.memory_observatory.server import ObservatoryServer
+TESTS_DIR = str(Path(__file__).resolve().parent)
+if TESTS_DIR not in sys.path:
+    sys.path.insert(0, TESTS_DIR)
 import test_memory_observatory as existing
 
 PACKAGE = "room_fixture_plugin"
@@ -184,6 +187,258 @@ class ReaderTests(unittest.TestCase):
         self.store.db.execute("UPDATE events SET details='broken private payload',time=?",(self.now,))
         with self.assertRaisesRegex(ActivityError, "无法读取活动账本") as error: self.read()
         self.assertNotIn("private",str(error.exception))
+
+    def test_read_activity_includes_affect_fallback_when_db_absent(self):
+        result = self.read()
+        self.assertIn("affect", result)
+        self.assertEqual(result["affect"]["state"], "unavailable")
+        self.assertEqual(result["affect"]["valence"], 0.0)
+        self.assertEqual(result["affect"]["care_threads"], [])
+
+    def test_read_activity_reads_affective_db_and_care_threads(self):
+        aff_db_path = self.root / "affective.db"
+        db = sqlite3.connect(aff_db_path)
+        try:
+            db.execute("""
+                CREATE TABLE affect_states (
+                    scope TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    valence REAL NOT NULL,
+                    arousal REAL NOT NULL,
+                    longing REAL NOT NULL,
+                    pout REAL NOT NULL,
+                    share_urge REAL NOT NULL,
+                    warmth_bond REAL NOT NULL,
+                    dominant_tag TEXT NOT NULL,
+                    softened_mode TEXT NOT NULL,
+                    last_settled_at REAL NOT NULL,
+                    last_interaction_at REAL NOT NULL,
+                    last_sleep_reset_day TEXT NOT NULL
+                )
+            """)
+            db.execute("""
+                CREATE TABLE care_threads (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    salience REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                )
+            """)
+            db.execute(
+                "INSERT INTO affect_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (SCOPE, "12345", -0.42, 0.68, 0.2, 0.35, 0.5, 12.0, "低落", "none", self.now - 100, self.now - 10, "2026-11-07")
+            )
+            # Active and valid
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t1", SCOPE, "主人提起的画展", "interest", 0.8, "active", self.now - 100, self.now, self.now + 3600)
+            )
+            # Expired
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t2", SCOPE, "过期的事情", "task", 0.5, "active", self.now - 200, self.now, self.now - 10)
+            )
+            # Resolved
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t3", SCOPE, "已解决的事情", "task", 0.5, "resolved", self.now - 100, self.now, self.now + 3600)
+            )
+            # Other scope
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t4", "qq:FriendMessage:9999", "别人的事", "other", 0.5, "active", self.now - 100, self.now, self.now + 3600)
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        result = self.read()
+        aff = result["affect"]
+        self.assertEqual(aff["state"], "ready")
+        self.assertAlmostEqual(aff["valence"], -0.42)
+        self.assertAlmostEqual(aff["arousal"], 0.68)
+        self.assertAlmostEqual(aff["pout"], 0.35)
+        self.assertEqual(aff["dominant_tag"], "低落")
+        self.assertEqual(len(aff["care_threads"]), 1)
+        self.assertEqual(aff["care_threads"][0]["id"], "t1")
+        self.assertEqual(aff["care_threads"][0]["topic"], "主人提起的画展")
+        self.assertEqual(aff["care_threads"][0]["category"], "interest")
+
+    def test_read_activity_salience_zero_preserved_and_dimensions_clamped(self):
+        aff_db_path = self.root / "affective.db"
+        db = sqlite3.connect(aff_db_path)
+        try:
+            db.execute("""
+                CREATE TABLE affect_states (
+                    scope TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    valence REAL NOT NULL,
+                    arousal REAL NOT NULL,
+                    longing REAL NOT NULL,
+                    pout REAL NOT NULL,
+                    share_urge REAL NOT NULL,
+                    warmth_bond REAL NOT NULL,
+                    dominant_tag TEXT NOT NULL,
+                    softened_mode TEXT NOT NULL,
+                    last_settled_at REAL NOT NULL,
+                    last_interaction_at REAL NOT NULL,
+                    last_sleep_reset_day TEXT NOT NULL
+                )
+            """)
+            db.execute("""
+                CREATE TABLE care_threads (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    salience REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                )
+            """)
+            # Extreme values: valence=5.0 -> 1.0, arousal=2.0 -> 1.0
+            db.execute(
+                "INSERT INTO affect_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (SCOPE, "12345", 5.0, 2.0, -1.0, 3.0, 2.5, 2000.0, "极度开心", "none", self.now - 50, self.now - 10, "2026-11-07")
+            )
+            # salience = 0.0 must be preserved as 0.0, not defaulted to 1.0
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t0", SCOPE, "零显著度事项", "general", 0.0, "active", self.now - 50, self.now, self.now + 3600)
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        result = self.read()
+        aff = result["affect"]
+        self.assertEqual(aff["state"], "ready")
+        self.assertEqual(aff["valence"], 1.0)
+        self.assertEqual(aff["arousal"], 1.0)
+        self.assertEqual(aff["longing"], 0.0)
+        self.assertEqual(aff["pout"], 1.0)
+        self.assertEqual(aff["share_urge"], 1.0)
+        self.assertEqual(aff["warmth_bond"], 1000.0)
+        self.assertEqual(len(aff["care_threads"]), 1)
+        self.assertEqual(aff["care_threads"][0]["salience"], 0.0)
+
+    def test_read_activity_missing_table_and_empty_states_fallbacks(self):
+        # Case 1: Missing affect_states table (only care_threads exists) -> fallback unavailable
+        aff_db_path = self.root / "affective.db"
+        db = sqlite3.connect(aff_db_path)
+        try:
+            db.execute("""
+                CREATE TABLE care_threads (
+                    id TEXT PRIMARY KEY, scope TEXT NOT NULL, topic TEXT NOT NULL,
+                    category TEXT NOT NULL, salience REAL NOT NULL, status TEXT NOT NULL,
+                    created_at REAL NOT NULL, updated_at REAL NOT NULL, expires_at REAL NOT NULL
+                )
+            """)
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t1", SCOPE, "有牵挂但无状态表", "general", 0.7, "active", self.now - 10, self.now, self.now + 3600)
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        res1 = self.read()
+        self.assertEqual(res1["affect"]["state"], "unavailable")
+        self.assertEqual(res1["affect"]["care_threads"], [])
+
+        # Case 2: affect_states table exists but has no row for SCOPE -> state is ready with care_threads
+        db = sqlite3.connect(aff_db_path)
+        try:
+            db.execute("""
+                CREATE TABLE affect_states (
+                    scope TEXT PRIMARY KEY, owner_id TEXT NOT NULL, valence REAL NOT NULL,
+                    arousal REAL NOT NULL, longing REAL NOT NULL, pout REAL NOT NULL,
+                    share_urge REAL NOT NULL, warmth_bond REAL NOT NULL, dominant_tag TEXT NOT NULL,
+                    softened_mode TEXT NOT NULL, last_settled_at REAL NOT NULL,
+                    last_interaction_at REAL NOT NULL, last_sleep_reset_day TEXT NOT NULL
+                )
+            """)
+            db.commit()
+        finally:
+            db.close()
+
+        res2 = self.read()
+        self.assertEqual(res2["affect"]["state"], "ready")
+        self.assertEqual(res2["affect"]["valence"], 0.0)
+        self.assertEqual(len(res2["affect"]["care_threads"]), 1)
+        self.assertEqual(res2["affect"]["care_threads"][0]["topic"], "有牵挂但无状态表")
+
+    def test_read_activity_candidate_paths_custom_and_sibling(self):
+        # Case A: custom affective_data_dir
+        with tempfile.TemporaryDirectory() as custom_dir:
+            custom_db = Path(custom_dir) / "affective.db"
+            db = sqlite3.connect(custom_db)
+            try:
+                db.execute("CREATE TABLE affect_states (scope TEXT PRIMARY KEY, owner_id TEXT, valence REAL, arousal REAL, longing REAL, pout REAL, share_urge REAL, warmth_bond REAL, dominant_tag TEXT, softened_mode TEXT, last_settled_at REAL, last_interaction_at REAL, last_sleep_reset_day TEXT)")
+                db.execute("CREATE TABLE care_threads (id TEXT PRIMARY KEY, scope TEXT, topic TEXT, category TEXT, salience REAL, status TEXT, created_at REAL, updated_at REAL, expires_at REAL)")
+                db.execute("INSERT INTO affect_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (SCOPE, "12345", 0.33, 0.44, 0, 0, 0, 0, "自定义目录", "none", self.now, self.now, "2026-11-07"))
+                db.commit()
+            finally:
+                db.close()
+
+            self.cfg["affective_data_dir"] = custom_dir
+            self.write_config()
+            res = self.read()
+            self.assertEqual(res["affect"]["state"], "ready")
+            self.assertAlmostEqual(res["affect"]["valence"], 0.33)
+            self.assertEqual(res["affect"]["dominant_tag"], "自定义目录")
+
+        # Case B: sibling astrbot_plugin_affective_core directory
+        self.cfg.pop("affective_data_dir", None)
+        self.write_config()
+        sibling_dir = self.root.parent / "astrbot_plugin_affective_core"
+        sibling_dir.mkdir(parents=True, exist_ok=True)
+        sibling_db = sibling_dir / "affective.db"
+        try:
+            db = sqlite3.connect(sibling_db)
+            try:
+                db.execute("CREATE TABLE affect_states (scope TEXT PRIMARY KEY, owner_id TEXT, valence REAL, arousal REAL, longing REAL, pout REAL, share_urge REAL, warmth_bond REAL, dominant_tag TEXT, softened_mode TEXT, last_settled_at REAL, last_interaction_at REAL, last_sleep_reset_day TEXT)")
+                db.execute("CREATE TABLE care_threads (id TEXT PRIMARY KEY, scope TEXT, topic TEXT, category TEXT, salience REAL, status TEXT, created_at REAL, updated_at REAL, expires_at REAL)")
+                db.execute("INSERT INTO affect_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (SCOPE, "12345", -0.75, 0.2, 0, 0, 0, 0, "同级目录", "none", self.now, self.now, "2026-11-07"))
+                db.commit()
+            finally:
+                db.close()
+
+            res_sibling = self.read()
+            self.assertEqual(res_sibling["affect"]["state"], "ready")
+            self.assertAlmostEqual(res_sibling["affect"]["valence"], -0.75)
+            self.assertEqual(res_sibling["affect"]["dominant_tag"], "同级目录")
+        finally:
+            if sibling_db.exists():
+                sibling_db.unlink()
+            if sibling_dir.exists():
+                sibling_dir.rmdir()
+
+    def test_read_activity_preserves_affective_db_file_mtime_and_size(self):
+        aff_db_path = self.root / "affective.db"
+        db = sqlite3.connect(aff_db_path)
+        try:
+            db.execute("CREATE TABLE affect_states (scope TEXT PRIMARY KEY, owner_id TEXT, valence REAL, arousal REAL, longing REAL, pout REAL, share_urge REAL, warmth_bond REAL, dominant_tag TEXT, softened_mode TEXT, last_settled_at REAL, last_interaction_at REAL, last_sleep_reset_day TEXT)")
+            db.execute("CREATE TABLE care_threads (id TEXT PRIMARY KEY, scope TEXT, topic TEXT, category TEXT, salience REAL, status TEXT, created_at REAL, updated_at REAL, expires_at REAL)")
+            db.execute("INSERT INTO affect_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (SCOPE, "12345", 0.5, 0.5, 0, 0, 0, 0, "静默检查", "none", self.now, self.now, "2026-11-07"))
+            db.commit()
+        finally:
+            db.close()
+
+        stat_before = aff_db_path.stat()
+        res = self.read()
+        self.assertEqual(res["affect"]["state"], "ready")
+        stat_after = aff_db_path.stat()
+
+        self.assertEqual(stat_before.st_mtime_ns, stat_after.st_mtime_ns)
+        self.assertEqual(stat_before.st_size, stat_after.st_size)
 
     def test_ssh_uses_fixed_stdin_reader_and_sanitizes_failures(self):
         run = Mock(return_value=types.SimpleNamespace(returncode=0,stdout=json.dumps({"ok":True,"snapshot":demo_room()})))

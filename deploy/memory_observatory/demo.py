@@ -55,6 +55,18 @@ def demo_snapshot():
                          "created_at": created.isoformat(), "importance": importance,
                          "confidence": .92 if kind == "method" else .78,
                          "pinned": i == 14, "source": f"虚构演示片段 / {created:%Y-%m-%d} · 非真实聊天"})
+        if i == 0:
+            memories[-1]["felt_tone"] = "雨声很轻，心里觉得很安心温暖"
+            memories[-1]["affect_tag"] = {"valence": 0.6, "arousal": 0.2, "salience": 2.5}
+        elif i == 6:
+            memories[-1]["felt_tone"] = "透明轮廓像把星星装进水里，眼前一亮特别惊艳"
+            memories[-1]["affect_tag"] = {"valence": 0.7, "arousal": 0.6, "salience": 2.8}
+        elif i == 10:
+            memories[-1]["felt_tone"] = "看到测试变绿的瞬间，松了口气，心里甜滋滋的"
+            memories[-1]["affect_tag"] = {"valence": 0.8, "arousal": 0.7, "salience": 3.2}
+        elif i == 25:
+            memories[-1]["felt_tone"] = "当时觉得被那种温柔的安静包围着"
+            memories[-1]["affect_tag"] = {"valence": 0.4, "arousal": 0.3, "salience": 2.0}
     for i, title in enumerate(("群里的天文话题", "大家分享的歌单", "一次协作记录")):
         memories.append({"id": f"group-{i}", "scope": "演示 · 群聊隔离", "title": title, "gist": "仅属于此群聊的示例。",
                          "text": "这条记忆只在演示群聊作用域内显示与检索，不会出现在私聊的关联扩散中。",

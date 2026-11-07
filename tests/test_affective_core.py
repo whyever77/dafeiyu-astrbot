@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -631,6 +632,132 @@ class PluginMainIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("愉悦度", card)
         self.assertIn("想念度", card)
         self.assertIn("外化通道参数预览", card)
+
+
+    def test_cross_thread_access_with_check_same_thread_false(self):
+        import threading
+        store = AffectiveStore(self.folder / "thread_db")
+        try:
+            st = new_owner_state(SCOPE, OWNER_ID)
+            store.save_owner_state(st)
+
+            errors = []
+            def worker():
+                try:
+                    for _ in range(10):
+                        with store.transaction():
+                            current = store.get_owner_state(SCOPE)
+                            current["interaction_count"] += 1
+                            store.save_owner_state(current)
+                except Exception as e:
+                    errors.append(e)
+
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            self.assertEqual(errors, [])
+            final_state = store.get_owner_state(SCOPE)
+            self.assertEqual(final_state["interaction_count"], 40)
+        finally:
+            store.close()
+
+    def test_concurrent_social_care_event_access_with_rlock(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        store = AffectiveStore(temp_dir.name)
+        try:
+            store.upsert_care_thread(SCOPE, "海边散步", salience=0.8, ttl_hours=24)
+            errors = []
+
+            def worker_social(worker_id: int):
+                try:
+                    for i in range(15):
+                        uid = f"user_{worker_id}_{i % 3}"
+                        store.save_social_state({
+                            "scope": SCOPE,
+                            "user_id": uid,
+                            "familiarity": i * 0.5,
+                            "vibe": 0.2,
+                        })
+                        st = store.get_social_state(SCOPE, uid)
+                        self.assertIsNotNone(st)
+                        store.is_user_blacklisted(SCOPE, uid)
+                except Exception as e:
+                    errors.append(e)
+
+            def worker_events(worker_id: int):
+                try:
+                    for i in range(15):
+                        store.record_event(
+                            SCOPE,
+                            f"source_{worker_id}",
+                            "social_turn",
+                            {"seq": i},
+                        )
+                        events = store.recent_events(SCOPE, limit=5)
+                        self.assertTrue(isinstance(events, list))
+                except Exception as e:
+                    errors.append(e)
+
+            def worker_care(worker_id: int):
+                try:
+                    for i in range(15):
+                        threads = store.active_care_threads(SCOPE, limit=3)
+                        self.assertTrue(isinstance(threads, list))
+                        if threads:
+                            store.mark_care_prompted(SCOPE, threads[0]["id"])
+                except Exception as e:
+                    errors.append(e)
+
+            threads = []
+            for wid in range(2):
+                threads.append(threading.Thread(target=worker_social, args=(wid,)))
+                threads.append(threading.Thread(target=worker_events, args=(wid,)))
+                threads.append(threading.Thread(target=worker_care, args=(wid,)))
+
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            self.assertEqual(errors, [])
+            recent = store.recent_events(SCOPE, limit=50)
+            self.assertEqual(len(recent), 30)
+            cares = store.active_care_threads(SCOPE, limit=5)
+            self.assertEqual(len(cares), 1)
+            self.assertEqual(cares[0]["prompt_count"], 30)
+            social_row = store.get_social_state(SCOPE, "user_0_0")
+            self.assertEqual(social_row["user_id"], "user_0_0")
+        finally:
+            store.close()
+            temp_dir.cleanup()
+
+    async def test_turn_deduplication_without_message_id(self):
+        # Event without message_obj or message_id
+        ev = MagicMock()
+        ev.unified_msg_origin = SCOPE
+        ev.get_sender_id.return_value = OWNER_ID
+        ev.get_group_id.return_value = None
+        ev.message_str = "主人来了"
+        ev.message_obj = None
+        ev.get_extra.return_value = None
+
+        key1 = self.plugin._turn_key(ev)
+        key2 = self.plugin._turn_key(ev)
+        self.assertIsNotNone(key1)
+        self.assertEqual(key1, key2)
+
+        req1 = types.SimpleNamespace(system_prompt="", contexts=[])
+        await self.plugin.inject_affective_context(ev, req1)
+        prompt1 = req1.system_prompt
+        self.assertIn("【当下心境】", prompt1)
+
+        # Immediate re-entry (e.g. tool loop continuation) for the exact same event
+        req2 = types.SimpleNamespace(system_prompt="", contexts=[])
+        await self.plugin.inject_affective_context(ev, req2)
+        self.assertEqual(req2.system_prompt, prompt1)
 
 
 if __name__ == "__main__":
