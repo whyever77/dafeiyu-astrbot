@@ -55,10 +55,18 @@ class FakePhoneMCP:
         self.calls: list[tuple[str, dict]] = []
         self.screen_bytes = make_png()
 
+    def _app_name(self) -> str:
+        return {
+            "tv.danmaku.bili": "bilibili",
+            "com.ss.android.ugc.aweme": "douyin",
+            "com.android.launcher3": "System Home",
+            "com.ldmnq.launcher3": "System Home",
+        }.get(self.pkg, self.pkg)
+
     async def call(self, name: str, args: dict):
         self.calls.append((name, args))
         if name in {"get_current_app", "get_current_package"}:
-            return text_res(f"Current package: {self.pkg}")
+            return text_res(json.dumps({"status": "success", "app_name": self._app_name()}, ensure_ascii=False))
         if name == "get_ui_elements":
             if self.fail_ui:
                 raise TransportError("ERROR: could not get idle state")
@@ -70,7 +78,7 @@ class FakePhoneMCP:
         if name == "launch_app":
             self.pkg = args.get("package_name", self.pkg)
             return text_res(f"Launched {self.pkg}")
-        if name == "go_home":
+        if name in {"press_home", "go_home"}:
             self.pkg = "com.android.launcher3"
             return text_res("Went home")
         return text_res("ok")
@@ -86,6 +94,24 @@ class PhoneAgentConfigTests(unittest.TestCase):
                 pa.validate_config(pa.DEFAULTS | {"phone_allowed_packages": ["tv.danmaku.bili", forbidden]})
             with self.assertRaises((ValueError, PermissionError)):
                 pa.resolve_package(forbidden)
+
+    def test_phone_app_names_are_mapped_to_packages(self):
+        self.assertEqual(
+            pa._parse_package_name({"status": "success", "app_name": "bilibili"}),
+            "tv.danmaku.bili",
+        )
+        self.assertEqual(
+            pa._parse_package_name({"status": "success", "app_name": "抖音"}),
+            "com.ss.android.ugc.aweme",
+        )
+        self.assertEqual(
+            pa._parse_package_name({"status": "success", "app_name": "System Home"}),
+            "com.android.launcher3",
+        )
+        self.assertEqual(
+            pa._parse_package_name(json.dumps({"status": "success", "app_name": "bilibili"})),
+            "tv.danmaku.bili",
+        )
 
 
 class PhoneAgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -120,7 +146,7 @@ class PhoneAgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(PermissionError):
                 await self.agent.observe(SCOPE, self.cfg)
             tool_names = [c[0] for c in self.mcp.calls]
-            self.assertIn("go_home", tool_names)
+            self.assertIn("press_home", tool_names)
 
     async def test_dynamic_video_screen_falls_back_to_screenshot_and_records_episode(self):
         self.mcp.pkg = "com.ss.android.ugc.aweme"

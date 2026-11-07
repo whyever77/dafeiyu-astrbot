@@ -102,7 +102,7 @@ PHONE_NAMES = {
     "list_devices", "get_current_app", "get_screenshot", "get_ui_elements",
     "tap", "tap_element", "swipe", "type_text", "press_key", "launch_app",
     "search_apps", "long_press", "get_screen_size", "go_back", "go_home",
-    "listen_audio", "wait",
+    "press_back", "press_home", "listen_audio", "wait",
 }
 BILI_RAW_NAMES = {
     "bili_read", "bili_execute", "bili_preview", "bili_operation", "bili_prepare_video", "bili_phone",
