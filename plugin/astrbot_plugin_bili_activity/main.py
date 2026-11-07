@@ -2069,7 +2069,36 @@ class BiliActivity(Star):
                     if (not event.get_extra("df_run_id") and ":FriendMessage:" in event.unified_msg_origin):
                         message_id = getattr(getattr(event, "message_obj", None), "message_id", None)
                     req.system_prompt += ExpressionCadence(self.store).context(
-                        event.unified_msg_origin, cfg, message_id)
+                        event.unified_msg_origin, cfg, message_id, event=event)
+
+    @filter.on_decorating_result()
+    async def check_held_thoughts_discussed(self, event: AstrMessageEvent):
+        cfg = self.cfg()
+        if not cfg.get("enabled") or not cfg.get("self_expression_enabled") or not cfg.get("life_enabled"):
+            return
+        if str(event.get_sender_id()) != str(cfg.get("owner_id")):
+            return
+        if self.is_reply_run(event) or event.get_extra("df_run_id"):
+            return
+        result = event.get_result() if hasattr(event, "get_result") else None
+        if result is None:
+            return
+        is_llm = result.is_llm_result() if callable(getattr(result, "is_llm_result", None)) else False
+        if not is_llm:
+            return
+        reply_text = ""
+        if callable(getattr(result, "get_plain_text", None)):
+            try:
+                reply_text = result.get_plain_text() or ""
+            except Exception:
+                pass
+        if not reply_text and hasattr(result, "chain"):
+            reply_text = "".join(getattr(c, "text", "") or "" for c in (result.chain or []))
+        if not reply_text:
+            return
+        ExpressionCadence(self.store).acknowledge_if_discussed(
+            event.unified_msg_origin, reply_text, event=event
+        )
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def incoming(self, event: AstrMessageEvent):
