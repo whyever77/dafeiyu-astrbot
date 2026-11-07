@@ -76,8 +76,16 @@ export class RoomScene{
  setPaused(value){this.off=value;if(value&&this.transition)this.go(this.zone);this.draw();}
  tick(now){const delta=Math.min(48,now-(this.last||now));this.last=now;if(!document.hidden){if(!this.off)this.elapsed+=delta;if(this.transition){const t=Math.min(1,(this.elapsed-this.transition.start)/this.transition.duration),u=ease(t),tr=this.transition;this.pose=tr.fromPose.map((v,i)=>mix(v,tr.dest.pose[i],u));this.focus=tr.fromFocus.map((v,i)=>mix(v,tr.dest.focus[i],u));if(t===1){this.action=tr.dest.action;this.transition=null;}}this.draw();}this.raf=requestAnimationFrame(this.tick);}
  setAffect(affect){
-  if(!affect)return;this.affect=affect;
   const wallStops=document.querySelectorAll('#wall stop');
+  if(!affect||affect.state==='unavailable'){
+   this.affect={valence:0,arousal:0.5};
+   if(wallStops.length>=2){
+    wallStops[0].setAttribute('stop-color','#fffdf7');
+    wallStops[1].setAttribute('stop-color','#ecebfb');
+   }
+   return;
+  }
+  this.affect=affect;
   if(wallStops.length>=2){
    if(affect.valence>0.25){wallStops[0].setAttribute('stop-color','#fffbf2');wallStops[1].setAttribute('stop-color','#fbeef4');}
    else if(affect.valence<-0.15){wallStops[0].setAttribute('stop-color','#f4f6fb');wallStops[1].setAttribute('stop-color','#e2eaf8');}
