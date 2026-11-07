@@ -1,7 +1,7 @@
 """Durable SQLite storage and bounded ledgers for Affective Core.
 
 Independent of AstrBot runtime imports so offline tests and CLI tools can open
-and inspect ``affective.db`` directly. Never stores raw chat message bodies.
+and inspect ``affective.db`` directly. Strictly protects user privacy: never stores raw conversational transcripts or full chat message bodies; only persists numerical affective state coordinates and bounded, sanitized semantic labels (such as model-extracted care topic summaries bounded to 36-60 chars, mood tags, and event metadata).
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import math
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -173,37 +174,45 @@ class AffectiveStore:
         self.folder.mkdir(parents=True, exist_ok=True)
         self.db_path = self.folder / "affective.db"
         self._tx_depth = 0
-        self.db = sqlite3.connect(self.db_path, isolation_level=None)
+        self._lock = threading.RLock()
+        self.db = sqlite3.connect(
+            self.db_path,
+            isolation_level=None,
+            check_same_thread=False,
+        )
         self.db.row_factory = sqlite3.Row
         try:
             self._initialize()
         except BaseException:
-            self.db.close()
+            with self._lock:
+                self.db.close()
             raise
 
     def close(self) -> None:
-        self.db.close()
+        with self._lock:
+            self.db.close()
 
     @contextmanager
     def transaction(self):
-        if self._tx_depth > 0:
-            self._tx_depth += 1
+        with self._lock:
+            if self._tx_depth > 0:
+                self._tx_depth += 1
+                try:
+                    yield
+                finally:
+                    self._tx_depth -= 1
+                return
+            self.db.execute("BEGIN IMMEDIATE")
+            self._tx_depth = 1
             try:
                 yield
-            finally:
-                self._tx_depth -= 1
-            return
-        self.db.execute("BEGIN IMMEDIATE")
-        self._tx_depth = 1
-        try:
-            yield
-        except BaseException:
-            self._tx_depth = 0
-            self.db.execute("ROLLBACK")
-            raise
-        else:
-            self._tx_depth = 0
-            self.db.execute("COMMIT")
+            except BaseException:
+                self._tx_depth = 0
+                self.db.execute("ROLLBACK")
+                raise
+            else:
+                self._tx_depth = 0
+                self.db.execute("COMMIT")
 
     def _initialize(self) -> None:
         self.db.execute("PRAGMA journal_mode=WAL")
@@ -282,7 +291,8 @@ class AffectiveStore:
             self.set_meta("schema_version", SCHEMA_VERSION)
 
     def get_meta(self, key: str, default: Any = None) -> Any:
-        row = self.db.execute("SELECT value_json FROM meta WHERE key=?", (key,)).fetchone()
+        with self._lock:
+            row = self.db.execute("SELECT value_json FROM meta WHERE key=?", (key,)).fetchone()
         if not row:
             return default
         try:
@@ -292,7 +302,8 @@ class AffectiveStore:
 
     def set_meta(self, key: str, value: Any, *, now: float | None = None) -> None:
         stamp = valid_timestamp(now)
-        self.db.execute(
+        with self._lock:
+            self.db.execute(
             "INSERT INTO meta(key, value_json, updated_at) VALUES(?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at",
             (key, canonical(value), stamp),
@@ -311,11 +322,13 @@ class AffectiveStore:
     def get_owner_state(self, scope: str) -> dict[str, Any] | None:
         if not scope:
             return None
-        row = self.db.execute("SELECT * FROM affect_states WHERE scope=?", (scope,)).fetchone()
+        with self._lock:
+            row = self.db.execute("SELECT * FROM affect_states WHERE scope=?", (scope,)).fetchone()
         return self._decode_owner_row(row) if row else None
 
     def list_owner_states(self) -> list[dict[str, Any]]:
-        rows = self.db.execute("SELECT * FROM affect_states ORDER BY last_settled_at DESC").fetchall()
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM affect_states ORDER BY last_settled_at DESC").fetchall()
         return [self._decode_owner_row(r) for r in rows]
 
     def save_owner_state(self, state: dict[str, Any]) -> dict[str, Any]:
@@ -339,7 +352,8 @@ class AffectiveStore:
             "extra": state.get("extra") if isinstance(state.get("extra"), dict) else {},
         }
         extra_json = canonical(clean["extra"])
-        self.db.execute(
+        with self._lock:
+            self.db.execute(
             """
             INSERT INTO affect_states(
                 scope, owner_id, valence, arousal, longing, pout, share_urge, warmth_bond,
