@@ -12,7 +12,7 @@ import threading
 import time
 import types
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from deploy.memory_observatory.activity import SSHActivitySource, demo_room
 from deploy.memory_observatory.activity_reader import ActivityError, read_activity
@@ -308,10 +308,18 @@ class ReaderTests(unittest.TestCase):
                 "INSERT INTO affect_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (SCOPE, "12345", 5.0, 2.0, -1.0, 3.0, 2.5, 2000.0, "极度开心", "none", self.now - 50, self.now - 10, "2026-11-07")
             )
-            # salience = 0.0 must be preserved as 0.0, not defaulted to 1.0
+            # salience = 0.0 must be preserved as 0.0, negative clamped to 0.0, > 10.0 clamped to 10.0
             db.execute(
                 "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 ("t0", SCOPE, "零显著度事项", "general", 0.0, "active", self.now - 50, self.now, self.now + 3600)
+            )
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t_neg", SCOPE, "负显著度事项", "general", -2.5, "active", self.now - 40, self.now, self.now + 3600)
+            )
+            db.execute(
+                "INSERT INTO care_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t_max", SCOPE, "超大显著度事项", "general", 15.0, "active", self.now - 30, self.now, self.now + 3600)
             )
             db.commit()
         finally:
@@ -326,8 +334,55 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(aff["pout"], 1.0)
         self.assertEqual(aff["share_urge"], 1.0)
         self.assertEqual(aff["warmth_bond"], 1000.0)
-        self.assertEqual(len(aff["care_threads"]), 1)
-        self.assertEqual(aff["care_threads"][0]["salience"], 0.0)
+        self.assertEqual(len(aff["care_threads"]), 3)
+        salience_map = {t["id"]: t["salience"] for t in aff["care_threads"]}
+        self.assertEqual(salience_map["t0"], 0.0)
+        self.assertEqual(salience_map["t_neg"], 0.0)
+        self.assertEqual(salience_map["t_max"], 10.0)
+
+    def test_read_affect_per_statement_timeout_resets_budget(self):
+        aff_db_path = self.root / "affective.db"
+        db = sqlite3.connect(aff_db_path)
+        try:
+            db.execute("""
+                CREATE TABLE affect_states (
+                    scope TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
+                    valence REAL NOT NULL, arousal REAL NOT NULL, longing REAL NOT NULL,
+                    pout REAL NOT NULL, share_urge REAL NOT NULL, warmth_bond REAL NOT NULL,
+                    dominant_tag TEXT NOT NULL, softened_mode TEXT NOT NULL,
+                    last_settled_at REAL NOT NULL, last_interaction_at REAL NOT NULL,
+                    last_sleep_reset_day TEXT NOT NULL
+                )
+            """)
+            db.execute("""
+                CREATE TABLE care_threads (
+                    id TEXT PRIMARY KEY, scope TEXT NOT NULL, topic TEXT NOT NULL,
+                    category TEXT NOT NULL, salience REAL NOT NULL, status TEXT NOT NULL,
+                    created_at REAL NOT NULL, updated_at REAL NOT NULL, expires_at REAL NOT NULL
+                )
+            """)
+            db.execute(
+                "INSERT INTO affect_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (SCOPE, "12345", 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, "平静", "none", self.now - 10, self.now - 5, "2026-11-07")
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        # Simulate 4 consecutive queries each advancing 2 seconds (total 8s).
+        # Under the old single 3s deadline, this would have timed out.
+        # Under per-statement 5s budget, each query resets deadline and succeeds.
+        current_mono = [100.0]
+        real_mono = time.monotonic
+
+        def stepping_monotonic():
+            current_mono[0] += 0.5
+            return current_mono[0]
+
+        with patch("time.monotonic", side_effect=stepping_monotonic):
+            result = self.read()
+            self.assertEqual(result["affect"]["state"], "ready")
+            self.assertEqual(result["affect"]["dominant_tag"], "平静")
 
     def test_read_activity_missing_table_and_empty_states_fallbacks(self):
         # Case 1: Missing affect_states table (only care_threads exists) -> fallback unavailable
