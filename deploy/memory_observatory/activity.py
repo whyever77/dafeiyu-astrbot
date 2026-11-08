@@ -36,6 +36,7 @@ def empty_room(state="unconfigured"):
         "scope_label": "活动来源尚未连接", "state": "unknown", "zone": "window", "flags": {},
         "paused": False, "goals": [], "works": [], "decisions": [], "contacts": [], "pending": 0,
         "projects": {"state": "unavailable", "enabled": False, "items": [], "total": 0, "truncated": False},
+        "paused_curiosity": None,
         "affect": {"state": "unavailable", "valence": 0.0, "arousal": 0.5, "longing": 0.0, "pout": 0.0,
                    "share_urge": 0.0, "warmth_bond": 0.0, "dominant_tag": "", "softened_mode": "none", "care_threads": []},
         "notice": "没有活动记录可供判断。房间布景不表示她正在生活、休息或在线。"}
@@ -71,5 +72,13 @@ def demo_room():
              "status": "completed", "max_stages": 2, "updated": at-260000, "stages": [
                 {"position": 1, "title": "给雨声留一页", "goal_status": "completed", "next_step": "", "updated": at-350000,
                  "work": {"title": "雨声旁边的留白", "revision": 1, "excerpt": "【虚构演示作品】\n\n记下阅读时留下的疑问。文字可以留白，来源不能凭空补齐。", "excerpt_truncated": False, "source_count": 1, "sources_available": True},
-                 "review_state": "recorded", "review": {"revision": 1, "reflection": "这一页先写到这里，暂时没有需要延伸的问题。", "limitations": "这是界面示例，不代表她真的听雨或经历过这些。", "next_question": "", "created": at-260000, "truncated": False}}]}]},
+                 "review_state": "recorded", "review": {"revision": 1, "reflection": "这一页先写到这里，暂时没有需要延伸的问题。", "limitations": "这是界面示例，不代表她真的听雨或经历过这些。", "next_question": "", "created": at-260000, "truncated": False}}]}],
+        },
+        "paused_curiosity": {
+            "title": "深海微光反应机制",
+            "origin_id": "card:demo-1",
+            "unfruitful_attempts": 2,
+            "updated_at": at - 3600,
+            "hint_label": "合上的待查手记 · 翻了两回资料还没找全线索，先放一放",
+        },
         "notice": "场景、目标、作品与足迹均为虚构演示。布景与轻微动画不是她的情绪、意识或真实在线状态。"}

@@ -180,7 +180,7 @@ def read_affect(root, scope, at, cfg):
         adb.row_factory = sqlite3.Row
         try:
             adb.execute("PRAGMA query_only=ON")
-            allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_TRANSACTION}
+            allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_TRANSACTION, sqlite3.SQLITE_PRAGMA}
             adb.set_authorizer(lambda code, *_: sqlite3.SQLITE_OK if code in allowed else sqlite3.SQLITE_DENY)
             deadline = time.monotonic() + 3
             adb.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
@@ -249,6 +249,57 @@ def read_affect(root, scope, at, cfg):
         return fallback
 
 
+def paused_curiosity_summary(db, tables, scope, at):
+    if "goals" not in tables:
+        return None
+    try:
+        cols = {r[1] for r in db.execute("PRAGMA table_info(goals)")}
+        if not {"origin_id", "unfruitful_attempts"} <= cols:
+            return None
+        cutoff = at - 48 * 3600
+        row = db.execute(
+            "SELECT substr(title,1,60) title, substr(origin_id,1,100) origin_id, "
+            "unfruitful_attempts, updated_at FROM goals "
+            "WHERE scope=? AND status='paused' AND origin_id IS NOT NULL AND origin_id != '' "
+            "AND unfruitful_attempts >= 2 AND updated_at >= ? AND updated_at <= ? "
+            "ORDER BY updated_at DESC, id DESC LIMIT 1",
+            (scope, cutoff, at),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "title": clean(row["title"], 60),
+            "origin_id": clean(row["origin_id"], 100),
+            "unfruitful_attempts": int(row["unfruitful_attempts"] or 0),
+            "updated_at": number(row["updated_at"]),
+            "hint_label": "合上的待查手记 · 翻了两回资料还没找全线索，先放一放",
+        }
+    except Exception:
+        return None
+
+
+def paused_curiosity(folder, *, now=None):
+    at = time.time() if now is None else number(now)
+    if at is None:
+        return None
+    try:
+        root = Path(folder).resolve(strict=True)
+        control = root / "control.json"
+        cfg = obj(control.read_text(encoding="utf-8"))
+        scope = cfg.get("owner_scope")
+        path = (root / "activity.sqlite3").resolve(strict=True)
+        db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute("PRAGMA query_only=ON")
+            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            return paused_curiosity_summary(db, tables, scope, at)
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
 def read_activity(folder, *, now=None):
     at = time.time() if now is None else number(now)
     if at is None:
@@ -269,7 +320,7 @@ def read_activity(folder, *, now=None):
             db.execute("PRAGMA query_only=ON")
             if db.execute("PRAGMA user_version").fetchone()[0] != 1:
                 raise ActivityError("unsupported activity schema")
-            allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_TRANSACTION}
+            allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_TRANSACTION, sqlite3.SQLITE_PRAGMA}
             db.set_authorizer(lambda code, *_: sqlite3.SQLITE_OK if code in allowed else sqlite3.SQLITE_DENY)
             db.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
             deadline = time.monotonic() + 3
@@ -339,6 +390,7 @@ def read_activity(folder, *, now=None):
                 "scope_label": "已配置的主人私聊 · 活动账本", "state": state, "zone": zone,
                 "flags": flags, "paused": paused, "goals": goals, "decisions": decisions, "works": works,
                 "pending": pending, "contacts": contacts, "projects": project_shelf(db, tables, scope, cfg),
+                "paused_curiosity": paused_curiosity_summary(db, tables, scope, at),
                 "affect": read_affect(root, scope, at, cfg),
                 "notice": "选择记录是意图，运行结束不等于目标完成。房间是记录的可视化，不是实时在线证明；不推断人格或关联其他记忆会话。"}
         finally:

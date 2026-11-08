@@ -28,3 +28,55 @@
 .affect-card-cares{margin-top:8px;padding-top:8px;border-top:1px dashed #d8e2f3;font-size:10px;color:#8596ba}
 .affect-card-cares ul{margin:4px 0 0;padding-left:16px;list-style-type:circle}
 .affect-card-cares li{margin-bottom:2px;color:#5c7099}
+
+/* Spatial Optics, Acrylic Highlights, Parallax & Interactive Props */
+.scene-top button{backdrop-filter:blur(18px) saturate(145%);box-shadow:inset 0 1px 0 rgba(255,255,255,0.85),0 2px 6px #5572aa0a}
+.affect-pill{position:relative;cursor:pointer;backdrop-filter:blur(18px) saturate(145%);box-shadow:inset 0 1px 0 rgba(255,255,255,0.9),0 2px 8px #5572aa0d;user-select:none}
+.journal-affect-card{backdrop-filter:blur(18px) saturate(145%);box-shadow:inset 0 1px 0 rgba(255,255,255,0.9),0 4px 16px #4d699e0a}
+.zone-buttons button{backdrop-filter:blur(18px) saturate(145%);box-shadow:inset 0 1px 0 rgba(255,255,255,0.85),0 2px 6px #728fce0a}
+
+.room-parallax-layer{will-change:transform}
+#room-sunbeams{pointer-events:none}
+.dust-mote{animation:mote-drift 6s ease-in-out infinite alternate}
+.dust-mote:nth-child(2n){animation-duration:7.5s;animation-delay:-2s}
+.dust-mote:nth-child(3n){animation-duration:8.5s;animation-delay:-4s}
+.dust-mote:nth-child(5n){animation-duration:5s;animation-delay:-1s}
+@keyframes mote-drift{0%{transform:translate(0,0);opacity:0.2}50%{opacity:0.85}100%{transform:translate(-14px,-28px);opacity:0.15}}
+
+.room-paused-note{transition:transform 0.25s cubic-bezier(0.2,0.9,0.3,1.2),filter 0.25s ease;outline:none}
+.room-paused-note:hover,.room-paused-note:focus-visible{transform:translate(442px,498px) rotate(-1.5deg);filter:drop-shadow(0 4px 10px rgba(70,95,140,0.45))}
+.room-paused-note:focus-visible .note-cover{stroke:#6d8ecb;stroke-width:2}
+.paused-curiosity-card{margin:18px 0;padding:20px 22px;border-radius:18px;background:linear-gradient(135deg,#fffefb,#f5f3e9);border:1px solid #e2d4bc;box-shadow:0 4px 18px rgba(130,110,70,0.08)}
+
+.room-desk-lamp{outline:none;transition:transform 0.2s}
+.room-desk-lamp:hover{transform:translate(600px,478px)}
+.room-desk-lamp:focus-visible{outline:2px solid #8ca8e0}
+.lamp-constellation{transition:opacity 0.5s ease}
+
+.swaying{animation:prop-sway 1.8s cubic-bezier(0.36,0.07,0.19,0.97)}
+@keyframes prop-sway{0%{transform:rotate(0deg)}20%{transform:rotate(4deg)}40%{transform:rotate(-3deg)}60%{transform:rotate(1.5deg)}80%{transform:rotate(-0.5deg)}100%{transform:rotate(0deg)}}
+#room-plant.swaying{transform-origin:99px 500px}
+#room-windchime.swaying{transform-origin:922px 155px}
+
+.pout-bubble text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.pout-bubble{animation:bubble-pop 0.3s cubic-bezier(0.2,0.9,0.3,1.3)}
+@keyframes bubble-pop{from{transform:scale(0.6);opacity:0}to{transform:scale(1);opacity:1}}
+.thought-dots circle{animation:thought-pulse 2s ease-in-out infinite alternate}
+@keyframes thought-pulse{0%{opacity:0.4}100%{opacity:1}}
+.sleep-stardust text{animation:sleep-float 2.5s ease-in-out infinite alternate}
+@keyframes sleep-float{from{transform:translateY(0);opacity:0.3}to{transform:translateY(-8px);opacity:0.9}}
+
+.affect-radar-popover{position:absolute;top:calc(100% + 8px);right:0;width:180px;padding:14px 12px;border-radius:18px;background:rgba(255,255,255,0.96);backdrop-filter:blur(20px) saturate(150%);border:1px solid #d5e1f5;box-shadow:0 12px 32px rgba(60,85,130,0.16),inset 0 1px 0 rgba(255,255,255,0.95);z-index:25;display:flex;flex-direction:column;align-items:center;cursor:default}
+.radar-title{font-size:10px;font-weight:600;color:#526796;letter-spacing:0.8px;margin-bottom:6px}
+.radar-svg{width:140px;height:140px;overflow:visible;display:block}
+.radar-grid{fill:none;stroke:#d6e2f4;stroke-width:1}
+.radar-grid-3{stroke:#c8d8ee}
+.radar-axis{stroke:#e3ebf7;stroke-width:1;stroke-dasharray:2 2}
+.radar-poly{fill:rgba(120,160,235,0.35);stroke:#5b7fc7;stroke-width:2;stroke-linejoin:round;transition:points 0.4s ease,fill 0.3s}
+.radar-poly.radar-baseline{fill:rgba(160,175,205,0.15);stroke:#9eb0d0;stroke-dasharray:3 3}
+.radar-axis-text{font-size:9px;fill:#7284a8;font-weight:500;font-family:"Microsoft YaHei UI",sans-serif}
+.radar-legend{margin-top:8px;font-size:9px;color:#7384a6;text-align:center;line-height:1.5}
+
+@media(prefers-reduced-motion:reduce){.dust-mote,.swaying,.room-paused-note,.pout-bubble,.thought-dots circle,.sleep-stardust text{animation:none!important;transition:none!important}}
+.motion-off .dust-mote,.motion-off .swaying,.motion-off .room-paused-note,.motion-off .pout-bubble,.motion-off .thought-dots circle,.motion-off .sleep-stardust text{animation:none!important;transition:none!important}
+.motion-off .room-parallax-layer{transform:none!important}

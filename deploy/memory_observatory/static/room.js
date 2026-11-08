@@ -1,4 +1,4 @@
-import {RoomScene} from './room-scene.js';
+import {RoomScene, buildRadarPolygonPoints} from './room-scene.js';
 import {renderProjectShelf} from './room-projects.js';
 const scene=new RoomScene();
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
@@ -90,7 +90,9 @@ function renderContent(){
       if(caresBox&&careList){if(cares.length>0){caresBox.hidden=false;careList.replaceChildren();for(const c of cares)careList.append(node('li','',c.topic));}else caresBox.hidden=true;}
     }
     scene.setAffect(aff);
-  }else{if(pill)pill.hidden=true;if(card)card.hidden=true;scene.setAffect(null);}
+    updateAffectRadar(aff);
+  }else{if(pill)pill.hidden=true;if(card)card.hidden=true;scene.setAffect(null);updateAffectRadar(null);}
+  scene.updatePausedCuriosity(s.paused_curiosity);
   const {as_of,age_seconds,...content}=s,signature=JSON.stringify([zone,content]);
   if(signature===journalSignature)return;
   journalSignature=signature;
@@ -129,6 +131,63 @@ function renderContent(){
     box.append(node('p','entry-note','这里不模拟体力、情绪或亲密度；是否联系主人仍由原来的开关、免打扰和额度决定。'));
   }
 }
+function updateAffectRadar(aff){
+  const poly=$('#radar-polygon');
+  if(!poly)return;
+  if(!aff||aff.state==='unavailable'){
+    poly.setAttribute('points',buildRadarPolygonPoints([0.5,0.5,0.5,0.5,0.5],70,70,48));
+    poly.classList.add('radar-baseline');
+    return;
+  }
+  poly.classList.remove('radar-baseline');
+  const v=Math.max(0,Math.min(1,((aff.valence??0)+1)/2));
+  const a=Math.max(0,Math.min(1,aff.arousal??0.5));
+  const l=Math.max(0,Math.min(1,aff.longing??0.0));
+  const p=Math.max(0,Math.min(1,aff.pout??0.0));
+  const w=Math.max(0,Math.min(1,(aff.warmth_bond??0)/100));
+  poly.setAttribute('points',buildRadarPolygonPoints([v,a,l,p,w],70,70,48));
+  const leg=$('#radar-legend');
+  if(leg)leg.textContent=`愉悦 ${Math.round(v*100)}% · 活力 ${Math.round(a*100)}% · 傲娇 ${Math.round(p*100)}%`;
+}
+function showPausedNote(){
+  if(!snapshot?.paused_curiosity)return;
+  const p=snapshot.paused_curiosity,box=$('#journal-content');
+  box.replaceChildren();
+  const card=node('div','paused-curiosity-card');
+  card.append(
+    node('span','entry-label',p.hint_label||'合上的待查手记 · 翻了两回资料还没找全线索，先放一放'),
+    node('h3','entry-title',p.title),
+    node('p','entry-text',`关于「${p.title}」的探究暂时搁置。之前连续尝试了 ${p.unfruitful_attempts} 次还没有找到足够的新线索，先合上手记留在书桌上，等有了新的想法再翻开。`),
+    node('p','entry-note',`来源关联：${p.origin_id} · 搁置时间：${date(p.updated_at)}`)
+  );
+  box.append(card);
+  $('#journal-title').textContent='合上的待查手记';
+  $('#journal-index').textContent='01 / 04';
+  zone='desk';scene.go('desk');
+  $$('button[data-zone]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.zone==='desk')));
+  $$('[data-art]').forEach(g=>g.classList.toggle('selected',g.dataset.art==='desk'));
+}
+const pill=$('#room-affect-pill'),pop=$('#affect-radar-popover');
+if(pill&&pop){
+  let radarOpen=false;
+  pill.addEventListener('mouseenter',()=>{if(pop.hidden){pop.hidden=false;pop.setAttribute('aria-hidden','false');}});
+  pill.addEventListener('mouseleave',()=>{if(!radarOpen){pop.hidden=true;pop.setAttribute('aria-hidden','true');}});
+  pill.addEventListener('click',e=>{
+    e.stopPropagation();
+    radarOpen=!radarOpen;
+    pop.hidden=!radarOpen;
+    pop.setAttribute('aria-hidden',String(!radarOpen));
+  });
+  document.addEventListener('click',e=>{
+    if(radarOpen&&!pill.contains(e.target)){
+      radarOpen=false;
+      pop.hidden=true;
+      pop.setAttribute('aria-hidden','true');
+    }
+  });
+}
+$('#room-paused-note')?.addEventListener('click',showPausedNote);
+$('#room-paused-note')?.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();showPausedNote();}});
 for(const b of $$('button[data-zone]'))b.addEventListener('click',()=>{if(b.dataset.zone===zone)return;zone=b.dataset.zone;scene.go(zone);render();});
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');let motionOff=reduced.matches;
 function motion(){document.body.classList.toggle('motion-off',motionOff);scene.setPaused(motionOff);$('#room-motion').setAttribute('aria-pressed',String(motionOff));$('#room-motion').textContent=motionOff?'继续动画':'暂停动画';}

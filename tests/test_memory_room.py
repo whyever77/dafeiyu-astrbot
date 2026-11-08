@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import Mock
 
 from deploy.memory_observatory.activity import SSHActivitySource, demo_room
-from deploy.memory_observatory.activity_reader import ActivityError, read_activity
+from deploy.memory_observatory.activity_reader import ActivityError, read_activity, paused_curiosity
 from deploy.memory_observatory.server import ObservatoryServer
 TESTS_DIR = str(Path(__file__).resolve().parent)
 if TESTS_DIR not in sys.path:
@@ -439,6 +439,73 @@ class ReaderTests(unittest.TestCase):
 
         self.assertEqual(stat_before.st_mtime_ns, stat_after.st_mtime_ns)
         self.assertEqual(stat_before.st_size, stat_after.st_size)
+
+    def test_read_activity_paused_curiosity_fallback_when_columns_missing(self):
+        # Case A: columns present, but no matching paused curiosity row
+        res = self.read()
+        self.assertIn("paused_curiosity", res)
+        self.assertIsNone(res["paused_curiosity"])
+
+        # Case B: legacy table missing the columns entirely -> graceful None without exception
+        self.store.db.execute("DROP TABLE goals")
+        self.store.db.execute(
+            "CREATE TABLE goals(id TEXT PRIMARY KEY, scope TEXT, owner_kind TEXT, title TEXT, why TEXT, "
+            "source_id TEXT, status TEXT, next_step TEXT, checkpoint_json TEXT, evidence_ids TEXT, "
+            "run_id TEXT, created_at REAL, updated_at REAL, due_at REAL)"
+        )
+        self.store.db.execute(
+            "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("g-legacy", SCOPE, "self", "普通目标", "", "", "paused", "", "{}", "[]", None, self.now - 3600, self.now - 100, None)
+        )
+        res2 = self.read()
+        self.assertIsNone(res2["paused_curiosity"])
+        self.assertIsNone(paused_curiosity(self.root, now=self.now))
+
+    def test_read_activity_paused_curiosity_with_matching_record(self):
+        self.store.db.execute(
+            "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, origin_id, unfruitful_attempts, checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("paused-curious-1", SCOPE, "self", "深海微光反应机制", "探究深海", "source-2", "paused", "等待新线索", "card:ocean-42", 2, "{}", "[]", None, self.now - 3600, self.now - 1800, None)
+        )
+        res = self.read()
+        p = res["paused_curiosity"]
+        self.assertIsNotNone(p)
+        self.assertEqual(p["title"], "深海微光反应机制")
+        self.assertEqual(p["origin_id"], "card:ocean-42")
+        self.assertEqual(p["unfruitful_attempts"], 2)
+        self.assertEqual(p["updated_at"], self.now - 1800)
+        self.assertIn("合上的待查手记", p["hint_label"])
+
+        helper_p = paused_curiosity(self.root, now=self.now)
+        self.assertEqual(helper_p, p)
+
+    def test_read_activity_paused_curiosity_filters_stale_or_invalid_attempts(self):
+        # 1. unfruitful_attempts < 2
+        self.store.db.execute(
+            "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, origin_id, unfruitful_attempts, checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("g-attempt-1", SCOPE, "self", "浅层光影", "", "", "paused", "", "card:1", 1, "{}", "[]", None, self.now - 3600, self.now - 100, None)
+        )
+        self.assertIsNone(self.read()["paused_curiosity"])
+
+        # 2. stale > 48h
+        self.store.db.execute("DELETE FROM goals WHERE id='g-attempt-1'")
+        self.store.db.execute(
+            "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, origin_id, unfruitful_attempts, checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("g-stale", SCOPE, "self", "古老海沟", "", "", "paused", "", "card:2", 3, "{}", "[]", None, self.now - 200000, self.now - 49 * 3600, None)
+        )
+        self.assertIsNone(self.read()["paused_curiosity"])
+
+        # 3. status != 'paused'
+        self.store.db.execute("DELETE FROM goals WHERE id='g-stale'")
+        self.store.db.execute(
+            "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, origin_id, unfruitful_attempts, checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("g-active", SCOPE, "self", "正在进行的事", "", "", "active", "", "card:3", 3, "{}", "[]", None, self.now - 3600, self.now - 100, None)
+        )
+        self.assertIsNone(self.read()["paused_curiosity"])
 
     def test_ssh_uses_fixed_stdin_reader_and_sanitizes_failures(self):
         run = Mock(return_value=types.SimpleNamespace(returncode=0,stdout=json.dumps({"ok":True,"snapshot":demo_room()})))
