@@ -534,12 +534,22 @@ class SelfExpression:
                     "meaning": "互联网单源见闻留下的待核实假设；尚未经多源印证，不代表已证实事实或主人偏好",
                 })
         # Active curiosity goals
-        for cgoal in self.db.execute(
-            "SELECT id,title,why,next_step,evidence_ids,updated_at,origin_id FROM goals "
-            "WHERE scope=? AND status='active' AND origin_id IS NOT NULL "
-            "ORDER BY updated_at DESC LIMIT 3",
-            (scope,),
-        ).fetchall():
+        with self.store._lock:
+            active_cgoals = self.db.execute(
+                "SELECT id,title,why,next_step,evidence_ids,updated_at,origin_id FROM goals "
+                "WHERE scope=? AND status='active' AND origin_id IS NOT NULL "
+                "ORDER BY updated_at DESC LIMIT 3",
+                (scope,),
+            ).fetchall()
+            paused_cutoff = now - 48 * 3600
+            paused_row = self.db.execute(
+                "SELECT id,title,why,evidence_ids,updated_at,origin_id FROM goals "
+                "WHERE scope=? AND status='paused' AND origin_id IS NOT NULL "
+                "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC LIMIT 1",
+                (scope, paused_cutoff, now),
+            ).fetchone()
+
+        for cgoal in active_cgoals:
             q = (cgoal["title"] or "").strip()
             if not q or q.casefold() in seen:
                 continue
@@ -557,13 +567,6 @@ class SelfExpression:
                 "meaning": "跨日存留的小疑问探索；基于已有线索，不代表已证实结论",
             })
         # Channel B: At most 1 paused curiosity goal within 48h
-        paused_cutoff = now - 48 * 3600
-        paused_row = self.db.execute(
-            "SELECT id,title,why,evidence_ids,updated_at,origin_id FROM goals "
-            "WHERE scope=? AND status='paused' AND origin_id IS NOT NULL AND unfruitful_attempts>=2 "
-            "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC LIMIT 1",
-            (scope, paused_cutoff, now),
-        ).fetchone()
         if paused_row:
             q_title = (paused_row["title"] or "").strip()
             q_text = f"[暂搁] {q_title}"[:160]
@@ -675,33 +678,34 @@ class SelfExpression:
         validate_config(cfg)
         if not enabled(cfg):
             return {"enabled": False}
-        now, days = _clock(now), cfg["self_expression_window_days"]
-        focus = []
-        for goal in self.store.life.goals(scope):
-            if goal["owner_kind"] != "agent" or not _known_time(goal["updated_at"], now):
-                continue
-            focus.append({"goal_id": goal["id"], "title": goal["title"], "status": goal["status"],
-                          "why": goal["why"][:160], "next_step": goal["next_step"][:160],
-                          "updated_at": goal["updated_at"], "intent_only": True})
-        completed = [self._completion(scope, dict(row), now) for row in self.db.execute(
-            "SELECT id,title,updated_at FROM goals WHERE scope=? AND owner_kind='agent' AND status='completed' "
-            "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC,id LIMIT 3", (scope, now-days*86400, now))]
-        projects_list = self._projects(scope, cfg, now)
-        interruptions, recent_preemption = self._interruptions(scope, now, days)
-        count = self.db.execute("SELECT count(*) FROM (SELECT 1 FROM episodes WHERE scope=? LIMIT ?)",
-                                (scope, LIMIT+1)).fetchone()[0]
-        return {"enabled": True, "as_of": _date(now), "window_days": days,
-                "periods": {"recent_start": _date(now-days*86400), "previous_start": _date(now-2*days*86400)},
-                "rhythm": self._rhythm(scope, cfg, now),
-                "projects": projects_list,
-                "recent_preemption": recent_preemption,
-                "held_thoughts": self._held_thoughts(scope, now, days),
-                "curiosity_threads": self._curiosity_threads(scope, now, days, projects_list, completed),
-                "focus": focus[:3], "interests": self._interests(scope, now, days),
-                "completed_goals": completed, "interruptions": interruptions,
-                "coverage": {"episode_scan_limit": LIMIT, "episode_history_truncated": count > LIMIT,
-                             "goal_evidence_limit": 50, "run_scan_limit": 12},
-                "meaning": "只读回顾；目标完成和作品检查不证明内容正确；没有记录表示未知，不推断感受或缺乏兴趣"}
+        with self.store._lock:
+            now, days = _clock(now), cfg["self_expression_window_days"]
+            focus = []
+            for goal in self.store.life.goals(scope):
+                if goal["owner_kind"] != "agent" or not _known_time(goal["updated_at"], now):
+                    continue
+                focus.append({"goal_id": goal["id"], "title": goal["title"], "status": goal["status"],
+                              "why": goal["why"][:160], "next_step": goal["next_step"][:160],
+                              "updated_at": goal["updated_at"], "intent_only": True})
+            completed = [self._completion(scope, dict(row), now) for row in self.db.execute(
+                "SELECT id,title,updated_at FROM goals WHERE scope=? AND owner_kind='agent' AND status='completed' "
+                "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC,id LIMIT 3", (scope, now-days*86400, now))]
+            projects_list = self._projects(scope, cfg, now)
+            interruptions, recent_preemption = self._interruptions(scope, now, days)
+            count = self.db.execute("SELECT count(*) FROM (SELECT 1 FROM episodes WHERE scope=? LIMIT ?)",
+                                    (scope, LIMIT+1)).fetchone()[0]
+            return {"enabled": True, "as_of": _date(now), "window_days": days,
+                    "periods": {"recent_start": _date(now-days*86400), "previous_start": _date(now-2*days*86400)},
+                    "rhythm": self._rhythm(scope, cfg, now),
+                    "projects": projects_list,
+                    "recent_preemption": recent_preemption,
+                    "held_thoughts": self._held_thoughts(scope, now, days),
+                    "curiosity_threads": self._curiosity_threads(scope, now, days, projects_list, completed),
+                    "focus": focus[:3], "interests": self._interests(scope, now, days),
+                    "completed_goals": completed, "interruptions": interruptions,
+                    "coverage": {"episode_scan_limit": LIMIT, "episode_history_truncated": count > LIMIT,
+                                 "goal_evidence_limit": 50, "run_scan_limit": 12},
+                    "meaning": "只读回顾；目标完成和作品检查不证明内容正确；没有记录表示未知，不推断感受或缺乏兴趣"}
 
     @staticmethod
     def _format_context(value):
@@ -749,13 +753,16 @@ class SelfExpression:
                         stage_text += f"（阶段目标：{g_status}）"
             lines.append(f"- 跨日项目《{proj['title']}》（{status_label}{stage_text}）：{proj['why']}")
         for item in value.get("curiosity_threads") or []:
-            origin_label = (
-                f"跨日项目《{item['title']}》阶段回看"
-                if item["kind"] == "project_followup"
-                else f"互联网见闻待核实假设《{item['title']}》"
-                if item["kind"] == "hypothesis_verification"
-                else f"已完成目标《{item['title']}》作品待核实"
-            )
+            if item["kind"] == "project_followup":
+                origin_label = f"跨日项目《{item['title']}》阶段回看"
+            elif item["kind"] == "hypothesis_verification":
+                origin_label = f"互联网见闻待核实假设《{item['title']}》"
+            elif item["kind"] == "curiosity_goal":
+                origin_label = "跨日存留的小疑问"
+            elif item["kind"] == "curiosity_paused":
+                origin_label = "两次暂无新线索、暂搁的小疑问"
+            else:
+                origin_label = f"已完成目标《{item['title']}》作品待核实"
             reflection_part = f"（当时想法：{item['reflection']}）" if item.get("reflection") else ""
             lines.append(
                 f"- 留着想继续弄清的问题（来自{origin_label}，有 {len(item['source_ids'])} 条可用来源）："

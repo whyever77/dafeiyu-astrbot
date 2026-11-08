@@ -1832,9 +1832,32 @@ class BiliActivity(Star):
                 await asyncio.gather(monitor, return_exceptions=True)
             self.store.db.execute("UPDATE runs SET ended=?,status=?,summary=? WHERE id=?", (time.time(), status, summary, run_id))
             self.store.event(scope, "run_end", {"run_id": run_id, "status": status, "summary": summary})
-            self.run_videos.pop(run_id, None)
+            visited_videos = list(self.run_videos.pop(run_id, set()))
             if life_mode:
                 goal = self.active_goal(event) if 'event' in locals() else None
+                goal_id = self.run_goals.get(run_id) or (goal["id"] if goal else None)
+                if goal_id:
+                    try:
+                        curiosity_g = self.store.life.get_goal(scope, goal_id)
+                        if curiosity_g and curiosity_g.get("origin_id"):
+                            run_episodes = [
+                                r[0] for r in self.store.db.execute(
+                                    "SELECT DISTINCT source_id FROM episodes WHERE scope=? AND run_id=? AND kind != 'run_end'",
+                                    (scope, run_id)
+                                ).fetchall() if r[0]
+                            ]
+                            raw_sources = run_episodes + visited_videos
+                            is_resolved = (status == "completed" and bool(summary))
+                            self.store.life.resolve_curiosity_attempt(
+                                scope,
+                                goal_id,
+                                new_source_ids=raw_sources,
+                                conclusion_text=summary if is_resolved else None,
+                                is_resolved=is_resolved,
+                            )
+                    except Exception as exc:
+                        logger.debug("resolve_curiosity_attempt failed: %s", exc)
+
                 self.store.life.record_episode(scope, kind="run_end", source_id=run_id,
                     evidence={"run_id": run_id, "status": status}, interpretation={"summary": summary[:1800]},
                     run_id=run_id, goal_id=goal["id"] if goal else None, subject_kind="system")
@@ -3415,9 +3438,26 @@ class BiliActivity(Star):
             goal_id=goal["id"] if goal else None,
         )
         if res.get("epistemic_status") == "hypothesis" and isinstance(res.get("card"), dict):
-            self.store.setting("curiosity_spark:" + event.unified_msg_origin, {
-                "at": time.time(), "kind": "hypothesis", "card_id": res["card"].get("id", ""),
+            card = res["card"]
+            card_id = card.get("id")
+            scope = event.unified_msg_origin
+            self.store.setting("curiosity_spark:" + scope, {
+                "at": time.time(), "kind": "hypothesis", "card_id": card_id or "",
             })
+            if card_id and scope == self.cfg().get("owner_scope"):
+                try:
+                    title_text = f"核实学识假设：{card.get('topic') or card.get('claim', '')}"
+                    why_text = f"自主认知卡片沉淀待印证假设「{card.get('claim', '')}」"
+                    next_text = "寻找多源独立资料印证或证伪该假设"
+                    self.store.life.create_curiosity_goal(
+                        scope,
+                        title=title_text,
+                        why=why_text,
+                        next_step=next_text,
+                        origin_id=f"card:{card_id}",
+                    )
+                except Exception as exc:
+                    logger.debug("create_curiosity_goal from card failed: %s", exc)
         return canonical(res)
 
     @filter.llm_tool(name="df_knowledge")

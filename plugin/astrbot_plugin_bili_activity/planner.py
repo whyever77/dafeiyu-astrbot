@@ -68,23 +68,24 @@ class LifePlanner:
     def _curiosity_runs_today(self, scope, now):
         dt = datetime.fromtimestamp(now, ZoneInfo("Asia/Shanghai"))
         start_of_day = dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        rows = self.db.execute(
-            "SELECT details FROM events WHERE scope=? AND kind='life_decision' AND time>=? AND time<=?",
-            (scope, start_of_day, now),
-        ).fetchall()
-        count = 0
-        for r in rows:
-            try:
-                d = json.loads(r["details"])
-                if d.get("is_curiosity"):
-                    count += 1
-                elif d.get("goal_id"):
-                    g = self.store.life.get_goal(scope, d["goal_id"])
-                    if g and g.get("origin_id"):
+        with self.store._lock:
+            rows = self.db.execute(
+                "SELECT details FROM events WHERE scope=? AND kind='life_decision' AND time>=? AND time<=?",
+                (scope, start_of_day, now),
+            ).fetchall()
+            count = 0
+            for r in rows:
+                try:
+                    d = json.loads(r["details"])
+                    if d.get("is_curiosity"):
                         count += 1
-            except Exception:
-                pass
-        return count
+                    elif d.get("goal_id"):
+                        g = self.store.life.get_goal(scope, d["goal_id"])
+                        if g and g.get("origin_id"):
+                            count += 1
+                except Exception:
+                    pass
+            return count
 
     def rhythm(self, scope, cfg, *, now=None):
         return rhythm_snapshot(self.db, scope, cfg, now=now)
@@ -328,6 +329,10 @@ class LifePlanner:
         return result
 
     def choose(self, scope, cfg, *, phone_busy=False, now=None):
+        with self.store._lock:
+            return self._choose_locked(scope, cfg, phone_busy=phone_busy, now=now)
+
+    def _choose_locked(self, scope, cfg, *, phone_busy=False, now=None):
         validate_config(cfg)
         now = time.time() if now is None else now
         rhythm = self.rhythm(scope, cfg, now=now)
