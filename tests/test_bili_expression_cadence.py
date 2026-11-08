@@ -332,6 +332,130 @@ class ExpressionCadenceTests(unittest.TestCase):
         self.assertTrue(ack)
         self.assertFalse(hasattr(event, "_df_cadence_selected"))
 
+    def test_goal_title_alone_does_not_acknowledge_held_thought(self):
+        candidate = {
+            "held_id": "h_title_test",
+            "goal_id": "g_test",
+            "goal_title": "研究合作机制",
+            "excerpt": "双人机关的建造规则与协作配合细节",
+        }
+        reply_title_only = "我目前正在执行的任务是研究合作机制，请主人放心。"
+        self.assertFalse(cadence.thought_mentioned(candidate, reply_title_only))
+
+        cad = cadence.ExpressionCadence(self.store)
+        event = fixtures.FakeEvent()
+        event._df_cadence_selected = candidate
+        ack = cad.acknowledge_if_discussed(SCOPE, reply_title_only, event=event, now=NOW + 1)
+        self.assertFalse(ack)
+        ack_count = self.store.db.execute(
+            "SELECT count(*) FROM events WHERE scope=? AND kind=?",
+            (SCOPE, cadence.ACK_EVENT_KIND),
+        ).fetchone()[0]
+        self.assertEqual(ack_count, 0)
+
+        reply_with_fragment = "关于研究合作机制，我刚才看了双人机关的建造规则，很有意思！"
+        self.assertTrue(cadence.thought_mentioned(candidate, reply_with_fragment))
+        ack2 = cad.acknowledge_if_discussed(SCOPE, reply_with_fragment, event=event, now=NOW + 2)
+        self.assertTrue(ack2)
+
+    def test_acknowledge_delivery_only_updates_blocked_status(self):
+        self.store.db.execute(
+            "CREATE TABLE IF NOT EXISTS deliveries ("
+            "id TEXT PRIMARY KEY, scope TEXT NOT NULL, kind TEXT NOT NULL, "
+            "fingerprint TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL, "
+            "receipt TEXT, meta TEXT NOT NULL)"
+        )
+        self.store.db.execute("INSERT OR REPLACE INTO deliveries VALUES(?,?,?,?,?,?,?,?)",
+                              ("del_blocked", SCOPE, "thought", "fp_b", "blocked", NOW - 10, None, "{}"))
+        self.store.db.execute("INSERT OR REPLACE INTO deliveries VALUES(?,?,?,?,?,?,?,?)",
+                              ("del_sending", SCOPE, "thought", "fp_s", "sending", NOW - 10, core.canonical({"in_flight": True}), "{}"))
+        self.store.db.execute("INSERT OR REPLACE INTO deliveries VALUES(?,?,?,?,?,?,?,?)",
+                              ("del_sent", SCOPE, "thought", "fp_ok", "sent", NOW - 10, core.canonical({"message_id": "qq_real_receipt"}), "{}"))
+
+        cad = cadence.ExpressionCadence(self.store)
+
+        cand_blocked = {"held_id": "h_b", "delivery_id": "del_blocked", "excerpt": "测试阻断的分享内容"}
+        ev_b = fixtures.FakeEvent()
+        ev_b._df_cadence_selected = cand_blocked
+        self.assertTrue(cad.acknowledge_if_discussed(SCOPE, "这是测试阻断的分享内容", event=ev_b, now=NOW + 1))
+        row_b = self.store.db.execute("SELECT status, receipt FROM deliveries WHERE id='del_blocked'").fetchone()
+        self.assertEqual(row_b["status"], "sent")
+        self.assertIn("chat_discussed", row_b["receipt"])
+
+        cand_sending = {"held_id": "h_s", "delivery_id": "del_sending", "excerpt": "测试在途的分享内容"}
+        ev_s = fixtures.FakeEvent()
+        ev_s._df_cadence_selected = cand_sending
+        self.assertTrue(cad.acknowledge_if_discussed(SCOPE, "这是测试在途的分享内容", event=ev_s, now=NOW + 2))
+        row_s = self.store.db.execute("SELECT status, receipt FROM deliveries WHERE id='del_sending'").fetchone()
+        self.assertEqual(row_s["status"], "sending")
+        self.assertEqual(json.loads(row_s["receipt"]), {"in_flight": True})
+
+        cand_sent = {"held_id": "h_ok", "delivery_id": "del_sent", "excerpt": "测试已发出的分享内容"}
+        ev_ok = fixtures.FakeEvent()
+        ev_ok._df_cadence_selected = cand_sent
+        self.assertTrue(cad.acknowledge_if_discussed(SCOPE, "这是测试已发出的分享内容", event=ev_ok, now=NOW + 3))
+        row_ok = self.store.db.execute("SELECT status, receipt FROM deliveries WHERE id='del_sent'").fetchone()
+        self.assertEqual(row_ok["status"], "sent")
+        self.assertEqual(json.loads(row_ok["receipt"]), {"message_id": "qq_real_receipt"})
+
+    def test_repeated_excerpt_segment_does_not_double_count(self):
+        candidate = {
+            "held_id": "h_dup",
+            "excerpt": "可以啊，真的可以啊",
+        }
+        reply_single = "可以啊，我觉得没问题。"
+        self.assertFalse(cadence.thought_mentioned(candidate, reply_single))
+
+    def test_short_excerpt_requires_full_match(self):
+        cand_short = {
+            "held_id": "h_short",
+            "excerpt": "记得注意休息",
+        }
+        self.assertFalse(cadence.thought_mentioned(cand_short, "主人平时注意休息哦"))
+        self.assertTrue(cadence.thought_mentioned(cand_short, "主人记得注意休息哦"))
+
+        cand_generic = {
+            "held_id": "h_generic",
+            "excerpt": "注意休息",
+        }
+        self.assertFalse(cadence.thought_mentioned(cand_generic, "主人注意休息"))
+        cand_generic_with_goal = {
+            "held_id": "h_generic_goal",
+            "excerpt": "注意休息",
+            "goal_title": "合作机制研究",
+        }
+        self.assertTrue(cadence.thought_mentioned(cand_generic_with_goal, "关于合作机制研究，主人注意休息"))
+
+    def test_message_key_mismatch_does_not_acknowledge_wrong_thought(self):
+        # Seed A and select for msg_A
+        held(self.store, "想法A：深海热泉生物群", "fp_a", at=NOW - 30)
+        self.context("msg_A", now=NOW - 25)
+
+        # Seed B and select for msg_B
+        held(self.store, "想法B：珊瑚白化修复策略", "fp_b", at=NOW - 20)
+        self.context("msg_B", now=NOW - 15)
+
+        key_a = core.digest([SCOPE, "msg_A"])
+        key_b = core.digest([SCOPE, "msg_B"])
+
+        cad = cadence.ExpressionCadence(self.store)
+        reply_a = "我之前看到关于深海热泉生物群的资料，很有趣！"
+
+        # Calling ack for msg_B (which holds thought B) must NOT acknowledge thought A
+        ack_b = cad.acknowledge_if_discussed(SCOPE, reply_a, now=NOW, message_key=key_b)
+        self.assertFalse(ack_b)
+
+        # Calling ack for msg_A (which holds thought A) correctly acknowledges thought A
+        ack_a = cad.acknowledge_if_discussed(SCOPE, reply_a, now=NOW, message_key=key_a)
+        self.assertTrue(ack_a)
+
+    def test_non_string_excerpt_or_goal_does_not_throw(self):
+        self.assertFalse(cadence.thought_mentioned({"excerpt": 123}, "123"))
+        self.assertFalse(cadence.thought_mentioned({"excerpt": None}, "None"))
+        self.assertFalse(cadence.thought_mentioned({"excerpt": "测试内容", "goal_title": 456}, "456"))
+        self.assertFalse(cadence.thought_mentioned(None, "hello"))
+        self.assertFalse(cadence.thought_mentioned({}, None))
+
 
 
 class ExpressionCadenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -480,6 +604,46 @@ class ExpressionCadenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         view = cadence.SelfExpression(self.plugin.store)
         self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 2)["held_thoughts"]), 1)
+
+    async def test_decorating_result_guard_conditions_and_exception_handling(self):
+        self.seed()
+        view = cadence.SelfExpression(self.plugin.store)
+
+        # 1. Other scope (group message)
+        ev_group = fixtures.FakeEvent(event_id="t1", scope=OTHER)
+        ev_group.get_result = lambda: types.SimpleNamespace(is_llm_result=lambda: True, get_plain_text=lambda: FIRST)
+        await self.plugin.check_held_thoughts_discussed(ev_group)
+        self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+
+        # 2. Other sender
+        ev_other = fixtures.FakeEvent(event_id="t2", user="99999")
+        ev_other.get_result = lambda: types.SimpleNamespace(is_llm_result=lambda: True, get_plain_text=lambda: FIRST)
+        await self.plugin.check_held_thoughts_discussed(ev_other)
+        self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+
+        # 3. df_run_id present (autonomous run)
+        ev_run = fixtures.FakeEvent(event_id="t3", run_id="auto_run_1")
+        ev_run.get_result = lambda: types.SimpleNamespace(is_llm_result=lambda: True, get_plain_text=lambda: FIRST)
+        await self.plugin.check_held_thoughts_discussed(ev_run)
+        self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+
+        # 4. quiet_now or life_paused
+        ev_paused = fixtures.FakeEvent(event_id="t4")
+        ev_paused.get_result = lambda: types.SimpleNamespace(is_llm_result=lambda: True, get_plain_text=lambda: FIRST)
+        self.plugin.store.setting("life_paused:" + SCOPE, True)
+        await self.plugin.check_held_thoughts_discussed(ev_paused)
+        self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+        self.plugin.store.setting("life_paused:" + SCOPE, False)
+
+        with patch.object(main, "quiet_now", return_value=True):
+            await self.plugin.check_held_thoughts_discussed(ev_paused)
+        self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+
+        # 5. acknowledge_if_discussed raises exception -> caught and does not throw
+        ev_err = fixtures.FakeEvent(event_id="t5")
+        ev_err.get_result = lambda: types.SimpleNamespace(is_llm_result=lambda: True, get_plain_text=lambda: FIRST)
+        with patch.object(cadence.ExpressionCadence, "acknowledge_if_discussed", side_effect=RuntimeError("db locked")):
+            await self.plugin.check_held_thoughts_discussed(ev_err)
 
 
 

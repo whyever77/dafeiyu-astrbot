@@ -2023,9 +2023,16 @@ class BiliActivity(Star):
         cfg = self.cfg()
         if not cfg.get("enabled") or not cfg.get("self_expression_enabled") or not cfg.get("life_enabled"):
             return
+        if event.unified_msg_origin != cfg.get("owner_scope"):
+            return
         if str(event.get_sender_id()) != str(cfg.get("owner_id")):
             return
         if self.is_reply_run(event) or event.get_extra("df_run_id"):
+            return
+        if (
+            quiet_now(cfg.get("dnd_ranges") or [])
+            or self.store.get_setting("life_paused:" + event.unified_msg_origin, False)
+        ):
             return
         result = event.get_result() if hasattr(event, "get_result") else None
         if result is None:
@@ -2043,9 +2050,12 @@ class BiliActivity(Star):
             reply_text = "".join(getattr(c, "text", "") or "" for c in (result.chain or []))
         if not reply_text:
             return
-        ExpressionCadence(self.store).acknowledge_if_discussed(
-            event.unified_msg_origin, reply_text, event=event
-        )
+        try:
+            ExpressionCadence(self.store).acknowledge_if_discussed(
+                event.unified_msg_origin, reply_text, event=event
+            )
+        except Exception as exc:
+            logger.warning("[bili_activity] acknowledge_if_discussed: %s", type(exc).__name__)
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def incoming(self, event: AstrMessageEvent):

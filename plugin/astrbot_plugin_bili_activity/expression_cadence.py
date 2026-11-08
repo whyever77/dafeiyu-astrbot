@@ -22,6 +22,9 @@ def _clean_text(s: str) -> str:
     return re.sub(r"[\s\W_]+", "", s, flags=re.UNICODE).lower()
 
 
+GENERIC_SHORT_PHRASES = {"注意休息", "继续加油", "早点休息", "天天开心", "保重身体"}
+
+
 def thought_mentioned(candidate: dict, reply_text: str) -> bool:
     """Return True if the model's reply text meaningfully discussed the held candidate."""
     if not isinstance(reply_text, str) or not reply_text.strip():
@@ -29,33 +32,53 @@ def thought_mentioned(candidate: dict, reply_text: str) -> bool:
     if not isinstance(candidate, dict):
         return False
 
+    raw_excerpt = candidate.get("excerpt")
+    if not isinstance(raw_excerpt, str) or not raw_excerpt.strip():
+        return False
+
+    raw_goal = candidate.get("goal_title")
+    if raw_goal is not None and not isinstance(raw_goal, str):
+        raw_goal = ""
+
     cleaned_reply = _clean_text(reply_text)
     if not cleaned_reply:
         return False
 
-    excerpt = candidate.get("excerpt") or ""
+    excerpt = raw_excerpt
     cleaned_excerpt = _clean_text(excerpt)
-    goal_title = candidate.get("goal_title") or ""
+    if not cleaned_excerpt:
+        return False
+
+    goal_title = raw_goal or ""
     cleaned_goal = _clean_text(goal_title)
 
     # 1. Full cleaned excerpt match (if >= 4 chars)
-    if cleaned_excerpt and len(cleaned_excerpt) >= 4 and cleaned_excerpt in cleaned_reply:
-        return True
-
-    # 2. Match with goal title
-    if cleaned_goal and len(cleaned_goal) >= 3 and cleaned_goal in cleaned_reply:
-        if len(cleaned_goal) >= 5:
+    if len(cleaned_excerpt) >= 4 and cleaned_excerpt in cleaned_reply:
+        if cleaned_excerpt in GENERIC_SHORT_PHRASES:
+            if cleaned_goal and len(cleaned_goal) >= 3 and cleaned_goal in cleaned_reply:
+                return True
+        else:
             return True
-        if cleaned_excerpt:
-            for i in range(len(cleaned_excerpt) - 2):
-                if cleaned_excerpt[i:i + 3] in cleaned_reply:
-                    return True
 
-    # 3. Punctuation-delimited segments of excerpt
+    # 2. Match with goal title as necessary condition (never sufficient on its own)
+    if cleaned_goal and len(cleaned_goal) >= 3 and cleaned_goal in cleaned_reply:
+        if len(cleaned_excerpt) <= 6:
+            if cleaned_excerpt in cleaned_reply:
+                return True
+        else:
+            shingles = {cleaned_excerpt[i:i + 4] for i in range(len(cleaned_excerpt) - 3)}
+            if any(sh in cleaned_reply for sh in shingles):
+                return True
+
+    # 3. Punctuation-delimited segments of excerpt (deduplicated)
     raw_segments = [s.strip() for s in re.split(r"[\s，。！？；：、“”‘’《》…,.!?;:\'\"—\-]+", excerpt) if s.strip()]
     matched_segments = 0
+    seen_segs = set()
     for seg in raw_segments:
         c_seg = _clean_text(seg)
+        if not c_seg or c_seg in seen_segs:
+            continue
+        seen_segs.add(c_seg)
         if len(c_seg) >= 6 and c_seg in cleaned_reply:
             return True
         if len(c_seg) >= 3 and c_seg in cleaned_reply:
@@ -63,12 +86,10 @@ def thought_mentioned(candidate: dict, reply_text: str) -> bool:
             if matched_segments >= 2:
                 return True
 
-    # 4. Sliding 4-shingles from excerpt
-    if cleaned_excerpt and len(cleaned_excerpt) >= 4:
+    # 4. Sliding 4-shingles from excerpt (only for longer excerpts > 6 chars)
+    if len(cleaned_excerpt) > 6:
         shingles = {cleaned_excerpt[i:i + 4] for i in range(len(cleaned_excerpt) - 3)}
         matched_shingles = sum(1 for sh in shingles if sh in cleaned_reply)
-        if len(cleaned_excerpt) <= 6 and matched_shingles >= 1:
-            return True
         if matched_shingles >= 2:
             return True
 
@@ -145,28 +166,43 @@ class ExpressionCadence:
             )
             return context
 
-    def acknowledge_if_discussed(self, scope, reply_text, event=None, *, now=None):
+    def acknowledge_if_discussed(self, scope, reply_text, event=None, *, now=None, message_key=None, message_id=None):
         """Mark a held thought acknowledged if the model discussed it in this turn."""
         if not isinstance(reply_text, str) or not reply_text.strip():
             return False
         now = _clock(now)
+        if message_key is None:
+            if message_id is not None:
+                message_key = digest([scope, str(message_id)])
+            elif event is not None:
+                mid = getattr(getattr(event, "message_obj", None), "message_id", None) or getattr(event, "message_id", None)
+                if mid is not None:
+                    message_key = digest([scope, str(mid)])
+
         candidate = getattr(event, "_df_cadence_selected", None) if event is not None else None
         with self.store.transaction():
             if candidate is None:
-                row = self.db.execute(
+                query_window = 900 if message_key else 120
+                rows = self.db.execute(
                     "SELECT details FROM events WHERE scope=? AND kind=? AND time>=? "
-                    "ORDER BY seq DESC LIMIT 1",
-                    (scope, EVENT_KIND, now - 900),
-                ).fetchone()
-                if row:
+                    "ORDER BY seq DESC LIMIT 10",
+                    (scope, EVENT_KIND, now - query_window),
+                ).fetchall()
+                for row in rows:
                     try:
                         record = json.loads(row["details"])
-                        held_id = record.get("held_id") if isinstance(record, dict) else None
+                        if not isinstance(record, dict):
+                            continue
+                        if message_key and record.get("message_key") != message_key:
+                            continue
+                        held_id = record.get("held_id")
                         if held_id:
                             candidates = self.view._held_thoughts(scope, now, 14)
                             candidate = next((c for c in candidates if c.get("held_id") == held_id), None)
+                            if candidate:
+                                break
                     except (ValueError, TypeError):
-                        candidate = None
+                        continue
 
             if not candidate or not thought_mentioned(candidate, reply_text):
                 return False
@@ -197,7 +233,7 @@ class ExpressionCadence:
                 receipt = canonical({"chat_discussed": True, "at": now})
                 if delivery_id:
                     self.db.execute(
-                        "UPDATE deliveries SET status='sent', receipt=? WHERE scope=? AND id=?",
+                        "UPDATE deliveries SET status='sent', receipt=? WHERE scope=? AND id=? AND status='blocked'",
                         (receipt, scope, delivery_id),
                     )
                 if fingerprint:

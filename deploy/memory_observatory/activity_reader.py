@@ -157,7 +157,7 @@ def read_affect(root, scope, at, cfg):
     }
     candidate_paths = []
     # affective_data_dir is a trusted local path configured in control.json.
-    # We resolve strictly to ensure it points to a valid file/directory without expanding attack surface.
+    # We resolve strictly to ensure it points to an existing file/directory.
     if cfg.get("affective_data_dir"):
         candidate_paths.append(Path(cfg["affective_data_dir"]) / "affective.db")
     candidate_paths.append(root / "affective.db")
@@ -182,45 +182,34 @@ def read_affect(root, scope, at, cfg):
             adb.execute("PRAGMA query_only=ON")
             allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_TRANSACTION}
             adb.set_authorizer(lambda code, *_: sqlite3.SQLITE_OK if code in allowed else sqlite3.SQLITE_DENY)
-            deadline = time.monotonic() + 3
-            adb.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
-            adb.execute("BEGIN")
-            atables = {r[0] for r in adb.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            deadline = [time.monotonic() + 5.0]
+            adb.set_progress_handler(lambda: 1 if time.monotonic() > deadline[0] else 0, 1000)
+
+            def execute_statement(sql, params=()):
+                deadline[0] = time.monotonic() + 5.0
+                return adb.execute(sql, params)
+
+            execute_statement("BEGIN")
+            atables = {r[0] for r in execute_statement("SELECT name FROM sqlite_master WHERE type='table'")}
             if not {"affect_states", "care_threads"} <= atables:
                 return fallback
 
-            row = adb.execute(
+            row = execute_statement(
                 "SELECT valence, arousal, longing, pout, share_urge, warmth_bond, "
                 "dominant_tag, softened_mode, last_interaction_at "
                 "FROM affect_states WHERE scope=? LIMIT 1",
                 (scope,),
             ).fetchone()
 
-            care_rows = adb.execute(
+            care_rows = execute_statement(
                 "SELECT id, topic, category, salience, created_at FROM care_threads "
                 "WHERE scope=? AND status='active' AND expires_at>? "
                 "ORDER BY salience DESC, created_at DESC LIMIT 3",
                 (scope, at),
             ).fetchall()
 
-            care_threads = []
-            for cr in care_rows:
-                sn = number(cr["salience"])
-                care_threads.append(
-                    {
-                        "id": clean(cr["id"], 64),
-                        "topic": clean(cr["topic"], 80),
-                        "category": clean(cr["category"], 40),
-                        "salience": sn if sn is not None else 1.0,
-                        "created_at": number(cr["created_at"]),
-                    }
-                )
-
-            if not row:
-                return fallback | {"state": "ready", "care_threads": care_threads}
-
             def _clamp(v, low, high, d):
-                # valence is signed; the shared number() helper rejects negatives.
+                # valence and salience are signed; the shared number() helper rejects negatives.
                 n = (
                     v
                     if isinstance(v, (int, float))
@@ -229,6 +218,22 @@ def read_affect(root, scope, at, cfg):
                     else None
                 )
                 return max(low, min(high, n)) if n is not None else d
+
+            care_threads = []
+            for cr in care_rows:
+                salience = _clamp(cr["salience"], 0.0, 10.0, 1.0)
+                care_threads.append(
+                    {
+                        "id": clean(cr["id"], 64),
+                        "topic": clean(cr["topic"], 80),
+                        "category": clean(cr["category"], 40),
+                        "salience": salience,
+                        "created_at": number(cr["created_at"]),
+                    }
+                )
+
+            if not row:
+                return fallback | {"state": "ready", "care_threads": care_threads}
 
             return {
                 "state": "ready",

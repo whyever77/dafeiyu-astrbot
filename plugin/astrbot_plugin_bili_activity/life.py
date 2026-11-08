@@ -277,15 +277,17 @@ class LifeState:
         return self.get_goal(scope, gid)
 
     def get_goal(self, scope, goal_id):
-        return self._goal(self.db.execute("SELECT * FROM goals WHERE scope=? AND id=?", (scope, goal_id)).fetchone())
+        with self.store._lock:
+            return self._goal(self.db.execute("SELECT * FROM goals WHERE scope=? AND id=?", (scope, goal_id)).fetchone())
 
     def goals(self, scope, limit=8, include_terminal=False):
         limit = max(1, min(int(limit), 50))
         where = "" if include_terminal else " AND status NOT IN ('completed','cancelled')"
         order = ("CASE WHEN status IN ('completed','cancelled') THEN 1 ELSE 0 END,updated_at DESC,id"
                  if include_terminal else "updated_at DESC,id")
-        return [self._goal(row) for row in self.db.execute(
-            f"SELECT * FROM goals WHERE scope=?{where} ORDER BY {order} LIMIT ?", (scope, limit))]
+        with self.store._lock:
+            return [self._goal(row) for row in self.db.execute(
+                f"SELECT * FROM goals WHERE scope=?{where} ORDER BY {order} LIMIT ?", (scope, limit))]
 
     def claim_goal(self, scope, goal_id, run_id):
         run_id = _text(run_id, "run_id", 250)
