@@ -401,7 +401,7 @@ class ExpressionCadenceTests(unittest.TestCase):
     def test_repeated_excerpt_segment_does_not_double_count(self):
         candidate = {
             "held_id": "h_dup",
-            "excerpt": "可以啊，真的可以啊",
+            "excerpt": "可以啊，可以啊",
         }
         reply_single = "可以啊，我觉得没问题。"
         self.assertFalse(cadence.thought_mentioned(candidate, reply_single))
@@ -424,7 +424,25 @@ class ExpressionCadenceTests(unittest.TestCase):
             "excerpt": "注意休息",
             "goal_title": "合作机制研究",
         }
-        self.assertTrue(cadence.thought_mentioned(cand_generic_with_goal, "关于合作机制研究，主人注意休息"))
+        self.assertFalse(cadence.thought_mentioned(cand_generic_with_goal, "关于合作机制研究，主人注意休息"))
+
+        cand_short_with_goal = {
+            "held_id": "h_short_goal",
+            "excerpt": "记得注意休息",
+            "goal_title": "合作机制研究",
+        }
+        self.assertTrue(cadence.thought_mentioned(
+            cand_short_with_goal, "关于合作机制研究，主人记得注意休息哦"))
+
+        cand_tiny = {
+            "held_id": "h_tiny",
+            "excerpt": "嗯",
+            "goal_title": "合作机制研究",
+        }
+        self.assertFalse(cadence.thought_mentioned(cand_tiny, "关于合作机制研究，嗯"))
+        self.assertFalse(cadence.thought_mentioned(
+            {"held_id": "h_tiny2", "excerpt": "好的", "goal_title": "合作机制研究"},
+            "关于合作机制研究，好的"))
 
     def test_message_key_mismatch_does_not_acknowledge_wrong_thought(self):
         # Seed A and select for msg_A
@@ -608,36 +626,52 @@ class ExpressionCadenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_decorating_result_guard_conditions_and_exception_handling(self):
         self.seed()
         view = cadence.SelfExpression(self.plugin.store)
+        selected = dict(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"][0])
+
+        def ack_count(scope=SCOPE):
+            return self.plugin.store.db.execute(
+                "SELECT count(*) FROM events WHERE scope=? AND kind=?",
+                (scope, cadence.ACK_EVENT_KIND),
+            ).fetchone()[0]
 
         # 1. Other scope (group message)
         ev_group = fixtures.FakeEvent(event_id="t1", scope=OTHER)
+        ev_group._df_cadence_selected = dict(selected)
         ev_group.get_result = lambda: types.SimpleNamespace(is_llm_result=lambda: True, get_plain_text=lambda: FIRST)
         await self.plugin.check_held_thoughts_discussed(ev_group)
         self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+        self.assertEqual(ack_count(OTHER), 0)
 
         # 2. Other sender
         ev_other = fixtures.FakeEvent(event_id="t2", user="99999")
+        ev_other._df_cadence_selected = dict(selected)
         ev_other.get_result = lambda: types.SimpleNamespace(is_llm_result=lambda: True, get_plain_text=lambda: FIRST)
         await self.plugin.check_held_thoughts_discussed(ev_other)
         self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+        self.assertEqual(ack_count(SCOPE), 0)
 
         # 3. df_run_id present (autonomous run)
         ev_run = fixtures.FakeEvent(event_id="t3", run_id="auto_run_1")
+        ev_run._df_cadence_selected = dict(selected)
         ev_run.get_result = lambda: types.SimpleNamespace(is_llm_result=lambda: True, get_plain_text=lambda: FIRST)
         await self.plugin.check_held_thoughts_discussed(ev_run)
         self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+        self.assertEqual(ack_count(SCOPE), 0)
 
         # 4. quiet_now or life_paused
         ev_paused = fixtures.FakeEvent(event_id="t4")
+        ev_paused._df_cadence_selected = dict(selected)
         ev_paused.get_result = lambda: types.SimpleNamespace(is_llm_result=lambda: True, get_plain_text=lambda: FIRST)
         self.plugin.store.setting("life_paused:" + SCOPE, True)
         await self.plugin.check_held_thoughts_discussed(ev_paused)
         self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+        self.assertEqual(ack_count(SCOPE), 0)
         self.plugin.store.setting("life_paused:" + SCOPE, False)
 
         with patch.object(main, "quiet_now", return_value=True):
             await self.plugin.check_held_thoughts_discussed(ev_paused)
         self.assertEqual(len(view.snapshot(SCOPE, self.plugin.cfg(), now=NOW + 1)["held_thoughts"]), 1)
+        self.assertEqual(ack_count(SCOPE), 0)
 
         # 5. acknowledge_if_discussed raises exception -> caught and does not throw
         ev_err = fixtures.FakeEvent(event_id="t5")

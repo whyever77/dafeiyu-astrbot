@@ -52,22 +52,25 @@ def thought_mentioned(candidate: dict, reply_text: str) -> bool:
     goal_title = raw_goal or ""
     cleaned_goal = _clean_text(goal_title)
 
-    # 1. Full cleaned excerpt match (if >= 4 chars)
+    def meaningful_shingles(value):
+        return {
+            sh for sh in (value[i:i + 4] for i in range(len(value) - 3))
+            if sh not in GENERIC_SHORT_PHRASES
+        }
+
+    # 1. Full cleaned excerpt match (if >= 4 chars); generic fillers are not evidence.
     if len(cleaned_excerpt) >= 4 and cleaned_excerpt in cleaned_reply:
-        if cleaned_excerpt in GENERIC_SHORT_PHRASES:
-            if cleaned_goal and len(cleaned_goal) >= 3 and cleaned_goal in cleaned_reply:
-                return True
-        else:
+        if cleaned_excerpt not in GENERIC_SHORT_PHRASES:
             return True
 
     # 2. Match with goal title as necessary condition (never sufficient on its own)
     if cleaned_goal and len(cleaned_goal) >= 3 and cleaned_goal in cleaned_reply:
-        if len(cleaned_excerpt) <= 6:
-            if cleaned_excerpt in cleaned_reply:
+        if 4 <= len(cleaned_excerpt) <= 6:
+            if (cleaned_excerpt not in GENERIC_SHORT_PHRASES
+                    and cleaned_excerpt in cleaned_reply):
                 return True
-        else:
-            shingles = {cleaned_excerpt[i:i + 4] for i in range(len(cleaned_excerpt) - 3)}
-            if any(sh in cleaned_reply for sh in shingles):
+        elif len(cleaned_excerpt) > 6:
+            if any(sh in cleaned_reply for sh in meaningful_shingles(cleaned_excerpt)):
                 return True
 
     # 3. Punctuation-delimited segments of excerpt (deduplicated)
@@ -88,7 +91,7 @@ def thought_mentioned(candidate: dict, reply_text: str) -> bool:
 
     # 4. Sliding 4-shingles from excerpt (only for longer excerpts > 6 chars)
     if len(cleaned_excerpt) > 6:
-        shingles = {cleaned_excerpt[i:i + 4] for i in range(len(cleaned_excerpt) - 3)}
+        shingles = meaningful_shingles(cleaned_excerpt)
         matched_shingles = sum(1 for sh in shingles if sh in cleaned_reply)
         if matched_shingles >= 2:
             return True
