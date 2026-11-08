@@ -78,6 +78,7 @@ deploy/ops_mcp/                        ← 🛠️ 云端运维 MCP（health/log
 deploy/browser_use/                    ← 🌐 只读浏览器任务（Browser Use MCP / 反向隧道 / 启停）
 deploy/bili_activity/                  ← B站服务、活动开关、升级及验证说明
 deploy/incident_20261020/              ← 🧹 旧测试记录隔离脚本与复盘
+deploy-macos/                          ← 🍎 macOS 本机 Docker 套件（相对路径 / .env / 宿主 Ollama）
 deploy-kit/                            ← 🧰 本地一键引导与体检包（preflight / bootstrap / 干净组装 payload）
 QUICKSTART.md                          ← ⚡ 十步从零到聊天速通卡片
 CHANGELOG.md                           ← 更新日志
@@ -98,6 +99,7 @@ assets/voice-demo/                     ← 音色样本与复刻链路说明
 4. 想要语音条 / 记忆 / 自定义音色？照 `docs/导入指南.md` 继续
 5. 重启，开聊 🎉
 6. 想 7×24 挂云端？看 `deploy/README.md`（Docker 一键编排，已实弹演练）
+7. 在 Mac 上想用 Docker 跑本机版？`cd deploy-macos && ./start.sh`（见 [deploy-macos/README.md](deploy-macos/README.md)）
 
 ## 🔌 插件做了什么
 

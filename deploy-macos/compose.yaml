@@ -1,0 +1,61 @@
+# 大肥鱼 · macOS 本机 Docker 套件（方案 A：与 ../deploy/ 的云上套件互相独立）
+#
+# 用法：cd deploy-macos && ./start.sh
+# 约定：所有宿主路径都相对本文件，时区 / 端口 / QQ 号走同目录 .env。
+# 依赖：镜像构建复用 ../deploy/Dockerfile，四个核心补丁复用 ../deploy/patches/，
+#       不复制一份，避免两处漂移（详见 README.md「与云上套件的关系」）。
+name: dafeiyu-macos
+
+services:
+  astrbot:
+    build:
+      context: ../deploy
+      dockerfile: Dockerfile
+    # 与云上套件的 dafeiyu-astrbot:latest 分开打 tag，同一台机器上互不覆盖
+    image: dafeiyu-astrbot:macos
+    container_name: astrbot
+    restart: unless-stopped
+    ports:
+      # 只绑本机回环：面板不暴露到局域网
+      - "127.0.0.1:${ASTRBOT_PORT:-6185}:6185"
+    volumes:
+      - ./data:/AstrBot/data
+      # 四个核心补丁（TTS WebSocket / 整段语音 / 分泡节奏 / 布局工具）：
+      # bind-mount 接入，升级镜像不会丢。只要基础聊天时注释掉下面四行。
+      - ../deploy/patches/dashscope_tts.py:/AstrBot/astrbot/core/provider/sources/dashscope_tts.py:ro
+      - ../deploy/patches/stage.py:/AstrBot/astrbot/core/pipeline/result_decorate/stage.py:ro
+      - ../deploy/patches/respond_stage.py:/AstrBot/astrbot/core/pipeline/respond/stage.py:ro
+      - ../deploy/patches/chat_layout.py:/AstrBot/astrbot/core/pipeline/chat_layout.py:ro
+    environment:
+      # 业务里的日界线固定按 Asia/Shanghai 算（插件里写死），TZ 只影响日志与容器时间
+      - TZ=${TZ:-Asia/Shanghai}
+    # 容器访问宿主 Ollama（bge-m3 记忆嵌入）：Docker Desktop / OrbStack 自带
+    # host.docker.internal，不用配。colima / lima 取消下面两行注释，
+    # 并让 Ollama 监听所有网卡（launchctl setenv OLLAMA_HOST 0.0.0.0 后重启 Ollama）。
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+
+  napcat:
+    # 钉版：与 ../deploy/compose.yaml 相同的已验证组合（Docker 镜像发布滞后桌面端一版）
+    image: mlikiowa/napcat-docker:v4.18.37
+    container_name: napcat
+    restart: unless-stopped
+    # 固定主机名：QQ 的设备名/指纹会带上 hostname，重建容器后不容易被当成「新设备」
+    hostname: dafeiyu-napcat
+    ports:
+      - "127.0.0.1:${NAPCAT_PORT:-6099}:6099"
+    volumes:
+      - ./napcat/config:/app/napcat/config
+      - ./napcat/qq:/app/.config/QQ
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      # 首次启动自动写好指向 AstrBot 的反向 WS（ws://astrbot:6199/ws），
+      # 只在 onebot11.json 缺失时生效；之后在 WebUI 里改。
+      - MODE=astrbot
+      # 快速登录（可选）：.env 里填了小号就免扫码；留空则首次启动扫码登录。
+      - ACCOUNT=${QQ_ACCOUNT:-}
+      - NAPCAT_QUICK_ACCOUNT=${QQ_ACCOUNT:-}
+      # 让容器里的 napcat 用户对齐宿主 uid/gid，避免 macOS 上挂载目录归属混乱。
+      # start.sh 会导出实际值，这里只是直接跑 docker compose 时的兜底。
+      - NAPCAT_UID=${NAPCAT_UID:-501}
+      - NAPCAT_GID=${NAPCAT_GID:-20}
