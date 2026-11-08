@@ -81,7 +81,11 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["frames"]), 8)
         self.assertEqual(len(result["audio"]), 2)
         self.assertEqual(result["audio"][0]["start"], 0)
-        self.assertEqual(result["audio"][0]["end"], 60)
+        # MP3 frame/encoder delay makes a requested 0-60s chunk probe as
+        # ~59.94s.  The implementation must report the verified duration, not
+        # the requested one; allow one encoder-frame worth of tolerance while
+        # still catching real truncation.
+        self.assertAlmostEqual(result["audio"][0]["end"], 60, delta=0.1)
         self.assertEqual(result["audio"][1]["start"], 60)
         self.assertEqual(result["audio"][1]["end"], 61)
         self.assertLess(len(json.dumps(result).encode()), media.MAX_RESPONSE_BYTES)

@@ -67,6 +67,7 @@ HELD_SHARE_REASONS = {
     "这几次还没有收到主人回复，今天先安静些": "当时前几条消息主人还没回，先留着没发",
     "主动联系协调已关闭，本次安排取消": "当时主动联系协调已关闭，未发送",
     "daily_shares exhausted": "当时今日主动分享次数已满，留着没发",
+    "好奇心探索有新发现，留着闲聊时提": "前几天好奇的问题有了新进展，留着下次聊",
 }
 _HEADING_RE = re.compile(r"(?m)^##[ \t]+([^\r\n]+)[ \t]*$")
 _CITATION_RE = re.compile(r"\[E:[0-9a-f]{32}\]")
@@ -410,6 +411,28 @@ class SelfExpression:
                 break
         return result
 
+    def record_curiosity_resolution_thought(self, scope, goal_id, conclusion_text=None, *, now=None):
+        now = time.time() if now is None else now
+        goal = self.store.life.get_goal(scope, goal_id)
+        if not goal or goal.get("status") != "completed" or not goal.get("origin_id"):
+            return None
+        text = conclusion_text or (goal.get("checkpoint") or {}).get("conclusion") or goal.get("title")
+        from .life import sanitize_curiosity_text
+        cleaned = sanitize_curiosity_text(text, limit=48)
+        if not cleaned:
+            return None
+        fp = digest(["curiosity_thought", goal_id, cleaned])
+        details = {
+            "kind": "thought",
+            "reason": "好奇心探索有新发现，留着闲聊时提",
+            "excerpt": cleaned,
+            "goal_id": goal_id,
+            "origin_id": goal["origin_id"],
+            "fingerprint": fp,
+        }
+        self.store.event(scope, "share_held", details)
+        return details
+
     def _curiosity_threads(self, scope, now, days, projects_view, completed_view):
         cutoff = now - days * 86400
         all_goal_titles = {
@@ -510,6 +533,63 @@ class SelfExpression:
                     "subject_kind": "agent",
                     "meaning": "互联网单源见闻留下的待核实假设；尚未经多源印证，不代表已证实事实或主人偏好",
                 })
+        # Active curiosity goals
+        with self.store._lock:
+            active_cgoals = self.db.execute(
+                "SELECT id,title,why,next_step,evidence_ids,updated_at,origin_id FROM goals "
+                "WHERE scope=? AND status='active' AND origin_id IS NOT NULL "
+                "ORDER BY updated_at DESC LIMIT 3",
+                (scope,),
+            ).fetchall()
+            paused_cutoff = now - 48 * 3600
+            paused_row = self.db.execute(
+                "SELECT id,title,why,evidence_ids,updated_at,origin_id,unfruitful_attempts FROM goals "
+                "WHERE scope=? AND status='paused' AND origin_id IS NOT NULL "
+                "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC LIMIT 1",
+                (scope, paused_cutoff, now),
+            ).fetchone()
+
+        for cgoal in active_cgoals:
+            q = (cgoal["title"] or "").strip()
+            if not q or q.casefold() in seen:
+                continue
+            seen.add(q.casefold())
+            threads.append({
+                "kind": "curiosity_goal",
+                "goal_id": cgoal["id"],
+                "title": q[:120],
+                "question": q[:160],
+                "reflection": (cgoal["why"] or "")[:160],
+                "recorded_at": cgoal["updated_at"],
+                "source_ids": json.loads(cgoal["evidence_ids"] or "[]")[:8],
+                "origin_id": cgoal["origin_id"],
+                "subject_kind": "agent",
+                "meaning": "跨日存留的小疑问探索；基于已有线索，不代表已证实结论",
+            })
+        # Channel B: At most 1 paused curiosity goal within 48h
+        if paused_row:
+            q_title = (paused_row["title"] or "").strip()
+            q_text = f"[暂搁] {q_title}"[:160]
+            if q_text.casefold() not in seen:
+                seen.add(q_text.casefold())
+                paused_failed = int(paused_row["unfruitful_attempts"] or 0) >= 2
+                paused_label = ("两次暂无新线索、暂搁的小疑问" if paused_failed
+                                else "因同时进行的小疑问较多、暂搁的小疑问")
+                threads.append({
+                    "kind": "curiosity_paused",
+                    "goal_id": paused_row["id"],
+                    "title": q_title[:120],
+                    "question": q_text,
+                    "reflection": (paused_row["why"] or "")[:160],
+                    "recorded_at": paused_row["updated_at"],
+                    "source_ids": json.loads(paused_row["evidence_ids"] or "[]")[:8],
+                    "origin_id": paused_row["origin_id"],
+                    "origin_label": paused_label,
+                    "subject_kind": "agent",
+                    "meaning": ("探索两次暂无新线索而搁置的小疑问；仅供主人深聊时参考，不主动发起话题或抱怨"
+                                if paused_failed else
+                                "因同时进行的小疑问较多而暂搁的小疑问；仅供主人深聊时参考，不主动发起话题或抱怨"),
+                })
         return sorted(threads, key=lambda r: (-r["recorded_at"], r["title"]))[:3]
 
     def _run_context(self, scope, run_id, started, ended, status, now, used_preempt_seqs):
@@ -604,33 +684,34 @@ class SelfExpression:
         validate_config(cfg)
         if not enabled(cfg):
             return {"enabled": False}
-        now, days = _clock(now), cfg["self_expression_window_days"]
-        focus = []
-        for goal in self.store.life.goals(scope):
-            if goal["owner_kind"] != "agent" or not _known_time(goal["updated_at"], now):
-                continue
-            focus.append({"goal_id": goal["id"], "title": goal["title"], "status": goal["status"],
-                          "why": goal["why"][:160], "next_step": goal["next_step"][:160],
-                          "updated_at": goal["updated_at"], "intent_only": True})
-        completed = [self._completion(scope, dict(row), now) for row in self.db.execute(
-            "SELECT id,title,updated_at FROM goals WHERE scope=? AND owner_kind='agent' AND status='completed' "
-            "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC,id LIMIT 3", (scope, now-days*86400, now))]
-        projects_list = self._projects(scope, cfg, now)
-        interruptions, recent_preemption = self._interruptions(scope, now, days)
-        count = self.db.execute("SELECT count(*) FROM (SELECT 1 FROM episodes WHERE scope=? LIMIT ?)",
-                                (scope, LIMIT+1)).fetchone()[0]
-        return {"enabled": True, "as_of": _date(now), "window_days": days,
-                "periods": {"recent_start": _date(now-days*86400), "previous_start": _date(now-2*days*86400)},
-                "rhythm": self._rhythm(scope, cfg, now),
-                "projects": projects_list,
-                "recent_preemption": recent_preemption,
-                "held_thoughts": self._held_thoughts(scope, now, days),
-                "curiosity_threads": self._curiosity_threads(scope, now, days, projects_list, completed),
-                "focus": focus[:3], "interests": self._interests(scope, now, days),
-                "completed_goals": completed, "interruptions": interruptions,
-                "coverage": {"episode_scan_limit": LIMIT, "episode_history_truncated": count > LIMIT,
-                             "goal_evidence_limit": 50, "run_scan_limit": 12},
-                "meaning": "只读回顾；目标完成和作品检查不证明内容正确；没有记录表示未知，不推断感受或缺乏兴趣"}
+        with self.store._lock:
+            now, days = _clock(now), cfg["self_expression_window_days"]
+            focus = []
+            for goal in self.store.life.goals(scope):
+                if goal["owner_kind"] != "agent" or not _known_time(goal["updated_at"], now):
+                    continue
+                focus.append({"goal_id": goal["id"], "title": goal["title"], "status": goal["status"],
+                              "why": goal["why"][:160], "next_step": goal["next_step"][:160],
+                              "updated_at": goal["updated_at"], "intent_only": True})
+            completed = [self._completion(scope, dict(row), now) for row in self.db.execute(
+                "SELECT id,title,updated_at FROM goals WHERE scope=? AND owner_kind='agent' AND status='completed' "
+                "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC,id LIMIT 3", (scope, now-days*86400, now))]
+            projects_list = self._projects(scope, cfg, now)
+            interruptions, recent_preemption = self._interruptions(scope, now, days)
+            count = self.db.execute("SELECT count(*) FROM (SELECT 1 FROM episodes WHERE scope=? LIMIT ?)",
+                                    (scope, LIMIT+1)).fetchone()[0]
+            return {"enabled": True, "as_of": _date(now), "window_days": days,
+                    "periods": {"recent_start": _date(now-days*86400), "previous_start": _date(now-2*days*86400)},
+                    "rhythm": self._rhythm(scope, cfg, now),
+                    "projects": projects_list,
+                    "recent_preemption": recent_preemption,
+                    "held_thoughts": self._held_thoughts(scope, now, days),
+                    "curiosity_threads": self._curiosity_threads(scope, now, days, projects_list, completed),
+                    "focus": focus[:3], "interests": self._interests(scope, now, days),
+                    "completed_goals": completed, "interruptions": interruptions,
+                    "coverage": {"episode_scan_limit": LIMIT, "episode_history_truncated": count > LIMIT,
+                                 "goal_evidence_limit": 50, "run_scan_limit": 12},
+                    "meaning": "只读回顾；目标完成和作品检查不证明内容正确；没有记录表示未知，不推断感受或缺乏兴趣"}
 
     @staticmethod
     def _format_context(value):
@@ -678,13 +759,16 @@ class SelfExpression:
                         stage_text += f"（阶段目标：{g_status}）"
             lines.append(f"- 跨日项目《{proj['title']}》（{status_label}{stage_text}）：{proj['why']}")
         for item in value.get("curiosity_threads") or []:
-            origin_label = (
-                f"跨日项目《{item['title']}》阶段回看"
-                if item["kind"] == "project_followup"
-                else f"互联网见闻待核实假设《{item['title']}》"
-                if item["kind"] == "hypothesis_verification"
-                else f"已完成目标《{item['title']}》作品待核实"
-            )
+            if item["kind"] == "project_followup":
+                origin_label = f"跨日项目《{item['title']}》阶段回看"
+            elif item["kind"] == "hypothesis_verification":
+                origin_label = f"互联网见闻待核实假设《{item['title']}》"
+            elif item["kind"] == "curiosity_goal":
+                origin_label = "跨日存留的小疑问"
+            elif item["kind"] == "curiosity_paused":
+                origin_label = item.get("origin_label") or "两次暂无新线索、暂搁的小疑问"
+            else:
+                origin_label = f"已完成目标《{item['title']}》作品待核实"
             reflection_part = f"（当时想法：{item['reflection']}）" if item.get("reflection") else ""
             lines.append(
                 f"- 留着想继续弄清的问题（来自{origin_label}，有 {len(item['source_ids'])} 条可用来源）："

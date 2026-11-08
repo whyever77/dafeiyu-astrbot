@@ -9,6 +9,8 @@ import hashlib
 import json
 import math
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .life import observed_read_evidence, parse_work_sections
 from .rhythm import DEFAULTS as RHYTHM_DEFAULTS, snapshot as rhythm_snapshot, validate_config as validate_rhythm
@@ -38,6 +40,52 @@ def fingerprint(value):
 class LifePlanner:
     def __init__(self, store):
         self.store, self.db = store, store.db
+
+    def curiosity_score(self, goal, now=None, aff_profile=None):
+        now = time.time() if now is None else now
+        updated_at = goal.get("updated_at") or 0.0
+        delta_h = max(0.0, (now - updated_at) / 3600.0)
+        if delta_h < 6.0:
+            return 0.0
+        u = int(goal.get("unfruitful_attempts") or 0)
+        if u >= 2 or goal.get("status") != "active":
+            return 0.0
+        if delta_h < 18.0:
+            c_mem = 1.0 + 0.45 * ((delta_h - 6.0) / 12.0)
+        elif delta_h <= 48.0:
+            c_mem = 1.45
+        else:
+            c_mem = max(0.75, 1.45 - 0.70 * ((delta_h - 48.0) / 48.0))
+        d_fail = 0.68 if u == 1 else 1.0
+        m_affect = 1.0
+        if aff_profile:
+            planner_bias = (aff_profile.get("planner_bias") if isinstance(aff_profile, dict) else None) or {}
+            if planner_bias.get("prefer_light_or_rest") or (isinstance(aff_profile, dict) and aff_profile.get("pout", 0) >= 0.6):
+                m_affect = 0.5
+        score = round(0.42 * c_mem * d_fail * m_affect, 4)
+        return score
+
+    def _curiosity_runs_today(self, scope, now):
+        dt = datetime.fromtimestamp(now, ZoneInfo("Asia/Shanghai"))
+        start_of_day = dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        with self.store._lock:
+            rows = self.db.execute(
+                "SELECT details FROM events WHERE scope=? AND kind='life_decision' AND time>=? AND time<=?",
+                (scope, start_of_day, now),
+            ).fetchall()
+            count = 0
+            for r in rows:
+                try:
+                    d = json.loads(r["details"])
+                    if d.get("is_curiosity"):
+                        count += 1
+                    elif d.get("goal_id"):
+                        g = self.store.life.get_goal(scope, d["goal_id"])
+                        if g and g.get("origin_id"):
+                            count += 1
+                except Exception:
+                    pass
+            return count
 
     def rhythm(self, scope, cfg, *, now=None):
         return rhythm_snapshot(self.db, scope, cfg, now=now)
@@ -281,9 +329,17 @@ class LifePlanner:
         return result
 
     def choose(self, scope, cfg, *, phone_busy=False, now=None):
+        with self.store._lock:
+            return self._choose_locked(scope, cfg, phone_busy=phone_busy, now=now)
+
+    def _choose_locked(self, scope, cfg, *, phone_busy=False, now=None):
         validate_config(cfg)
         now = time.time() if now is None else now
         rhythm = self.rhythm(scope, cfg, now=now)
+        # A goal paused only to keep the active curiosity cap should get a
+        # chance to run again once a slot is free.  Failure-paused goals
+        # (unfruitful_attempts >= 2) are deliberately not revived here.
+        self.store.life.revive_cap_evicted(scope, now=now)
         goals = self.store.life.goals(scope)
         works = {}
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='creative_works'").fetchone():
@@ -320,12 +376,12 @@ class LifePlanner:
                 if rhythm["phase"] == "morning" and action in {"research", "writing"}:
                     factors.append({"reason": "rhythm_continue_in_morning", "points": 6})
                     score += 6
-            attempts = [h for h in history if h["key"] == key and h["fingerprint"] == signature]
+            attempts = [h for h in history if h.get("key") == key and h.get("fingerprint") == signature]
             bad = {"failed", "timeout", "interrupted", "cancelled", "budget_exhausted", "running", "not_started"}
             if attempts and (attempts[0]["run_status"] in bad or len(attempts) >= 2):
                 excluded.append({"key": key, "reason": "recent_attempt_without_new_progress"})
                 return
-            repeated = sum(h["key"] == key for h in recent)
+            repeated = sum(h.get("key") == key for h in recent)
             if repeated:
                 factors.append({"reason": "recent_repetition", "points": -12 * repeated})
             if cooldown_topics:
@@ -348,8 +404,38 @@ class LifePlanner:
                                "factors": factors, "goal_id": None, "work_id": None,
                                "topic": "", **fields})
 
+        curiosity_runs_today = self._curiosity_runs_today(scope, now)
+
         for goal in goals:
             gid = goal["id"]
+            if goal.get("origin_id"):
+                # Cross-day curiosity goal evaluation (Item 8)
+                if curiosity_runs_today >= 1:
+                    excluded.append({"key": "goal:" + gid, "reason": "curiosity_daily_quota_exhausted"})
+                    continue
+                if goal["status"] != "active":
+                    excluded.append({"key": "goal:" + gid, "reason": "curiosity_" + goal["status"]})
+                    continue
+                delta_h = max(0.0, (now - goal["updated_at"]) / 3600.0)
+                if delta_h < 6.0:
+                    excluded.append({"key": "goal:" + gid, "reason": "curiosity_cooldown"})
+                    continue
+                if int(goal.get("unfruitful_attempts") or 0) >= 2:
+                    excluded.append({"key": "goal:" + gid, "reason": "curiosity_max_unfruitful_attempts"})
+                    continue
+                if phone_busy:
+                    excluded.append({"key": "goal:" + gid, "reason": "device_busy"})
+                    continue
+                c_score = self.curiosity_score(goal, now, aff_profile)
+                factors = [{"reason": "curiosity_decay_model", "points": c_score}]
+                signature = fingerprint([goal["next_step"], goal["updated_at"], goal["unfruitful_attempts"]])
+                add("research", "goal:" + gid, signature,
+                    "探索跨日未完小疑问：" + goal["title"][:100],
+                    c_score, factors, goal_id=gid, work_id=None,
+                    evidence_ids=goal["evidence_ids"], topic=goal["title"][:60],
+                    is_curiosity=True, origin_id=goal["origin_id"], curiosity_score=c_score)
+                continue
+
             gate = projects.goal_gate(scope, gid, cfg)
             if gate and not gate["allowed"]:
                 excluded.append({"key": "goal:" + gid, "reason": gate["reason"]})
@@ -550,4 +636,4 @@ class LifePlanner:
 
     def record(self, scope, run_id, choice):
         self.store.event(scope, "life_rest" if choice["action"] == "rest" else "life_decision",
-                         {**choice, "run_id": run_id})
+                         {"at": time.time(), **choice, "run_id": run_id})
