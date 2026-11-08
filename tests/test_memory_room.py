@@ -440,13 +440,13 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(stat_before.st_mtime_ns, stat_after.st_mtime_ns)
         self.assertEqual(stat_before.st_size, stat_after.st_size)
 
-    def test_read_activity_paused_curiosity_fallback_when_columns_missing(self):
+    def test_room_paused_curiosity_legacy_schema_graceful_fallback(self):
         # Case A: columns present, but no matching paused curiosity row
         res = self.read()
         self.assertIn("paused_curiosity", res)
         self.assertIsNone(res["paused_curiosity"])
 
-        # Case B: legacy table missing the columns entirely -> graceful None without exception
+        # Case B: legacy table missing origin_id and unfruitful_attempts entirely -> graceful None
         self.store.db.execute("DROP TABLE goals")
         self.store.db.execute(
             "CREATE TABLE goals(id TEXT PRIMARY KEY, scope TEXT, owner_kind TEXT, title TEXT, why TEXT, "
@@ -462,7 +462,7 @@ class ReaderTests(unittest.TestCase):
         self.assertIsNone(res2["paused_curiosity"])
         self.assertIsNone(paused_curiosity(self.root, now=self.now))
 
-    def test_read_activity_paused_curiosity_with_matching_record(self):
+    def test_room_paused_curiosity_active_within_48h(self):
         self.store.db.execute(
             "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, origin_id, unfruitful_attempts, checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -480,7 +480,13 @@ class ReaderTests(unittest.TestCase):
         helper_p = paused_curiosity(self.root, now=self.now)
         self.assertEqual(helper_p, p)
 
-    def test_read_activity_paused_curiosity_filters_stale_or_invalid_attempts(self):
+        scene_path = Path(__file__).resolve().parents[1] / "deploy/memory_observatory/static/room-scene.js"
+        scene_text = scene_path.read_text(encoding="utf-8")
+        self.assertIn('id="room-paused-note"', scene_text)
+        self.assertIn('class="room-paused-note"', scene_text)
+        self.assertIn('updatePausedCuriosity', scene_text)
+
+    def test_room_paused_curiosity_expired_or_insufficient_attempts(self):
         # 1. unfruitful_attempts < 2
         self.store.db.execute(
             "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, origin_id, unfruitful_attempts, checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) "
@@ -506,6 +512,25 @@ class ReaderTests(unittest.TestCase):
             ("g-active", SCOPE, "self", "正在进行的事", "", "", "active", "", "card:3", 3, "{}", "[]", None, self.now - 3600, self.now - 100, None)
         )
         self.assertIsNone(self.read()["paused_curiosity"])
+
+    def test_room_paused_curiosity_preserves_readonly_mtime(self):
+        self.store.db.execute(
+            "INSERT INTO goals(id, scope, owner_kind, title, why, source_id, status, next_step, origin_id, unfruitful_attempts, checkpoint_json, evidence_ids, run_id, created_at, updated_at, due_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("g-pres", SCOPE, "self", "静默只读检验", "", "", "paused", "", "card:readonly-1", 2, "{}", "[]", None, self.now - 3600, self.now - 1800, None)
+        )
+        db_path = self.root / "activity.sqlite3"
+        self.store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        stat_before = db_path.stat()
+
+        res = self.read()
+        self.assertIsNotNone(res["paused_curiosity"])
+        helper = paused_curiosity(self.root, now=self.now)
+        self.assertEqual(helper["title"], "静默只读检验")
+
+        stat_after = db_path.stat()
+        self.assertEqual(stat_before.st_mtime_ns, stat_after.st_mtime_ns)
+        self.assertEqual(stat_before.st_size, stat_after.st_size)
 
     def test_ssh_uses_fixed_stdin_reader_and_sanitizes_failures(self):
         run = Mock(return_value=types.SimpleNamespace(returncode=0,stdout=json.dumps({"ok":True,"snapshot":demo_room()})))
@@ -554,6 +579,38 @@ class RoomHTTPTests(unittest.TestCase):
         for path in ("/character/../server.py", "/character/cookies.json", "/character/unknown.png"):
             self.assertEqual(self.request(path)[0], 404)
         self.assertEqual(self.source.load.call_count, 1)
+
+    def test_room_optics_filters_parallax_radar_and_csp(self):
+        status, headers, body = self.request("/room")
+        self.assertEqual(status, 200)
+        csp = headers.get("Content-Security-Policy", "")
+        self.assertIn("default-src 'self'", csp)
+        html = body.decode("utf-8")
+        self.assertIn('id="room-art"', html)
+        self.assertIn('id="affect-radar-popover"', html)
+        self.assertNotIn("onclick=", html)
+
+        status_js, headers_js, body_js = self.request("/room-scene.js")
+        self.assertEqual(status_js, 200)
+        js = body_js.decode("utf-8")
+        self.assertIn('id="furniture-ao"', js)
+        self.assertIn('id="room-sunbeams"', js)
+        self.assertIn('class="room-parallax-layer"', js)
+        self.assertIn('data-depth="0.15"', js)
+        self.assertIn('data-depth="0.35"', js)
+        self.assertIn('data-depth="0.65"', js)
+        self.assertIn('data-depth="1.00"', js)
+        self.assertIn('buildRadarPolygonPoints', js)
+        self.assertIn('Spring2D', js)
+        self.assertIn('id="room-paused-note"', js)
+
+        status_css, headers_css, body_css = self.request("/room.css")
+        self.assertEqual(status_css, 200)
+        css = body_css.decode("utf-8")
+        self.assertIn('.room-paused-note', css)
+        self.assertIn('.affect-radar-popover', css)
+        self.assertIn('.radar-poly', css)
+        self.assertIn('backdrop-filter', css)
 
     def test_refresh_failure_marks_old_snapshot_stale_and_recovery_is_explicit(self):
         self.source.load.side_effect=ActivityError("private failure")
