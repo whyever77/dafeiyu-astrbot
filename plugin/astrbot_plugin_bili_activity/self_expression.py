@@ -543,7 +543,7 @@ class SelfExpression:
             ).fetchall()
             paused_cutoff = now - 48 * 3600
             paused_row = self.db.execute(
-                "SELECT id,title,why,evidence_ids,updated_at,origin_id FROM goals "
+                "SELECT id,title,why,evidence_ids,updated_at,origin_id,unfruitful_attempts FROM goals "
                 "WHERE scope=? AND status='paused' AND origin_id IS NOT NULL "
                 "AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC LIMIT 1",
                 (scope, paused_cutoff, now),
@@ -572,6 +572,9 @@ class SelfExpression:
             q_text = f"[暂搁] {q_title}"[:160]
             if q_text.casefold() not in seen:
                 seen.add(q_text.casefold())
+                paused_failed = int(paused_row["unfruitful_attempts"] or 0) >= 2
+                paused_label = ("两次暂无新线索、暂搁的小疑问" if paused_failed
+                                else "因同时进行的小疑问较多、暂搁的小疑问")
                 threads.append({
                     "kind": "curiosity_paused",
                     "goal_id": paused_row["id"],
@@ -581,8 +584,11 @@ class SelfExpression:
                     "recorded_at": paused_row["updated_at"],
                     "source_ids": json.loads(paused_row["evidence_ids"] or "[]")[:8],
                     "origin_id": paused_row["origin_id"],
+                    "origin_label": paused_label,
                     "subject_kind": "agent",
-                    "meaning": "探索两次暂无新线索而搁置的小疑问；仅供主人深聊时参考，不主动发起话题或抱怨",
+                    "meaning": ("探索两次暂无新线索而搁置的小疑问；仅供主人深聊时参考，不主动发起话题或抱怨"
+                                if paused_failed else
+                                "因同时进行的小疑问较多而暂搁的小疑问；仅供主人深聊时参考，不主动发起话题或抱怨"),
                 })
         return sorted(threads, key=lambda r: (-r["recorded_at"], r["title"]))[:3]
 
@@ -760,7 +766,7 @@ class SelfExpression:
             elif item["kind"] == "curiosity_goal":
                 origin_label = "跨日存留的小疑问"
             elif item["kind"] == "curiosity_paused":
-                origin_label = "两次暂无新线索、暂搁的小疑问"
+                origin_label = item.get("origin_label") or "两次暂无新线索、暂搁的小疑问"
             else:
                 origin_label = f"已完成目标《{item['title']}》作品待核实"
             reflection_part = f"（当时想法：{item['reflection']}）" if item.get("reflection") else ""

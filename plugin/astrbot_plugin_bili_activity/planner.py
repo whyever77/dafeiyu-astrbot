@@ -336,6 +336,10 @@ class LifePlanner:
         validate_config(cfg)
         now = time.time() if now is None else now
         rhythm = self.rhythm(scope, cfg, now=now)
+        # A goal paused only to keep the active curiosity cap should get a
+        # chance to run again once a slot is free.  Failure-paused goals
+        # (unfruitful_attempts >= 2) are deliberately not revived here.
+        self.store.life.revive_cap_evicted(scope, now=now)
         goals = self.store.life.goals(scope)
         works = {}
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='creative_works'").fetchone():
