@@ -42,16 +42,41 @@ cd deploy-macos
 `start.sh` 会依次：检查 docker → 建 `data/` `napcat/` → 首次从 `.env.example` 生成 `.env`
 → 构建镜像 → 起容器 → 等面板就绪，最后打印两个地址。
 
+首次启动还要拿两个凭据：**NapCat WebUI 的 token**（见 §1）和 **AstrBot 面板的初始密码**（见 §2）。
+两个都是随机生成的，不再有默认密码。
+
 ### 1. 登录 QQ
 
-打开 **http://127.0.0.1:6099/webui** 扫码。
+NapCat v4.18.x 起，WebUI token 是随机生成的，**不再打印在启动日志里**，而是落在
+`napcat/config/webui.json`（bind-mount 在宿主机上），登录成功后还会私聊发到小号。首次扫码前先读出来：
 
-想省掉扫码：编辑 `.env` 填 `QQ_ACCOUNT=你的小号`，再 `./start.sh --no-build`。
+```bash
+cat napcat/config/webui.json     # 看 "token": "..." 字段
+```
+
+不想每次翻文件：首次启动前在 `.env` 里设 `WEBUI_TOKEN=你的token`，镜像入口会用它生成 `webui.json`
+（只在文件不存在时写入；之后要改就编辑 `webui.json` 再 `docker compose restart napcat`）。
+
+打开 **http://127.0.0.1:6099/webui**，用 token 登录后扫码。
+
+`QQ_ACCOUNT` 只省后续重启：填了小号后 `./start.sh --no-build` 会尝试快速登录，
+但首次部署没有登录态，仍然要扫码；扫码成功过一次之后，重启才免扫码。
 指向 AstrBot 的反向 WS（`ws://astrbot:6199/ws`）已由 `MODE=astrbot` 自动写好，不用手动加。
 
 ### 2. 配提供商
 
-打开 **http://127.0.0.1:6185**（AstrBot 面板）：
+打开 **http://127.0.0.1:6185**（AstrBot 面板）。AstrBot v4.24.4+ 首次启动会生成随机初始密码，
+只打印在启动日志里：
+
+```bash
+docker compose logs astrbot | grep -i "Initial password"
+```
+
+登录后立刻在面板里改密码。忘了密码可以交互式重置：
+
+```bash
+docker compose exec astrbot astrbot password     # 交互式重置（v4.24.5+）
+```
 
 | 提供商 | 用途 | 关键点 |
 |---|---|---|
@@ -99,9 +124,10 @@ docker compose exec astrbot python -c "import urllib.request as u; print(u.urlop
 ```
 deploy-macos/
 ├── compose.yaml     # 相对路径编排；镜像构建与补丁复用 ../deploy/
-├── .env.example     # 端口 / 时区 / QQ 小号（首次运行复制成 .env）
+├── .env.example     # 端口 / 时区 / QQ 小号 / WebUI token（首次运行复制成 .env）
 ├── start.sh         # 环境检查 → 起容器 → 等面板
 ├── stop.sh          # 停 / 删容器 / 清数据
+├── env.sh           # .env 读取（去行尾注释等），start.sh source 它
 ├── data/            # AstrBot 数据（记忆、插件、密钥；首次启动生成，git 忽略）
 └── napcat/          # NapCat 配置与 QQ 登录态（git 忽略）
 ```
@@ -122,7 +148,7 @@ deploy-macos/
 ```bash
 ./stop.sh                          # 停容器，数据保留
 ./start.sh --no-build              # 秒起（日常重启）
-./start.sh --pull                  # 升级：拉新基础镜像后重建
+./start.sh --pull                  # 重建 AstrBot：先拉 Dockerfile 的 FROM 基础镜像（不拉 NapCat）
 docker compose logs -f astrbot     # 跟日志
 ./stop.sh --down                   # 删容器与网络，数据保留
 ./stop.sh --purge                  # 连数据一起删（要输 yes）
@@ -136,8 +162,13 @@ tar -czf ~/dafeiyu-macos-$(date +%F).tar.gz data napcat compose.yaml .env
 ./start.sh --no-build
 ```
 
-**升级**：改 `compose.yaml` 的 NapCat tag（当前 `v4.18.37`）或 `../deploy/Dockerfile` 的
-AstrBot tag（当前 `v4.29.0`）→ `./start.sh --pull` → 重新对照补丁是否仍适用。
+**升级**：两套镜像分开升。
+
+- AstrBot：改 `../deploy/Dockerfile` 的 `FROM` tag（当前 `v4.29.0`）→ `./start.sh --pull`。
+  `--pull` 只影响这个构建基础镜像，不会拉 NapCat。
+- NapCat：改本目录 `compose.yaml` 的 `image` tag（当前 `v4.18.37`）→ `docker compose pull napcat`，
+  再 `./start.sh --no-build`。
+- 升完都重新对照 `../deploy/patches/` 是否仍适用。
 
 ## 掉线与 WS 自愈
 
@@ -161,13 +192,18 @@ docker compose logs --tail 50 astrbot | grep -i 6199
 | 容器反复重启 | `docker compose logs --tail 100 astrbot`；多半是升级了镜像但补丁版本不匹配 |
 | `napcat` 起不来，日志里有 `/app/templates/astrbot.json` | 镜像的 `MODE` 模板对不上：删掉 compose 里 `MODE=astrbot` 一行，启动后在 WebUI 手动加反向 WS `ws://astrbot:6199/ws` |
 | 面板打不开 | 首次启动要初始化 `data/`，等 2～3 分钟；再看 `docker compose ps` |
-| 扫码后很快掉线 | 别频繁 `docker compose up -d` 重建容器（设备指纹会变）；优先 `docker restart napcat` |
+| 扫码后很快掉线 | 别频繁 `docker compose up -d` 重建容器（设备指纹会变）；优先 `docker compose restart napcat` |
 | Docker Desktop 吃内存 | 设置里给 4～6GB；同时开太多容器时先 `./stop.sh` |
 | 文件归属/权限奇怪 | `start.sh` 已按宿主 `id -u`/`id -g` 对齐 NapCat 的运行用户 |
 
 ## 与云上套件的关系
 
-- 方案 A：新增独立目录，`deploy/` 一行没改，两边可以同时存在。
+- 方案 A：新增独立目录，`deploy/` 现有文件一行没改（只新增了一个 `deploy/.dockerignore`，
+  把 19MB 的构建上下文挡在镜像外——`deploy/Dockerfile` 只有 `FROM` + `pip install`，不 COPY 文件）。
+- **同一台 Docker 主机上不要同时起两套**：两边都要 6185 / 6099 端口，会直接撞端口。
+  本套件已经去掉 `container_name`，容器名不会撞（云上是 `astrbot` / `napcat`，本套件是
+  `dafeiyu-macos-astrbot-1` / `dafeiyu-macos-napcat-1`）；真要同时跑，改 `.env` 里的
+  `ASTRBOT_PORT` / `NAPCAT_PORT` 即可。
 - **复用**：`../deploy/Dockerfile`（镜像构建）与 `../deploy/patches/`（四个核心补丁），
   不复制第二份，避免两处漂移。因此本目录需要在仓库里运行（`deploy-macos/` 与 `deploy/` 同级）。
 - 镜像 tag 分开：本套件是 `dafeiyu-astrbot:macos`，云上是 `dafeiyu-astrbot:latest`，互不覆盖。
@@ -182,5 +218,7 @@ docker compose logs --tail 50 astrbot | grep -i 6199
 ## 验证状态
 
 - 静态验证：`bash -n`、compose 变量与 `.env` 对齐、相对路径检查，见 `tests/test_deploy_macos.py`。
+- 文档里的凭据位置已按上游源码核对：AstrBot v4.24.4+ 的初始密码打印为 `Initial password`；
+  NapCat v4.18.37 起 WebUI token 不再进日志（随机生成后落盘 `webui.json`，登录后私聊发到小号）。
 - **未验证**：本 PR 编写环境没有 Docker，没跑过真实 `docker compose up`；扫码登录、真实 QQ 收发
   需要维护者在 Mac 真机上过一遍（README 已按验证顺序写，方便对照）。

@@ -5,6 +5,8 @@
 # 依赖：镜像构建复用 ../deploy/Dockerfile，四个核心补丁复用 ../deploy/patches/，
 #       不复制一份，避免两处漂移（详见 README.md「与云上套件的关系」）。
 name: dafeiyu-macos
+# 不写 container_name：容器名由项目名生成（dafeiyu-macos-astrbot-1 等），
+# 不会和 ../deploy/ 云上套件的 astrbot / napcat 撞名；同一台机器同时跑两套时只需改端口。
 
 services:
   astrbot:
@@ -13,7 +15,6 @@ services:
       dockerfile: Dockerfile
     # 与云上套件的 dafeiyu-astrbot:latest 分开打 tag，同一台机器上互不覆盖
     image: dafeiyu-astrbot:macos
-    container_name: astrbot
     restart: unless-stopped
     ports:
       # 只绑本机回环：面板不暴露到局域网
@@ -38,7 +39,6 @@ services:
   napcat:
     # 钉版：与 ../deploy/compose.yaml 相同的已验证组合（Docker 镜像发布滞后桌面端一版）
     image: mlikiowa/napcat-docker:v4.18.37
-    container_name: napcat
     restart: unless-stopped
     # 固定主机名：QQ 的设备名/指纹会带上 hostname，重建容器后不容易被当成「新设备」
     hostname: dafeiyu-napcat
@@ -52,9 +52,14 @@ services:
       # 首次启动自动写好指向 AstrBot 的反向 WS（ws://astrbot:6199/ws），
       # 只在 onebot11.json 缺失时生效；之后在 WebUI 里改。
       - MODE=astrbot
-      # 快速登录（可选）：.env 里填了小号就免扫码；留空则首次启动扫码登录。
+      # 快速登录（可选）：.env 里填了小号会尝试免扫码，但需要已有登录态；
+      # 首次部署仍要扫码，扫码成功过一次后，后续重启才免扫码。
       - ACCOUNT=${QQ_ACCOUNT:-}
       - NAPCAT_QUICK_ACCOUNT=${QQ_ACCOUNT:-}
+      # 可选：固定 WebUI 登录 token（留空则 NapCat 首次启动随机生成，
+      # 之后从 napcat/config/webui.json 的 token 字段读取）。
+      # 镜像入口只在 webui.json 不存在时写入，所以首次启动前设好才生效。
+      - WEBUI_TOKEN=${WEBUI_TOKEN:-}
       # 让容器里的 napcat 用户对齐宿主 uid/gid，避免 macOS 上挂载目录归属混乱。
       # start.sh 会导出实际值，这里只是直接跑 docker compose 时的兜底。
       - NAPCAT_UID=${NAPCAT_UID:-501}

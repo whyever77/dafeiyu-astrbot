@@ -3,7 +3,7 @@
 #
 #   ./start.sh              # 检查环境 → 建目录/.env → 构建镜像 → 起容器 → 等面板就绪
 #   ./start.sh --no-build   # 不重建镜像，只起容器（日常重启用这个，快）
-#   ./start.sh --pull       # 构建前先拉最新基础镜像（升级 AstrBot 时用）
+#   ./start.sh --pull       # 构建前先拉 AstrBot 的基础镜像（只影响 Dockerfile 的 FROM，不拉 NapCat）
 #
 # 它不会、也无法替你做的事：填 API 密钥、通过好友验证、选人格。
 set -euo pipefail
@@ -55,16 +55,9 @@ if [ ! -f .env ]; then
   say "首次运行：已从 .env.example 生成 .env（要填 QQ 小号就编辑它）"
 fi
 
-env_get() {
-  # 读取 .env 里的简单 KEY=VALUE：忽略注释/空行，去掉 CRLF 的 \r 和成对引号
-  awk -F= -v k="$1" -v q="'" '
-    $1==k {
-      sub(/^[^=]*=/, ""); gsub(/\r/, "")
-      c = substr($0, 1, 1)
-      if ((c == "\"" || c == q) && substr($0, length($0), 1) == c) $0 = substr($0, 2, length($0) - 2)
-      print; exit
-    }' .env 2>/dev/null || true
-}
+# .env 读取逻辑单独放在 env.sh（去掉行尾注释等规则见那里）
+# shellcheck source=env.sh
+. ./env.sh
 ASTRBOT_PORT="$(env_get ASTRBOT_PORT)"; ASTRBOT_PORT="${ASTRBOT_PORT:-6185}"
 NAPCAT_PORT="$(env_get NAPCAT_PORT)";   NAPCAT_PORT="${NAPCAT_PORT:-6099}"
 QQ_ACCOUNT="$(env_get QQ_ACCOUNT)"
@@ -108,7 +101,7 @@ fi
 
 if [ "$BUILD" -eq 1 ]; then
   if [ "$PULL" -eq 1 ]; then
-    say "拉取最新基础镜像并构建（AstrBot v4.29.0 + edge-tts / imageio-ffmpeg）"
+    say "拉取 AstrBot 基础镜像并构建（Dockerfile 的 FROM；NapCat 镜像 tag 不变）"
     docker compose build --pull
   else
     say "构建 AstrBot 镜像（首次几分钟，之后走缓存）"
@@ -125,7 +118,7 @@ docker compose up -d --remove-orphans
 say "等待 AstrBot 面板就绪（首次启动要初始化 ./data，最长约 3 分钟）"
 ready=0
 for _ in $(seq 1 90); do
-  if curl -s -o /dev/null "http://127.0.0.1:${ASTRBOT_PORT}/"; then
+  if curl -fsS -o /dev/null "http://127.0.0.1:${ASTRBOT_PORT}/" 2>/dev/null; then
     ready=1
     break
   fi
@@ -137,12 +130,17 @@ if [ "$ready" -ne 1 ]; then
   die "启动未完成。./data 已保留，修好后重跑 ./start.sh"
 fi
 
-for c in astrbot napcat; do
-  running="$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo false)"
+for svc in astrbot napcat; do
+  # 不依赖 container_name：按 compose 项目查容器 ID（可与 ../deploy/ 的同名服务共存）
+  cid="$(docker compose ps -q "$svc" 2>/dev/null || true)"
+  running=false
+  if [ -n "$cid" ]; then
+    running="$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)"
+  fi
   if [ "$running" != "true" ]; then
-    warn "$c 没在运行，最近日志："
-    docker compose logs --tail 40 "$c" || true
-    die "$c 启动失败"
+    warn "$svc 没在运行，最近日志："
+    docker compose logs --tail 40 "$svc" || true
+    die "$svc 启动失败"
   fi
 done
 
@@ -154,11 +152,12 @@ cat <<EOF
   NapCat WebUI   http://127.0.0.1:${NAPCAT_PORT}/webui
 
 下一步：
- 1. 登录 QQ
+ 1. 登录 QQ（WebUI 的 token 在 ./napcat/config/webui.json，或 .env 里设 WEBUI_TOKEN）
 EOF
 if [ -n "$QQ_ACCOUNT" ]; then
   cat <<EOF
-    已用 .env 里的 QQ_ACCOUNT=${QQ_ACCOUNT} 走快速登录；失败就打开上面的 WebUI 扫码。
+    已读取 .env 里的 QQ_ACCOUNT（已隐藏），会尝试快速登录；
+    首次部署没有登录态，仍要扫码；扫码成功过一次后，后续重启才会免扫码。
 EOF
 else
   cat <<EOF
@@ -170,6 +169,7 @@ cat <<EOF
 
  2. 配提供商（面板 → 服务提供商）：DeepSeek / 百炼视觉 / 百炼语音，
     记忆嵌入用宿主 Ollama 时地址填 http://host.docker.internal:11434
+    面板初始密码在日志里：docker compose logs astrbot | grep -i "Initial password"
 
  3. 装插件与人格：
       bash ../deploy-kit/bootstrap.sh          # 生成 payload/

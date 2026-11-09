@@ -1,0 +1,4 @@
+# 构建上下文只需要 Dockerfile：deploy/Dockerfile 是 FROM + pip install，没有 COPY / ADD。
+# 排除其余约 19MB 文件（memory_observatory 等），避免每次 docker compose build 都上传。
+# 以后若在 Dockerfile 里加了 COPY / ADD，记得把对应路径从忽略列表里放开。
+*
