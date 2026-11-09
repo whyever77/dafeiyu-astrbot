@@ -35,6 +35,7 @@ def load():
 
 
 mod = load()
+real_napcat_call = mod.napcat_call  # 后面的用例会 monkeypatch，这里留一份原件
 
 
 class _Out:
@@ -186,6 +187,85 @@ OFF_TARGET = {
 rc, calls = run_main([False], OFF_TARGET)
 check("main: disabled target returns 1", rc == 1, rc)
 check("main: disabled target not enabled", not any(c[0].endswith("SetConfig") for c in calls))
+
+# ---------- 8. 路径 / 容器 / WebUI 地址自动探测（macOS 套件与云端都靠这套） ----------
+import tempfile
+from pathlib import Path
+
+kit = Path(tempfile.mkdtemp())
+(kit / "napcat" / "config").mkdir(parents=True)
+(kit / "napcat" / "config" / "webui.json").write_text('{"token": "t"}', encoding="utf-8")
+(kit / ".env").write_text(
+    "# 注释行\nNAPCAT_PORT=6100  # 面板\nQQ_ACCOUNT=\"123\"\nASTRBOT_PORT=6186\n",
+    encoding="utf-8",
+)
+
+check("env: 未加引号去行尾注释", mod._env_file_value(str(kit / ".env"), "NAPCAT_PORT") == "6100")
+check("env: 带引号去引号", mod._env_file_value(str(kit / ".env"), "QQ_ACCOUNT") == "123")
+check("env: 注释里的 key 不算", mod._env_file_value(str(kit / ".env"), "注释行") is None)
+check("env: 缺 key 返回 None", mod._env_file_value(str(kit / ".env"), "NOPE") is None)
+check("env: 文件不存在返回 None", mod._env_file_value(str(kit / "nope.env"), "X") is None)
+
+real_here = mod.HERE
+real_cwd = os.getcwd()
+try:
+    mod.HERE = str(kit)
+    os.chdir(str(kit))
+    check("config: 套件布局自动找到",
+          mod.config_path() == str(kit / "napcat" / "config" / "webui.json"), mod.config_path())
+    check("kit_dir: 套件根目录", mod.kit_dir() == str(kit), mod.kit_dir())
+    check("base: 读 .env 的 NAPCAT_PORT", mod.napcat_base() == "http://127.0.0.1:6100", mod.napcat_base())
+
+    os.environ["DAFEIYU_NAPCAT_CONFIG"] = "/tmp/elsewhere/webui.json"
+    check("config: 环境变量优先", mod.config_path() == "/tmp/elsewhere/webui.json", mod.config_path())
+    os.environ["DAFEIYU_NAPCAT_BASE"] = "http://127.0.0.1:7000/"
+    check("base: 环境变量优先且去尾斜杠", mod.napcat_base() == "http://127.0.0.1:7000", mod.napcat_base())
+    os.environ["DAFEIYU_CONTAINER"] = "dafeiyu-macos-astrbot-1"
+    check("container: 环境变量优先", mod.container_name() == "dafeiyu-macos-astrbot-1")
+finally:
+    mod.HERE = real_here
+    os.chdir(real_cwd)
+    for key in ("DAFEIYU_NAPCAT_CONFIG", "DAFEIYU_NAPCAT_BASE", "DAFEIYU_CONTAINER"):
+        os.environ.pop(key, None)
+
+# 容器探测：docker ps 返回 compose 项目前缀的容器名时要用它，失败才回退 astrbot
+real_subprocess2 = mod.subprocess
+try:
+    mod.subprocess = types.SimpleNamespace(
+        run=lambda *a, **k: _Out(0, b"dafeiyu-macos-astrbot-1\n"))
+    check("container: 按 compose label 找到项目前缀容器",
+          mod.container_name() == "dafeiyu-macos-astrbot-1", mod.container_name())
+    mod.subprocess = types.SimpleNamespace(run=lambda *a, **k: _Out(1, b""))
+    check("container: docker ps 失败回退 astrbot", mod.container_name() == "astrbot", mod.container_name())
+finally:
+    mod.subprocess = real_subprocess2
+
+# ---------- 9. WebUI 未登录 / 非 0 code 时友好退出，不抛 KeyError ----------
+class _FakeOpener:
+    def open(self, req, timeout=0):
+        return io.BytesIO(json.dumps({"code": -1, "message": "Not Login"}).encode())
+
+
+try:
+    real_napcat_call(_FakeOpener(), "cred", "/api/OB11Config/GetConfig")
+    check("napcat_call: code!=0 抛 NapCatError", False)
+except mod.NapCatError:
+    check("napcat_call: code!=0 抛 NapCatError", True)
+
+
+def run_main_error(exc):
+    mod.napcat_call = lambda *a, **k: (_ for _ in ()).throw(exc)
+    mod._login = lambda: (None, "cred")
+    mod.adapter_connected = lambda: False
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = mod.main()
+    return rc, out.getvalue()
+
+
+rc, text = run_main_error(mod.NapCatError("/api/OB11Config/GetConfig -> Not Login"))
+check("main: Not Login -> 1（不再 KeyError）", rc == 1, rc)
+check("main: 提示先登录 QQ", "先登录" in text, text.strip()[:80])
 
 print()
 if failures:

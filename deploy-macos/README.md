@@ -173,8 +173,21 @@ tar -czf ~/dafeiyu-macos-$(date +%F).tar.gz data napcat compose.yaml .env
 
 ## 掉线与 WS 自愈
 
-NapCat 的 WS 客户端断了不会自己回来，云上靠 `deploy/heal_ws.py` 自愈。
-该脚本硬编码了 `/opt/dafeiyu` 与 `/proc`，**在 macOS 上暂时跑不了**（P2 再做）。
+NapCat 的 WS 客户端断了不会自己回来，`deploy/heal_ws.py` 会通过 WebUI API 把指向 AstrBot 的
+客户端「关一下再开」——不重启 QQ、不用重新扫码。云上和 macOS 本机都能直接用：
+
+```bash
+# 在 deploy-macos/ 里跑
+python3 ../deploy/heal_ws.py
+```
+
+脚本不写死路径和容器名：配置按「脚本目录 → `../deploy-macos` → `/opt/dafeiyu` → 当前目录」
+的顺序找 `napcat/config/webui.json`；容器按 compose label `...service=astrbot` 查
+（云上的 `astrbot` 和本套件的 `dafeiyu-macos-astrbot-1` 都能认）；WebUI 端口读本套件
+`.env` 的 `NAPCAT_PORT`。需要时用 `DAFEIYU_NAPCAT_CONFIG` / `DAFEIYU_CONTAINER` /
+`DAFEIYU_NAPCAT_BASE` 覆盖。
+
+退出码：0 = 连接正常或修复成功；1 = 没修好 / 配置里没有指向 AstrBot 的客户端。
 
 发消息没反应时，先确认 AstrBot 日志里 6199 有没有收到连接：
 
@@ -214,7 +227,7 @@ docker compose logs --tail 50 astrbot | grep -i 6199
 - **P1**：`deploy-kit/preflight.py` 的 macOS 分支（docker/colima 检测、brew ffmpeg 提示、`lsof` 端口检查）、
   `docs/部署指南-macOS.md`、launchd plist 开机自启。
 - **P2**：`deploy/memory_observatory/launcher.py` 用 `fcntl.flock` 替换 `CreateMutexW`、
-  `heal_ws.py` 去绝对路径（docker exec 探测 + WebUI 配置路径可配）、`browser_use` 的 Chrome 路径自动探测。
+  `browser_use` 的 Chrome 路径自动探测。
 
 ## 验证状态
 
@@ -223,5 +236,10 @@ docker compose logs --tail 50 astrbot | grep -i 6199
   NapCat v4.18.37 的 WebUI token 会落盘 `webui.json`，也会打印在启动日志
   （`packages/napcat-webui-backend/index.ts` 的 `[NapCat] [WebUi] WebUi Token: ...`，v4.18.37/38/41/42 均如此），
   登录后还会私聊发到小号。
-- **未验证**：本 PR 编写环境没有 Docker，没跑过真实 `docker compose up`；扫码登录、真实 QQ 收发
-  需要维护者在 Mac 真机上过一遍（README 已按验证顺序写，方便对照）。
+- **真机验证（macOS 27.3 / arm64 / colima + Docker 29.5）**：`./start.sh` 全流程跑通——构建镜像、
+  拉起 `dafeiyu-macos-astrbot-1` + `dafeiyu-macos-napcat-1`、面板 `HTTP 200`、NapCat WebUI 可达、
+  两个端口只绑 `127.0.0.1`、四个补丁挂载到位、容器内 `host.docker.internal` 可解析、
+  `docker compose logs astrbot | grep -i "Initial password"` 能拿到初始密码。
+  `heal_ws.py` 能自动找到本套件的 `napcat/config/webui.json` 与容器名（见「掉线与 WS 自愈」）。
+- **仍未验证**：扫码登录、真实 QQ 收发、TTS/语音、宿主 Ollama 实际连通性——这些需要真实 QQ 小号，
+  得维护者本人过一遍。

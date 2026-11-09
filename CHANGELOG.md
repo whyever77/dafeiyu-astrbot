@@ -6,8 +6,12 @@
 
 - 新增 `deploy-macos/`（issue #32 方案 A）：与 `deploy/` 云上套件互相独立的 macOS 本机部署。全部相对路径 + `.env`（时区 / 端口 / QQ 小号）；`start.sh` 依次做环境检查、目录与 `.env` 初始化、构建、起容器、等面板就绪；`stop.sh` 提供停 / 删容器 / 清数据三档。
 - 复用 `../deploy/Dockerfile` 与 `../deploy/patches/` 的四个核心补丁，不复制第二份，避免两处漂移；镜像 tag 用 `dafeiyu-astrbot:macos`，与云端 `:latest` 互不覆盖。NapCat 用 `MODE=astrbot` 自动写好反向 WS，`.env` 填了小号即快速登录；面板（6185）与 WebUI（6099）都只绑 `127.0.0.1`。
-- 明确 macOS 边界：不支持 PhoneMCP（雷电模拟器 + ADB）、现场听（loopback 录音）、`powercfg` 合盖不睡；`heal_ws.py` 仍硬编码 `/opt/dafeiyu` 与 `/proc`，macOS 暂用 WebUI 关开 WS 客户端（P2 再改）。
-- 新增 `tests/test_deploy_macos.py`（8 项）：相对路径、`.env` 变量覆盖、补丁复用、脚本语法、`--purge` 删除范围。编写环境没有 Docker，**未跑真实 `docker compose up`**；扫码登录与真实 QQ 收发待真机验证。
+- 明确 macOS 边界：不支持 PhoneMCP（雷电模拟器 + ADB）、现场听（loopback 录音）、`powercfg` 合盖不睡。
+- `deploy/heal_ws.py` 去绝对路径（原 P2 提前做）：配置按「脚本目录 → `../deploy-macos` → `/opt/dafeiyu` → 当前目录」自动找，容器名按 compose label `...service=astrbot` 查（`astrbot` 与 `dafeiyu-macos-astrbot-1` 都认），WebUI 端口读套件 `.env` 的 `NAPCAT_PORT`，支持 `DAFEIYU_NAPCAT_CONFIG` / `DAFEIYU_CONTAINER` / `DAFEIYU_NAPCAT_BASE` 覆盖；macOS 本机可直接 `python3 ../deploy/heal_ws.py` 自愈 WS。
+- 新增 `tests/test_deploy_macos.py`（8 项）：相对路径、`.env` 变量覆盖、补丁复用、脚本语法、`--purge` 删除范围；新增 `tests/test_heal_ws.py` 的路径/容器探测与错误分支用例。
+- 真机验证（macOS 27.3 / arm64 / colima + Docker 29.5）：`deploy-macos/start.sh` 全流程通过——构建镜像、起 `dafeiyu-macos-astrbot-1` + `dafeiyu-macos-napcat-1`、面板 200、NapCat WebUI 可达、端口仅绑 127.0.0.1、四个补丁挂载、`host.docker.internal` 可解析、初始密码日志可 grep；`heal_ws.py` 自动识别本套件配置路径与容器名。
+- `deploy/heal_ws.py` 对 NapCat WebUI 的非 0 响应（典型：QQ 未登录返回 `Not Login`）不再抛 `KeyError: 'data'`，改为打印原因并以 1 退出；`_login` 拿不到 Credential 同样走友好报错。
+- 仍未验证：扫码登录、真实 QQ 收发、TTS/语音、宿主 Ollama 实际连通性——需要真实 QQ 小号。
 
 ## v3.1.0 · 心境中枢 M1/M2/M3：情感动力学、表达桥与观测台接线（2026-11-08，插件 v3.0.3 / affective core v0.1.0）
 

@@ -12,20 +12,113 @@ websocket 客户端"关一下再开"，不重启 QQ、不需要重新扫码。
 修复只动指向 AstrBot(6199) 的客户端，其余连接和各自的 enable 状态原样保留。
 退出码：连接正常或修复成功 = 0；没修好、配置里没有目标 = 1。
 
-用法（服务器上）：python3 /opt/dafeiyu/heal_ws.py
+用法：
+    云端（/opt/dafeiyu）        python3 /opt/dafeiyu/heal_ws.py
+    macOS 本机（deploy-macos）  python3 ../deploy/heal_ws.py   # 在 deploy-macos/ 里跑
+
+不写死路径/容器名，按下面的顺序自动找（都可用环境变量覆盖）：
+
+    配置    DAFEIYU_NAPCAT_CONFIG > <脚本目录>/napcat/config/webui.json
+            > <脚本目录>/../deploy-macos/napcat/config/webui.json
+            > /opt/dafeiyu/napcat/config/webui.json > ./napcat/config/webui.json
+    容器    DAFEIYU_CONTAINER > `docker ps` 里 label com.docker.compose.service=astrbot
+            的容器（deploy/ 的 astrbot 与 deploy-macos/ 的 dafeiyu-macos-astrbot-1 都能认）
+    WebUI   DAFEIYU_NAPCAT_BASE > 读配置所在套件的 .env 里 NAPCAT_PORT
+            > 默认 http://127.0.0.1:6099
 """
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
 import urllib.request
 
-BASE = "http://127.0.0.1:6099"
-CONFIG = "/opt/dafeiyu/napcat/config/webui.json"
-CONTAINER = "astrbot"
+HERE = os.path.dirname(os.path.abspath(__file__))
 WS_PORT = 6199
 LOG_LINES = 500
+DEFAULT_NAPCAT_PORT = 6099
+
+# 兼容旧用法（外部脚本可能直接读这几个常量）；函数里优先走下面的自动探测。
+BASE = "http://127.0.0.1:%d" % DEFAULT_NAPCAT_PORT
+CONFIG = "/opt/dafeiyu/napcat/config/webui.json"
+CONTAINER = "astrbot"
+
+
+class NapCatError(RuntimeError):
+    """NapCat WebUI 返回了非 0 code（未登录、配置读失败等）。"""
+
+
+def _env_file_value(path, key):
+    """读 .env 里的简单 KEY=VALUE（去 CRLF、去成对引号、未加引号的去行尾注释）。"""
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        line = line.rstrip("\r")
+        if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name.strip() != key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            return value[1:-1]
+        return value.split(" #")[0].strip()
+    return None
+
+
+def config_path():
+    """NapCat webui.json 的位置（含 token，用来登录 WebUI）。"""
+    env = os.environ.get("DAFEIYU_NAPCAT_CONFIG")
+    if env:
+        return env
+    candidates = [
+        os.path.join(HERE, "napcat", "config", "webui.json"),
+        os.path.join(HERE, "..", "deploy-macos", "napcat", "config", "webui.json"),
+        "/opt/dafeiyu/napcat/config/webui.json",
+        os.path.join(os.getcwd(), "napcat", "config", "webui.json"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return os.path.normpath(path)
+    return os.path.normpath(candidates[0])
+
+
+def kit_dir():
+    """配置所在套件的根目录（<kit>/napcat/config/webui.json 往上三层）。"""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(config_path()))))
+
+
+def container_name():
+    """astrbot 容器名：compose 项目名不同，按 label 查比写死稳。"""
+    env = os.environ.get("DAFEIYU_CONTAINER")
+    if env:
+        return env
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "--filter", "label=com.docker.compose.service=astrbot",
+             "--format", "{{.Names}}"],
+            capture_output=True,
+            timeout=10,
+        )
+        names = out.stdout.decode("utf-8", "ignore").split()
+        if out.returncode == 0 and names:
+            return names[0]
+    except Exception:
+        pass
+    return CONTAINER
+
+
+def napcat_base():
+    """NapCat WebUI 地址（端口跟着套件 .env 的 NAPCAT_PORT 走）。"""
+    env = os.environ.get("DAFEIYU_NAPCAT_BASE")
+    if env:
+        return env.rstrip("/")
+    port = _env_file_value(os.path.join(kit_dir(), ".env"), "NAPCAT_PORT") or str(DEFAULT_NAPCAT_PORT)
+    return "http://127.0.0.1:%s" % port
 
 
 def _established_from_proc(text, port=WS_PORT):
@@ -48,7 +141,7 @@ def connected_from_socket():
     """True/False = 容器内连接状态；None = 探测不可用（容器没起、没有 cat 等）。"""
     try:
         out = subprocess.run(
-            ["docker", "exec", CONTAINER, "cat", "/proc/net/tcp", "/proc/net/tcp6"],
+            ["docker", "exec", container_name(), "cat", "/proc/net/tcp", "/proc/net/tcp6"],
             capture_output=True,
             timeout=10,
         )
@@ -63,7 +156,7 @@ def connected_from_logs():
     """兜底：按日志里最后一条连接/断开记录判断，不看时间窗。"""
     try:
         out = subprocess.run(
-            ["docker", "logs", "--tail", str(LOG_LINES), CONTAINER],
+            ["docker", "logs", "--tail", str(LOG_LINES), container_name()],
             capture_output=True,
             timeout=15,
         ).stdout.decode("utf-8", "ignore")
@@ -92,28 +185,34 @@ def is_astrbot_client(client):
 
 
 def _login():
-    tok = json.load(open(CONFIG, encoding="utf-8")).get("token", "")
+    tok = json.load(open(config_path(), encoding="utf-8")).get("token", "")
     h = hashlib.sha256((tok + ".napcat").encode()).hexdigest()
     opener = urllib.request.build_opener()
     req = urllib.request.Request(
-        BASE + "/api/auth/login",
+        napcat_base() + "/api/auth/login",
         data=json.dumps({"hash": h}).encode(),
         headers={"Content-Type": "application/json"},
     )
-    cred = json.load(opener.open(req, timeout=10))["data"]["Credential"]
+    resp = json.load(opener.open(req, timeout=10))
+    cred = (resp.get("data") or {}).get("Credential")
+    if not cred:
+        raise NapCatError("登录 WebUI 失败：%s" % (resp.get("message") or resp))
     return opener, cred
 
 
 def napcat_call(opener, cred, path, body=None):
     req = urllib.request.Request(
-        BASE + path,
+        napcat_base() + path,
         data=json.dumps(body or {}).encode(),
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer " + cred,
         },
     )
-    return json.load(opener.open(req, timeout=15))
+    resp = json.load(opener.open(req, timeout=15))
+    if not isinstance(resp, dict) or resp.get("code", 0) != 0:
+        raise NapCatError("%s -> %s" % (path, (resp or {}).get("message", "未知错误")))
+    return resp
 
 
 def _set_config(opener, cred, cfg):
@@ -130,8 +229,17 @@ def main():
         print("连接正常，无需修复")
         return 0
 
-    opener, cred = _login()
-    cfg = napcat_call(opener, cred, "/api/OB11Config/GetConfig")["data"]
+    try:
+        opener, cred = _login()
+        cfg = napcat_call(opener, cred, "/api/OB11Config/GetConfig")["data"]
+    except FileNotFoundError:
+        print("找不到 NapCat 配置：%s（可用 DAFEIYU_NAPCAT_CONFIG 指定）" % config_path())
+        return 1
+    except NapCatError as ex:
+        print("NapCat WebUI 返回错误：%s" % ex)
+        if "Not Login" in str(ex):
+            print("QQ 还没登录（NapCat 里扫码后才会建立 WS），先登录再跑本脚本")
+        return 1
     clients = cfg.get("network", {}).get("websocketClients") or []
     targets = [c for c in clients if is_astrbot_client(c)]
     if not targets:
