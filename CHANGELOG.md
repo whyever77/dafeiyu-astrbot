@@ -2,6 +2,13 @@
 
 > 每一次值得说的进化都会记在这里。
 
+## 未发布 · macOS 本机 Docker 套件（2026-11-09）
+
+- 新增 `deploy-macos/`（issue #32 方案 A）：与 `deploy/` 云上套件互相独立的 macOS 本机部署。全部相对路径 + `.env`（时区 / 端口 / QQ 小号）；`start.sh` 依次做环境检查、目录与 `.env` 初始化、构建、起容器、等面板就绪；`stop.sh` 提供停 / 删容器 / 清数据三档。
+- 复用 `../deploy/Dockerfile` 与 `../deploy/patches/` 的四个核心补丁，不复制第二份，避免两处漂移；镜像 tag 用 `dafeiyu-astrbot:macos`，与云端 `:latest` 互不覆盖。NapCat 用 `MODE=astrbot` 自动写好反向 WS，`.env` 填了小号即快速登录；面板（6185）与 WebUI（6099）都只绑 `127.0.0.1`。
+- 明确 macOS 边界：不支持 PhoneMCP（雷电模拟器 + ADB）、现场听（loopback 录音）、`powercfg` 合盖不睡；`heal_ws.py` 仍硬编码 `/opt/dafeiyu` 与 `/proc`，macOS 暂用 WebUI 关开 WS 客户端（P2 再改）。
+- 新增 `tests/test_deploy_macos.py`（8 项）：相对路径、`.env` 变量覆盖、补丁复用、脚本语法、`--purge` 删除范围。编写环境没有 Docker，**未跑真实 `docker compose up`**；扫码登录与真实 QQ 收发待真机验证。
+
 ## v3.1.0 · 心境中枢 M1/M2/M3：情感动力学、表达桥与观测台接线（2026-11-08，插件 v3.0.3 / affective core v0.1.0）
 
 - **M1 心境中枢插件**：新增 `plugin/astrbot_plugin_affective_core`：独立 SQLite 情感状态/牵挂账本、三层连续动力学、回复前 2.5s 共情评估（超时/坏 JSON/异常回退确定性快筛）、软心门控、跨天牵挂、群聊/访客隔离、旧 EmotionAI 只读迁移、出站泄漏清洗与主人 `/心情`。
