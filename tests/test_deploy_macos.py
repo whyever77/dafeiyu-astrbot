@@ -131,9 +131,10 @@ class DeployMacosStaticTests(unittest.TestCase):
 
     def test_readme_documents_initial_credentials(self) -> None:
         readme = (KIT / "README.md").read_text(encoding="utf-8")
-        # NapCat 4.18.x 起 token 不再打印到日志：要告诉用户去哪读、怎么自己定
+        # NapCat 4.18.x 的 token：webui.json 可读，启动日志也会打印，两种入口都要写明
         self.assertIn("webui.json", readme)
         self.assertIn("WEBUI_TOKEN", readme)
+        self.assertIn("WebUi Token", readme)
         # AstrBot v4.24.4+ 初始密码只打印在启动日志
         self.assertIn("Initial password", readme)
 

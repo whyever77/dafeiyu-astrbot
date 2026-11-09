@@ -47,11 +47,12 @@ cd deploy-macos
 
 ### 1. 登录 QQ
 
-NapCat v4.18.x 起，WebUI token 是随机生成的，**不再打印在启动日志里**，而是落在
-`napcat/config/webui.json`（bind-mount 在宿主机上），登录成功后还会私聊发到小号。首次扫码前先读出来：
+NapCat v4.18.x 的 WebUI token 是随机生成的，落在 `napcat/config/webui.json`（bind-mount 在宿主机上），
+也会打印在启动日志里（`[NapCat] [WebUi] WebUi Token: ...`），登录成功后还会私聊发到小号。首次扫码前先读出来（任选其一）：
 
 ```bash
-cat napcat/config/webui.json     # 看 "token": "..." 字段
+cat napcat/config/webui.json                          # 看 "token": "..." 字段
+docker compose logs napcat | grep -i "WebUi Token"    # 启动日志里也有
 ```
 
 不想每次翻文件：首次启动前在 `.env` 里设 `WEBUI_TOKEN=你的token`，镜像入口会用它生成 `webui.json`
@@ -219,6 +220,8 @@ docker compose logs --tail 50 astrbot | grep -i 6199
 
 - 静态验证：`bash -n`、compose 变量与 `.env` 对齐、相对路径检查，见 `tests/test_deploy_macos.py`。
 - 文档里的凭据位置已按上游源码核对：AstrBot v4.24.4+ 的初始密码打印为 `Initial password`；
-  NapCat v4.18.37 起 WebUI token 不再进日志（随机生成后落盘 `webui.json`，登录后私聊发到小号）。
+  NapCat v4.18.37 的 WebUI token 会落盘 `webui.json`，也会打印在启动日志
+  （`packages/napcat-webui-backend/index.ts` 的 `[NapCat] [WebUi] WebUi Token: ...`，v4.18.37/38/41/42 均如此），
+  登录后还会私聊发到小号。
 - **未验证**：本 PR 编写环境没有 Docker，没跑过真实 `docker compose up`；扫码登录、真实 QQ 收发
   需要维护者在 Mac 真机上过一遍（README 已按验证顺序写，方便对照）。
