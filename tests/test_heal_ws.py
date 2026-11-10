@@ -36,6 +36,7 @@ def load():
 
 mod = load()
 real_napcat_call = mod.napcat_call  # 后面的用例会 monkeypatch，这里留一份原件
+real_login = mod._login  # 后面的用例会 monkeypatch，这里留一份原件
 
 
 class _Out:
@@ -196,11 +197,12 @@ kit = Path(tempfile.mkdtemp())
 (kit / "napcat" / "config").mkdir(parents=True)
 (kit / "napcat" / "config" / "webui.json").write_text('{"token": "t"}', encoding="utf-8")
 (kit / ".env").write_text(
-    "# 注释行\nNAPCAT_PORT=6100  # 面板\nQQ_ACCOUNT=\"123\"\nASTRBOT_PORT=6186\n",
+    "# 注释行\nNAPCAT_PORT=6100  # 面板\nNAPCAT_PORT_TAB=6101\t# 面板\nQQ_ACCOUNT=\"123\"\nASTRBOT_PORT=6186\n",
     encoding="utf-8",
 )
 
 check("env: 未加引号去行尾注释", mod._env_file_value(str(kit / ".env"), "NAPCAT_PORT") == "6100")
+check("env: tab 后行尾注释", mod._env_file_value(str(kit / ".env"), "NAPCAT_PORT_TAB") == "6101")
 check("env: 带引号去引号", mod._env_file_value(str(kit / ".env"), "QQ_ACCOUNT") == "123")
 check("env: 注释里的 key 不算", mod._env_file_value(str(kit / ".env"), "注释行") is None)
 check("env: 缺 key 返回 None", mod._env_file_value(str(kit / ".env"), "NOPE") is None)
@@ -246,6 +248,11 @@ class _FakeOpener:
         return io.BytesIO(json.dumps({"code": -1, "message": "Not Login"}).encode())
 
 
+class _ListOpener:
+    def open(self, req, timeout=0):
+        return io.BytesIO(b"[]")
+
+
 try:
     real_napcat_call(_FakeOpener(), "cred", "/api/OB11Config/GetConfig")
     check("napcat_call: code!=0 抛 NapCatError", False)
@@ -266,6 +273,84 @@ def run_main_error(exc):
 rc, text = run_main_error(mod.NapCatError("/api/OB11Config/GetConfig -> Not Login"))
 check("main: Not Login -> 1（不再 KeyError）", rc == 1, rc)
 check("main: 提示先登录 QQ", "先登录" in text, text.strip()[:80])
+
+try:
+    real_napcat_call(_ListOpener(), "cred", "/api/OB11Config/GetConfig")
+    check("napcat_call: 非 dict 响应抛 NapCatError", False)
+except mod.NapCatError:
+    check("napcat_call: 非 dict 响应抛 NapCatError", True)
+
+
+real_build_opener = mod.urllib.request.build_opener
+real_config_path = mod.config_path
+try:
+    mod.config_path = lambda: str(kit / "napcat" / "config" / "webui.json")
+    mod.urllib.request.build_opener = lambda: _ListOpener()
+    try:
+        real_login()
+        check("login: 非 dict 响应抛 NapCatError", False)
+    except mod.NapCatError:
+        check("login: 非 dict 响应抛 NapCatError", True)
+finally:
+    mod.urllib.request.build_opener = real_build_opener
+    mod.config_path = real_config_path
+
+
+rc, text = run_main_error(OSError("connection refused"))
+check("main: WebUI 连接错误 -> 1（不裸栈）", rc == 1, rc)
+check("main: 连接错误提示", "连不上" in text, text.strip()[:120])
+
+
+def run_main_setconfig_error(exc):
+    calls = []
+
+    def fake_call(opener, cred, path, body=None):
+        calls.append((path, body))
+        if path.endswith("GetConfig"):
+            return {"data": copy.deepcopy(CFG)}
+        if path.endswith("SetConfig"):
+            raise exc
+        return {"data": {}}
+
+    mod.napcat_call = fake_call
+    mod._login = lambda: (None, "cred")
+    mod.adapter_connected = lambda: False
+    real_time = mod.time
+    mod.time = types.SimpleNamespace(sleep=lambda s: None)
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            rc = mod.main()
+    finally:
+        mod.time = real_time
+    return rc, calls, out.getvalue()
+
+
+rc, calls, text = run_main_setconfig_error(mod.NapCatError("SetConfig -> boom"))
+sets = [c for c in calls if c[0].endswith("SetConfig")]
+check("main: SetConfig 报错 -> 1（不裸栈）", rc == 1, rc)
+check("main: SetConfig 报错会尝试恢复", len(sets) == 2, len(sets))
+check("main: SetConfig 报错提示", "操作失败" in text, text.strip()[:120])
+
+
+def run_main_missing_data():
+    def fake_call(opener, cred, path, body=None):
+        if path.endswith("GetConfig"):
+            return {"code": 0}
+        return {"data": {}}
+
+    mod.napcat_call = fake_call
+    mod._login = lambda: (None, "cred")
+    mod.adapter_connected = lambda: False
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = mod.main()
+    return rc, out.getvalue()
+
+
+rc, text = run_main_missing_data()
+check("main: GetConfig 缺 data -> 1（不裸 KeyError）", rc == 1, rc)
+check("main: GetConfig 缺 data 提示", "config 数据" in text, text.strip()[:120])
 
 print()
 if failures:

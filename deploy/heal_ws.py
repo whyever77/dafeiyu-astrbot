@@ -66,7 +66,9 @@ def _env_file_value(path, key):
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             return value[1:-1]
-        return value.split(" #")[0].strip()
+        for marker in (" #", "\t#"):
+            value = value.split(marker, 1)[0]
+        return value.strip()
     return None
 
 
@@ -194,9 +196,12 @@ def _login():
         headers={"Content-Type": "application/json"},
     )
     resp = json.load(opener.open(req, timeout=10))
+    if not isinstance(resp, dict):
+        raise NapCatError("登录 WebUI 返回格式异常：%.200r" % (resp,))
     cred = (resp.get("data") or {}).get("Credential")
     if not cred:
-        raise NapCatError("登录 WebUI 失败：%s" % (resp.get("message") or resp))
+        msg = resp.get("message") or "没有 Credential（code=%s）" % resp.get("code")
+        raise NapCatError("登录 WebUI 失败：%s" % msg)
     return opener, cred
 
 
@@ -210,8 +215,10 @@ def napcat_call(opener, cred, path, body=None):
         },
     )
     resp = json.load(opener.open(req, timeout=15))
-    if not isinstance(resp, dict) or resp.get("code", 0) != 0:
-        raise NapCatError("%s -> %s" % (path, (resp or {}).get("message", "未知错误")))
+    if not isinstance(resp, dict):
+        raise NapCatError("%s -> 返回格式异常：%.200r" % (path, resp))
+    if resp.get("code", 0) != 0:
+        raise NapCatError("%s -> %s" % (path, resp.get("message", "未知错误")))
     return resp
 
 
@@ -231,7 +238,10 @@ def main():
 
     try:
         opener, cred = _login()
-        cfg = napcat_call(opener, cred, "/api/OB11Config/GetConfig")["data"]
+        resp = napcat_call(opener, cred, "/api/OB11Config/GetConfig")
+        cfg = resp.get("data")
+        if not isinstance(cfg, dict):
+            raise NapCatError("GetConfig 返回里没有 config 数据")
     except FileNotFoundError:
         print("找不到 NapCat 配置：%s（可用 DAFEIYU_NAPCAT_CONFIG 指定）" % config_path())
         return 1
@@ -239,6 +249,12 @@ def main():
         print("NapCat WebUI 返回错误：%s" % ex)
         if "Not Login" in str(ex):
             print("QQ 还没登录（NapCat 里扫码后才会建立 WS），先登录再跑本脚本")
+        return 1
+    except (json.JSONDecodeError, UnicodeDecodeError) as ex:
+        print("NapCat 配置或 WebUI 响应不是合法 JSON：%s（%s）" % (config_path(), ex))
+        return 1
+    except OSError as ex:
+        print("连不上 NapCat WebUI 或无法读取配置：%s（容器没起 / NAPCAT_PORT 不对？）" % ex)
         return 1
     clients = cfg.get("network", {}).get("websocketClients") or []
     targets = [c for c in clients if is_astrbot_client(c)]
@@ -251,14 +267,33 @@ def main():
         return 1
 
     saved = [c.get("enable", True) for c in active]
-    for c in active:
-        c["enable"] = False
-    _set_config(opener, cred, cfg)
-    print("已断开旧连接（%d 条，其他 %d 条不动）..." % (len(active), len(clients) - len(active)))
-    time.sleep(2)
-    for c, was in zip(active, saved):
-        c["enable"] = was
-    _set_config(opener, cred, cfg)
+
+    def restore_enabled():
+        for c, was in zip(active, saved):
+            c["enable"] = was
+
+    try:
+        for c in active:
+            c["enable"] = False
+        _set_config(opener, cred, cfg)
+        print("已断开旧连接（%d 条，其他 %d 条不动）..." % (len(active), len(clients) - len(active)))
+        time.sleep(2)
+    except (NapCatError, OSError) as ex:
+        print("NapCat WebUI 操作失败：%s" % ex)
+        restore_enabled()
+        try:
+            _set_config(opener, cred, cfg)
+            print("已尝试恢复原 enable 状态")
+        except (NapCatError, OSError) as restore_ex:
+            print("恢复原 enable 状态也失败了：%s（请到 NapCat WebUI 手动检查）" % restore_ex)
+        return 1
+
+    restore_enabled()
+    try:
+        _set_config(opener, cred, cfg)
+    except (NapCatError, OSError) as ex:
+        print("NapCat WebUI 操作失败：%s（enable 已恢复为原值，但可能没写回 NapCat；请到 WebUI 检查）" % ex)
+        return 1
     print("已重新连线，等待重连...")
     for i in range(15):
         time.sleep(2)
