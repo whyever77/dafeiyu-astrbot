@@ -16,7 +16,11 @@ from astrbot.core.star.session_llm_manager import SessionServiceManager
 from astrbot.core.star.star import star_map
 from astrbot.core.star.star_handler import EventType, star_handlers_registry
 
-from ..chat_layout import is_valid_audio_file, make_tts_text
+from ..chat_layout import (
+    is_valid_audio_file,
+    make_tts_text,
+    merge_unclosed_pairs,
+)
 from ..context import PipelineContext
 from ..stage import Stage, register_stage, registered_stages
 
@@ -282,6 +286,7 @@ class ResultDecorateStage(Stage):
                             if not split_response:
                                 new_chain.append(comp)
                                 continue
+                            cleaned_segments = []
                             for seg in split_response:
                                 if self.content_cleanup_rule:
                                     try:
@@ -295,7 +300,9 @@ class ResultDecorateStage(Stage):
                                         self.content_cleanup_rule = None
                                 seg = seg.strip()
                                 if seg:
-                                    new_chain.append(Plain(seg))
+                                    cleaned_segments.append(seg)
+                            for seg in merge_unclosed_pairs(cleaned_segments):
+                                new_chain.append(Plain(seg))
                         else:
                             # 非 Plain 类型的消息段不分段
                             new_chain.append(comp)

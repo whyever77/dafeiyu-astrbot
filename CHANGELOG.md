@@ -2,6 +2,11 @@
 
 > 每一次值得说的进化都会记在这里。
 
+## 未发布 · 分泡：成对符号内不再拆泡（2026-11-10）
+
+- `chat_layout` 新增 `has_unclosed_pair` / `merge_unclosed_pairs`：分段器在成对符号（书名号《》、引号“”、括号（）、【】、[] 等）内部遇到问号/句号不再拆成两条消息；核心分段（`stage.py`）和主动消息分段（`proactive_chat/sender_service.py`）共用，`group_bubbles` 也加了一层兜底。
+- 新增 `tests/test_chat_layout.py` 回归：成对符号检测、只合并符号内分段、气泡分组不拆标题。
+
 ## 未发布 · macOS 本机 Docker 套件（2026-11-09）
 
 - 新增 `deploy-macos/`（issue #32 方案 A）：与 `deploy/` 云上套件互相独立的 macOS 本机部署。全部相对路径 + `.env`（时区 / 端口 / QQ 小号）；`start.sh` 依次做环境检查、目录与 `.env` 初始化、构建、起容器、等面板就绪；`stop.sh` 提供停 / 删容器 / 清数据三档。

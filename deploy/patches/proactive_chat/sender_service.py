@@ -25,6 +25,12 @@ from astrbot.core.message.message_event_result import (
 )
 from astrbot.core.platform.platform import PlatformStatus
 
+try:  # pragma: no cover - 旧镜像可能没有 chat_layout 补丁
+    from astrbot.core.pipeline.chat_layout import merge_unclosed_pairs
+except ImportError:  # pragma: no cover
+    def merge_unclosed_pairs(segments):
+        return list(segments or ())
+
 from ..adapters.astrbot_event import (
     build_proactive_event_for_session,
     dispatch_event_hook,
@@ -114,7 +120,7 @@ class SenderService:
                         cleaned_seg = content_cleanup_pattern.sub("", cleaned_seg)
                     if cleaned_seg.strip():
                         result.append(cleaned_seg)
-            return result if result else [text]
+            return merge_unclosed_pairs(result) if result else [text]
 
         # 按正则切分（默认按句末标点与换行）。
         regex_pattern = settings.get("regex", r".*?[。？！~…\n]+|.+$")
@@ -135,7 +141,7 @@ class SenderService:
                 cleaned_seg = content_cleanup_pattern.sub("", cleaned_seg)
             if cleaned_seg.strip():
                 result.append(cleaned_seg)
-        return result if result else [text]
+        return merge_unclosed_pairs(result) if result else [text]
 
     async def calc_interval(self, text: str, settings: dict) -> float:
         """计算分段回复的间隔时间。
