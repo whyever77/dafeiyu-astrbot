@@ -16,7 +16,24 @@ import re
 # A bubble should end only at a real sentence boundary.  Tilde / ellipsis are
 # included because the bot's persona uses them as sentence enders.
 SENTENCE_END = "。！？!?…~～"
-_TRAILING_CLOSERS = "\"'”’）)】」》〉"
+_TRAILING_CLOSERS = "\"'”’）)】」』》〉]}"
+# Paired punctuation: an opener must stay in the same bubble as its closer.
+# ASCII quotes are intentionally not openers (an apostrophe in "don't" would
+# otherwise look like an unclosed quote); they are still trailing closers.
+_PAIRS = {
+    "《": "》",
+    "〈": "〉",
+    "“": "”",
+    "‘": "’",
+    "（": "）",
+    "(": ")",
+    "【": "】",
+    "「": "」",
+    "『": "』",
+    "[": "]",
+    "{": "}",
+}
+_CLOSERS = {closer: opener for opener, closer in _PAIRS.items()}
 
 _EMOJI_MARK = re.compile(r"\[[A-Za-z一-鿿]{1,6}\]")
 _NO_REPLY_MARK = re.compile(r"[\[【]\s*NO[_ -]?REPLY\s*[\]】]", re.IGNORECASE)
@@ -27,16 +44,61 @@ _MARKDOWN_MARKS = re.compile(r"(\*\*|__|~~|^#{1,6}\s+|^>\s*)", re.MULTILINE)
 _SPACES = re.compile(r"[ \t　]{2,}")
 
 
+def has_unclosed_pair(text: str) -> bool:
+    """Return True when *text* leaves a paired punctuation mark open.
+
+    Handles book-title marks, Chinese quotes, parentheses, square brackets and
+    their ASCII equivalents.  A closer without a matching opener is ignored
+    (e.g. the ``)`` in an emoticon); an opener without a closer means the
+    following split segment belongs to the same bubble.
+    """
+    stack = []
+    for ch in text or "":
+        if ch in _PAIRS:
+            stack.append(ch)
+        elif ch in _CLOSERS and stack and stack[-1] == _CLOSERS[ch]:
+            stack.pop()
+    return bool(stack)
+
+
+def merge_unclosed_pairs(segments):
+    """Rejoin split segments while a paired delimiter is still open.
+
+    The segmented-reply splitter may cut at a ？/。/！ inside a book title,
+    quote or bracket (e.g. ``《重物包装怎么选盒型？实拍两种焊...》``).
+    Splitting there would put the two halves in separate chat bubbles with an
+    unmatched opener/closer.  Only the segments needed to close the pair are
+    merged; ordinary sentence boundaries are preserved.
+    """
+    merged = []
+    buffer = ""
+    for seg in segments or ():
+        buffer += seg
+        if not has_unclosed_pair(buffer):
+            merged.append(buffer)
+            buffer = ""
+    if buffer:
+        if merged:
+            merged[-1] += buffer
+        else:
+            merged.append(buffer)
+    return merged
+
+
 def text_ends_sentence(text: str) -> bool:
     """Return True when *text* ends with a sentence boundary.
 
     Trailing quotes/brackets are ignored so ``好呀。”`` still counts as an
-    ending.  Newlines are handled by the caller as hard boundaries.
+    ending.  Newlines are handled by the caller as hard boundaries.  A ？/。
+    inside an unclosed ``《...》`` / quote / bracket is not a boundary: the
+    paired content must stay in one bubble.
     """
     if text and text.rstrip(" \t　").endswith("\n"):
-        return True
+        return not has_unclosed_pair(text)
     s = (text or "").rstrip()
     if not s:
+        return False
+    if has_unclosed_pair(s):
         return False
     while s and s[-1] in _TRAILING_CLOSERS:
         s = s[:-1].rstrip()
@@ -97,8 +159,13 @@ def group_bubbles(
                 (c for c in reversed(current) if isinstance(c, plain_type)),
                 None,
             )
-            starts_new = previous_plain is not None and text_ends_sentence(
-                getattr(previous_plain, "text", "")
+            bubble_text = "".join(
+                getattr(c, "text", "") for c in current if isinstance(c, plain_type)
+            )
+            starts_new = (
+                previous_plain is not None
+                and text_ends_sentence(getattr(previous_plain, "text", ""))
+                and not has_unclosed_pair(bubble_text)
             )
             if starts_new and max_bubbles and text_bubble_count() >= max_bubbles:
                 # Cap reached: keep the remaining sentences together instead

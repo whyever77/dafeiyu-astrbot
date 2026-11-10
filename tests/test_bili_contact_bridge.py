@@ -68,6 +68,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         namespace = {"coordinated_send": bridge.coordinated_send, "before_dispatch": bridge.before_dispatch,
             "Plain": Plain, "Record": Record, "MessageChain": lambda c: types.SimpleNamespace(chain=c),
             "logger": Mock(), "EventType": None, "is_group_umo": lambda s: False,
+            "merge_unclosed_pairs": lambda segments: list(segments or ()),
             "asyncio": types.SimpleNamespace(sleep=AsyncMock()), "re": __import__("re")}
         self.sender = actual_class("sender_service.py", "SenderService", namespace)(self.community)
         self.path_patch = patch.object(bridge, "control_path", return_value=self.plugin.control)

@@ -113,6 +113,53 @@ with tempfile.TemporaryDirectory() as td:
     check("tiny-rejected", not mod.is_valid_audio_file(tiny))
     check("missing-rejected", not mod.is_valid_audio_file(os.path.join(td, "nope.wav")))
 
+# 9) 成对符号（书名号/引号/括号/方括号）内的标点不能被拆到两个气泡
+check("pair: book title unclosed", mod.has_unclosed_pair("《重物包装怎么选盒型？"))
+check("pair: book title balanced", not mod.has_unclosed_pair("《重物包装怎么选盒型？实拍两种焊...》"))
+check("pair: normal question is boundary", not mod.has_unclosed_pair("要看吗？"))
+check("pair: quote unclosed", mod.has_unclosed_pair("他说“重物包装怎么选盒型？"))
+check("pair: quote balanced", not mod.has_unclosed_pair("他说“重物包装怎么选盒型？实拍两种焊...”。"))
+check("pair: paren unclosed", mod.has_unclosed_pair("（先看这个？"))
+check("pair: paren balanced", not mod.has_unclosed_pair("（先看这个？再决定。）"))
+check("pair: bracket unclosed", mod.has_unclosed_pair("【重点？"))
+check("pair: bracket balanced", not mod.has_unclosed_pair("【重点？先记一下】"))
+check("pair: ascii apostrophe not a quote", not mod.has_unclosed_pair("it's fine?"))
+
+segments = ["这是《重物包装怎么选盒型？", "实拍两种焊...》的标题。", "下一句。"]
+merged = mod.merge_unclosed_pairs(segments)
+check(
+    "pair: merge only inside title",
+    merged == ["这是《重物包装怎么选盒型？实拍两种焊...》的标题。", "下一句。"],
+    repr(merged),
+)
+segments = ["他说“重物包装怎么选盒型？", "实拍两种焊...”。", "下一句。"]
+merged = mod.merge_unclosed_pairs(segments)
+check(
+    "pair: merge quote",
+    merged == ["他说“重物包装怎么选盒型？实拍两种焊...”。", "下一句。"],
+    repr(merged),
+)
+segments = ["（先看这个？", "再决定。）", "下一句。"]
+merged = mod.merge_unclosed_pairs(segments)
+check(
+    "pair: merge paren",
+    merged == ["（先看这个？再决定。）", "下一句。"],
+    repr(merged),
+)
+check("pair: sentence end inside title is false", not mod.text_ends_sentence("这是《重物包装怎么选盒型？"))
+check("pair: sentence end inside quote is false", not mod.text_ends_sentence("他说“重物包装怎么选盒型？"))
+check("pair: sentence end after close is true", mod.text_ends_sentence("“标题”的正文。"))
+check("pair: book title sentence end after close", mod.text_ends_sentence("《标题》的正文。"))
+chain = [Plain("这是《重物包装怎么选盒型？"), Plain("实拍两种焊...》的标题。"), Plain("下一句。")]
+bubbles = mod.group_bubbles(chain, Plain, Record, 3)
+check(
+    "pair: title stays in one bubble",
+    len(bubbles) == 2
+    and texts(bubbles[0]) == ["这是《重物包装怎么选盒型？", "实拍两种焊...》的标题。"]
+    and texts(bubbles[1]) == ["下一句。"],
+    repr(bubbles),
+)
+
 print()
 if failures:
     print("结果：%d 项失败" % len(failures))
